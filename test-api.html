@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Test</title>
+</head>
+<body>
+    <h1>API Test</h1>
+    <button onclick="testApi()">Test Add Boat API</button>
+    <div id="result"></div>
+
+    <script>
+        async function testApi() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '<p>Sending request...</p>';
+            
+            try {
+                // Log what we're sending
+                const url = '/api/admin/boats';
+                const method = 'POST';
+                const payload = { name: 'Test Boat' };
+                console.log('[ADD BOAT] sending', { method, url, hasAuth: false });
+                
+                const response = await fetch('/api/admin/boats', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await response.json();
+                
+                // Log response details
+                console.log('[ADD BOAT] status', response.status);
+                console.log('[ADD BOAT] body', data);
+                
+                resultDiv.innerHTML = `
+                    <h2>Response Details:</h2>
+                    <p><strong>Status:</strong> ${response.status}</p>
+                    <p><strong>Body:</strong> ${JSON.stringify(data, null, 2)}</p>
+                `;
+            } catch (error) {
+                console.error('[ADD BOAT] error', error);
+                resultDiv.innerHTML = `<p>Error: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

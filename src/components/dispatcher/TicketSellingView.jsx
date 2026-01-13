@@ -1,0 +1,252 @@
+import { useState, useEffect, useMemo } from 'react';
+import apiClient from '../../utils/apiClient';
+import PassengerList from './PassengerList';
+import { getSlotAvailable, isSlotSoldOut } from '../../utils/slotAvailability';
+
+function formatDurationMinutes(durationMinutes) {
+  if (typeof durationMinutes !== 'number' || durationMinutes <= 0) return '~1 час';
+  const h = Math.floor(durationMinutes / 60);
+  const m = durationMinutes % 60;
+  if (h > 0 && m > 0) return `${h} ч ${m} мин`;
+  if (h > 0) return `${h} ч`;
+  return `${m} мин`;
+}
+
+function getCapacity(trip) {
+  const cap =
+    (typeof trip?.capacity === 'number' ? trip.capacity : undefined) ??
+    (typeof trip?.boat_capacity === 'number' ? trip.boat_capacity : undefined);
+  return typeof cap === 'number' && cap > 0 ? cap : null;
+}
+
+function getDurationMinutes(trip) {
+  const v =
+    (typeof trip?.duration_minutes === 'number' ? trip.duration_minutes : undefined) ??
+    (typeof trip?.durationMinutes === 'number' ? trip.durationMinutes : undefined) ??
+    (typeof trip?.duration === 'number' ? trip.duration : undefined);
+  return typeof v === 'number' ? v : null;
+}
+
+function getSoldLevel(occupied, capacity) {
+  if (typeof occupied !== 'number' || typeof capacity !== 'number' || capacity <= 0) return 'none';
+  // If capacity is the standard 12 seats, apply the requested absolute thresholds.
+  if (capacity === 12) {
+    if (occupied < 4) return 'low';
+    if (occupied < 8) return 'mid';
+    return 'high';
+  }
+  // Otherwise use percent thresholds.
+  const ratio = occupied / capacity;
+  if (ratio < 0.34) return 'low';
+  if (ratio < 0.67) return 'mid';
+  return 'high';
+}
+
+function getSoldUi(level) {
+  switch (level) {
+    case 'low':
+      return { text: 'text-red-600', bar: 'bg-red-500', ring: 'ring-red-200' };
+    case 'mid':
+      return { text: 'text-yellow-600', bar: 'bg-yellow-500', ring: 'ring-yellow-200' };
+    case 'high':
+      return { text: 'text-green-600', bar: 'bg-green-500', ring: 'ring-green-200' };
+    default:
+      return { text: 'text-gray-700', bar: 'bg-gray-400', ring: 'ring-gray-200' };
+  }
+}
+
+const TicketSellingView = ({
+  dateFrom,
+  dateTo,
+  typeFilter = 'all',
+  statusFilter = 'all',
+  searchTerm = '',
+  onTripCountsChange,
+  refreshAllSlots,
+  shiftClosed
+}) => {
+  const [trips, setTrips] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedTrip, setSelectedTrip] = useState(null);
+
+  useEffect(() => {
+    loadTrips();
+  }, []);
+
+  const loadTrips = async () => {
+    setLoading(true);
+    try {
+      const data = await apiClient.getTrips();
+      setTrips(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error(e);
+      setTrips([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const isInDateRange = (trip) => {
+    if (!trip.trip_date) return true;
+    if (!dateFrom || !dateTo) return true;
+    return trip.trip_date >= dateFrom && trip.trip_date <= dateTo;
+  };
+
+  const isFinished = (trip) => {
+    if (!trip.trip_date || !trip.time) return false;
+    return new Date(`${trip.trip_date}T${trip.time}:00`) < new Date();
+  };
+
+  const filteredTrips = useMemo(() => {
+    let result = [...trips];
+
+    result = result.filter(isInDateRange);
+
+    if (typeFilter !== 'all') {
+      result = result.filter(t => t.boat_type === typeFilter);
+    }
+
+    if (statusFilter !== 'all') {
+      result = result.filter(t => {
+        if (statusFilter === 'active') return t.is_active === 1 && !isFinished(t);
+        if (statusFilter === 'completed') return isFinished(t);
+        return true;
+      });
+    }
+
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      result = result.filter(t =>
+        (t.boat_name || '').toLowerCase().includes(term) ||
+        String(t.id).includes(term)
+      );
+    }
+
+    return result;
+  }, [trips, dateFrom, dateTo, typeFilter, statusFilter, searchTerm]);
+
+  useEffect(() => {
+    onTripCountsChange?.({
+      total: trips.length,
+      shown: filteredTrips.length
+    });
+  }, [trips.length, filteredTrips.length]);
+
+  if (selectedTrip) {
+    return (
+      <PassengerList
+        trip={selectedTrip}
+        onBack={() => setSelectedTrip(null)}
+        refreshTrips={loadTrips}
+        refreshAllSlots={refreshAllSlots}
+      />
+    );
+  }
+
+  return (
+    <div>
+      {loading && <div>Загрузка...</div>}
+
+      {!loading && filteredTrips.length === 0 && (
+        <div className="text-center py-6 text-gray-500">
+          Нет рейсов
+        </div>
+      )}
+
+      <div className="space-y-4">
+        {filteredTrips.map(trip => {
+          const available = getSlotAvailable(trip);
+          const capacity = getCapacity(trip);
+          const occupied = (typeof capacity === 'number') ? Math.max(0, capacity - available) : null;
+
+          const soldLevel = getSoldLevel(occupied, capacity);
+          const soldUi = getSoldUi(soldLevel);
+
+          const durationText = formatDurationMinutes(getDurationMinutes(trip));
+
+          const fillPercent =
+            (typeof occupied === 'number' && typeof capacity === 'number' && capacity > 0)
+              ? Math.max(0, Math.min(100, Math.round((occupied / capacity) * 100)))
+              : 0;
+
+          // подсветка карточки если почти полный (<= 10% мест или <= 1 место)
+          const almostFull =
+            (typeof available === 'number' && typeof capacity === 'number')
+              ? available <= Math.max(1, Math.floor(capacity * 0.1))
+              : false;
+
+          return (
+            <div
+              key={trip.slot_uid || trip.id}
+              className={`bg-white rounded-xl shadow p-4 cursor-pointer active:scale-[0.99] border border-gray-100 transition-all ${almostFull ? `ring-2 ${soldUi.ring}` : ''} ${isSlotSoldOut(trip) ? 'opacity-50' : ''}`}
+              onClick={shiftClosed ? undefined : () => setSelectedTrip(trip)}
+            >
+              <div className="flex flex-col">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg leading-none">🚤</span>
+                    <div className="font-bold text-[22px] leading-snug truncate">{trip.boat_name}</div>
+                  </div>
+
+                  <div className="mt-1 flex items-center gap-2 text-sm text-gray-600">
+                    <span className="leading-none">📅</span>
+                    <span>{trip.trip_date}</span>
+                    <span className="text-gray-300">•</span>
+                    <span className="leading-none">🕒</span>
+                    <span>{trip.time}</span>
+                  </div>
+
+                  <div className="mt-1 flex items-center gap-2 text-sm text-gray-500">
+                    <span className="leading-none">⏱️</span>
+                    <span>Длительность: {durationText}</span>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex flex-col gap-2">
+                  <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm w-full">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-gray-600 flex items-center gap-1">
+                        <span className="leading-none">🟢</span>
+                        Свободно
+                      </span>
+                      <span className="font-bold text-gray-900">{available}</span>
+                    </div>
+
+                    {(typeof occupied === 'number' && typeof capacity === 'number') && (
+                      <div className="mt-1 flex items-center justify-between gap-3">
+                        <span className="text-gray-600 flex items-center gap-1">
+                          <span className="leading-none">👥</span>
+                          Занято
+                        </span>
+                        <span className={`font-bold ${soldUi.text}`}>
+                          {occupied} / {capacity}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {(typeof occupied === 'number' && typeof capacity === 'number') && (
+                    <div className="w-full">
+                      <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                        <span className="flex items-center gap-1"><span>📊</span>Заполнено</span>
+                        <span className="font-semibold text-gray-700">{fillPercent}%</span>
+                      </div>
+                      <div className="h-2 w-full bg-gray-200 rounded-full overflow-hidden">
+                        <div
+                          className={`h-2 ${soldUi.bar} rounded-full`}
+                          style={{ width: `${fillPercent}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+export default TicketSellingView;
