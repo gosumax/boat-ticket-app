@@ -1,3 +1,37 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* === MOBILE FORCE (30% WIDER) === */
+
+html, body {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* +30% width: 480px -> ~624px */
+#root {
+  max-width: 4200px;
+  margin: 0 auto;
+  min-height: 100vh;
+  background: #126eca;
+}
+
+/* Gray background outside app */
+body {
+  display: flex;
+  justify-content: center;
+  background: #060606;
+}
+
+/* Disable horizontal scroll bleed */
+* {
+  box-sizing: border-box;
+}
+
+/* Better tap behavior */
+button {
+  touch-action: manipulation;
+}

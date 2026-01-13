@@ -97,7 +97,7 @@ const TripListView = ({
   }, [trips.length, filteredTrips.length, onTripCountsChange]);
 
   return (
-    <div className="p-4">
+    <div className="p-3">
       {loading && (
         <div className="text-sm text-gray-600 mb-3">
           Загрузка...
@@ -121,7 +121,7 @@ const TripListView = ({
           return (
             <div
               key={trip.slot_uid ?? trip.id}
-              className="bg-white rounded-2xl shadow p-4 flex items-start justify-between gap-4"
+              className="bg-white rounded-2xl shadow p-4 flex flex-col gap-3"
             >
               {/* LEFT INFO */}
               <div className="min-w-0">
@@ -149,8 +149,8 @@ const TripListView = ({
               </div>
 
               {/* RIGHT STATS */}
-              <div className="w-44 shrink-0">
-                <div className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">
+              <div className="w-full">
+                <div className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-3">
                   <div className="flex items-center justify-between text-sm">
                     <div className="flex items-center gap-2">
                       <span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500" />

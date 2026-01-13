@@ -59,11 +59,11 @@ const DispatcherView = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-purple-600 text-white p-4 flex justify-between items-center shadow-md">
+      <div className="bg-purple-600 text-white p-3 flex justify-between items-center shadow-md">
         <button onClick={() => navigate('/')} className="hover:text-purple-200">
           ← Назад
         </button>
-        <h1 className="text-xl font-bold">Диспетчер</h1>
+        <h1 className="text-lg font-bold">Диспетчер</h1>
         <button
           onClick={logout}
           className="bg-purple-700 hover:bg-purple-800 px-3 py-1 rounded"
@@ -73,7 +73,7 @@ const DispatcherView = () => {
       </div>
 
       {/* Tabs */}
-      <div className="bg-white border-b border-gray-200 flex">
+      <div className="bg-white border-b border-gray-200 flex overflow-x-auto">
         {[
           ['trips', 'Активные рейсы'],
           ['selling', 'Продажа билетов'],
@@ -83,7 +83,7 @@ const DispatcherView = () => {
           <button
             key={key}
             onClick={() => setActiveTab(key)}
-            className={`px-6 py-3 text-sm font-medium ${
+            className={`flex-none whitespace-nowrap px-4 py-3 text-sm font-medium ${
               activeTab === key
                 ? 'text-purple-600 border-b-2 border-purple-600'
                 : 'text-gray-500 hover:text-gray-700'
@@ -117,7 +117,7 @@ const DispatcherView = () => {
 
           {showFilters && (
             <div className="p-4 bg-white rounded-lg shadow">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4">
                 {/* DATE */}
                 <div>
                   <div className="text-sm font-medium text-gray-700 mb-2">Дата</div>
@@ -243,7 +243,7 @@ const DispatcherView = () => {
       )}
 
       {/* CONTENT */}
-      <div className="p-4">
+      <div className="p-3 ">
         {activeTab === 'trips' && (
           <TripListView
             dateFilter={dateFilter}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import apiClient from '../../utils/apiClient';
 import PassengerList from './PassengerList';
 import { getSlotAvailable, isSlotSoldOut } from '../../utils/slotAvailability';
@@ -65,26 +65,87 @@ const TicketSellingView = ({
   refreshAllSlots,
   shiftClosed
 }) => {
-  const [trips, setTrips] = useState([]);
+  const [trips, setTrips] = useState(() => {
+    try {
+      const raw = sessionStorage.getItem('dispatcher_trips_cache');
+      const parsed = raw ? JSON.parse(raw) : null;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
   const [loading, setLoading] = useState(false);
   const [selectedTrip, setSelectedTrip] = useState(null);
+  const didInitRef = useRef(false);
+  const inFlightRef = useRef(false);
+  const pendingReloadRef = useRef(false);
+  const sigRef = useRef('');
 
-  useEffect(() => {
-    loadTrips();
-  }, []);
-
-  const loadTrips = async () => {
-    setLoading(true);
+  const loadTrips = useCallback(async (opts = {}) => {
+    const silent = !!opts.silent;
+    const force = !!opts.force;
+    if (inFlightRef.current) {
+      pendingReloadRef.current = true;
+      return;
+    }
+    inFlightRef.current = true;
+    if (!silent) setLoading(true);
     try {
       const data = await apiClient.getTrips();
-      setTrips(Array.isArray(data) ? data : []);
-    } catch (e) {
+      let next = [];
+      if (Array.isArray(data)) next = data;
+      else if (data?.slots && Array.isArray(data.slots)) next = data.slots;
+      else if (data?.data && Array.isArray(data.data)) next = data.data;
+
+      // Avoid useless state updates (prevents blinking), but include dynamic fields
+      const sig = JSON.stringify(next.map(t => ({
+        id: t?.id,
+        slot_uid: t?.slot_uid,
+        trip_date: t?.trip_date,
+        time: t?.time,
+        status: t?.status,
+        is_active: t?.is_active,
+        capacity: t?.capacity,
+        seats_left: t?.seats_left ?? t?.seatsLeft ?? t?.free_seats ?? t?.freeSeats,
+        occupied: t?.occupied ?? t?.sold ?? t?.taken_seats ?? t?.takenSeats,
+        paid_total: t?.paid_total ?? t?.paidTotal,
+        has_debt: t?.has_debt ?? t?.hasDebt,
+        debt_amount: t?.debt_amount ?? t?.debtAmount,
+        updated_at: t?.updated_at ?? t?.updatedAt,
+      })));
+      if (force || sig !== sigRef.current) {
+        sigRef.current = sig;
+        setTrips(next);
+        try { sessionStorage.setItem('dispatcher_trips_cache', JSON.stringify(next)); } catch {}
+      }
+} catch (e) {
       console.error(e);
-      setTrips([]);
+      // keep previous trips to avoid flicker
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
+      inFlightRef.current = false;
+      if (pendingReloadRef.current) {
+        pendingReloadRef.current = false;
+        loadTrips({ silent: true, force: true });
+      }
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (didInitRef.current) return;
+    didInitRef.current = true;
+    loadTrips();
+  }, [loadTrips]);
+
+  useEffect(() => {
+    const h = () => loadTrips({ silent: true, force: true });
+    try { window.addEventListener('dispatcher:slots-changed', h); } catch {}
+    return () => {
+      try { window.removeEventListener('dispatcher:slots-changed', h); } catch {}
+    };
+  }, [loadTrips]);
+
+
 
   const isInDateRange = (trip) => {
     if (!trip.trip_date) return true;
@@ -139,13 +200,14 @@ const TicketSellingView = ({
         onBack={() => setSelectedTrip(null)}
         refreshTrips={loadTrips}
         refreshAllSlots={refreshAllSlots}
+        shiftClosed={shiftClosed}
       />
     );
   }
 
   return (
     <div>
-      {loading && <div>Загрузка...</div>}
+      {loading && <div className="text-center py-2 text-gray-400 text-sm">Обновление…</div>}
 
       {!loading && filteredTrips.length === 0 && (
         <div className="text-center py-6 text-gray-500">

@@ -376,6 +376,31 @@ if (presalesSlotUidCheck.count === 0) {
     console.log('[PRESALES_TICKETS] Presales tickets column addition already ran, skipping...');
   }
   
+
+  // ONE-TIME PRESALES PAYMENT COLUMNS ADDITION - SAFE (payment_method, payment_cash_amount, payment_card_amount)
+  // Adds columns only if they are missing (prevents repeated ALTER TABLE errors)
+  try {
+    const cols = db.prepare("PRAGMA table_info(presales)").all().map(r => r.name);
+    const needsPaymentMethod = !cols.includes('payment_method');
+    const needsCash = !cols.includes('payment_cash_amount');
+    const needsCard = !cols.includes('payment_card_amount');
+
+    if (needsPaymentMethod) {
+      db.prepare("ALTER TABLE presales ADD COLUMN payment_method TEXT NULL").run();
+      console.log('[PRESALES_PAYMENT] Added payment_method column');
+    }
+    if (needsCash) {
+      db.prepare("ALTER TABLE presales ADD COLUMN payment_cash_amount INTEGER NOT NULL DEFAULT 0").run();
+      console.log('[PRESALES_PAYMENT] Added payment_cash_amount column');
+    }
+    if (needsCard) {
+      db.prepare("ALTER TABLE presales ADD COLUMN payment_card_amount INTEGER NOT NULL DEFAULT 0").run();
+      console.log('[PRESALES_PAYMENT] Added payment_card_amount column');
+    }
+  } catch (e) {
+    console.log('[PRESALES_PAYMENT] Payment columns check/add skipped (table may not exist yet):', e?.message || e);
+  }
+
   // ONE-TIME BOAT TYPE COLUMN ADDITION - RUN ONLY ONCE
   // Add type column to boats table to support different boat types including 'banana'
   const boatTypeCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'boat_type_column_v1'").get();

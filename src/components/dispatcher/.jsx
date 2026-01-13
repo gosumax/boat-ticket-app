@@ -47,32 +47,6 @@ function formatCurrencyRub(value) {
   return n.toLocaleString('ru-RU');
 }
 
-
-function getPaymentInfoText(presale) {
-  const method = String(presale?.payment_method || '').toUpperCase();
-  const cash = safeToInt(presale?.payment_cash_amount, 0);
-  const card = safeToInt(presale?.payment_card_amount, 0);
-
-  if (method === 'CASH') {
-    const amt = cash > 0 ? cash : safeToInt(presale?.total_price, 0);
-    return `Оплачен: Наличка ${formatCurrencyRub(amt)} ₽`;
-  }
-  if (method === 'CARD') {
-    const amt = card > 0 ? card : safeToInt(presale?.total_price, 0);
-    return `Оплачен: Карта ${formatCurrencyRub(amt)} ₽`;
-  }
-  if (method === 'MIXED') {
-    const a = cash;
-    const b = card;
-    if (a > 0 || b > 0) {
-      return `Оплачен: Комбо Наличка ${formatCurrencyRub(a)} ₽ + Карта ${formatCurrencyRub(b)} ₽`;
-    }
-    return 'Оплачен: Комбо';
-  }
-  return '';
-}
-
-
 function formatPhone(phone) {
   const p = String(phone || '').replace(/[^\d+]/g, '');
   return p || '—';
@@ -187,12 +161,13 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
 
   // Payment method modal for accepting payment (cash / card)
   const [paymentMethodModalOpen, setPaymentMethodModalOpen] = useState(false);
-  const [paymentMethodSelected, setPaymentMethodSelected] = useState(null); // 'cash' | 'card' | 'mixed'
+  const [paymentMethodSelected, setPaymentMethodSelected] = useState(null); // 'cash' | 'card'
+  const [paymentSplitModalOpen, setPaymentSplitModalOpen] = useState(false);
+  const [paymentCashInput, setPaymentCashInput] = useState('');
+  const [paymentCardInput, setPaymentCardInput] = useState('');
+  const [paymentCashAmount, setPaymentCashAmount] = useState(null);
+  const [paymentCardAmount, setPaymentCardAmount] = useState(null);
 
-  const [mixedCashAmount, setMixedCashAmount] = useState('');
-  const [mixedCardAmount, setMixedCardAmount] = useState('');
-  const [mixedAmountError, setMixedAmountError] = useState(null);
- // 'cash' | 'card'
 
   // State for ticket operations
   const [pendingTicketOperation, setPendingTicketOperation] = useState(null); // { ticketId, action }
@@ -200,6 +175,14 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
 
   // Quick sale
   const [showQuickSale, setShowQuickSale] = useState(false);
+
+  // Payment target for accept payment flow
+  const paymentTargetId = pendingPassengerId || pendingPresaleGroup?.id;
+  const paymentTargetPresale = paymentTargetId ? presales.find(p => p.id == paymentTargetId) : null;
+  const paymentRemainingAmount = paymentTargetPresale
+    ? Math.max(0, (Number(paymentTargetPresale.total_price) || 0) - (Number(paymentTargetPresale.prepayment_amount) || 0))
+    : null;
+
 
   const enrichTicketsForPresale = useCallback((presale, list) => {
     const ticketsList = normalizeTicketsForPresale(list);
@@ -435,12 +418,11 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
 
     // Open payment method picker first (mobile-first)
     setPaymentMethodSelected(null);
-          setMixedCashAmount('');
-          setMixedCardAmount('');
-          setMixedAmountError(null);
-    setMixedCashAmount('');
-    setMixedCardAmount('');
-    setMixedAmountError(null);
+          setPaymentSplitModalOpen(false);
+          setPaymentCashInput('');
+          setPaymentCardInput('');
+          setPaymentCashAmount(null);
+          setPaymentCardAmount(null);
     setPaymentMethodModalOpen(true);
   };
 
@@ -635,29 +617,20 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
           });
         } else if (pendingPresaleOperation === 'accept_payment') {
           if (!paymentMethodSelected) {
-            setConfirmError('Выбери способ оплаты: наличка / карта / комбо');
+            setConfirmError('Выбери способ оплаты: наличка / безнал / комбинированный');
             setConfirmLoading(false);
             return;
           }
 
           const payload = { payment_method: paymentMethodSelected };
-if (paymentMethodSelected === 'mixed') {
-  const cash = Number(String(mixedCashAmount || '').replace(/\s+/g, '').replace(',', '.'));
-  const card = Number(String(mixedCardAmount || '').replace(/\s+/g, '').replace(',', '.'));
 
-  if (!Number.isFinite(cash) || !Number.isFinite(card) || cash <= 0 || card <= 0) {
-    setMixedAmountError('Укажи суммы для налички и карты');
-    setConfirmError('Укажи суммы для налички и карты');
-    setConfirmLoading(false);
-    return;
-  }
+          // For mixed payments, we send the split amounts (cash + card) for stability/owner cash control
+          if (paymentMethodSelected === 'mixed') {
+            payload.payment_cash_amount = paymentCashAmount;
+            payload.payment_card_amount = paymentCardAmount;
+          }
 
-  payload.cash_amount = Math.round(cash);
-  payload.card_amount = Math.round(card);
-}
-
-const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
-
+          const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
           // Backends may return either the presale object itself or a wrapper like { presale: {...} }.
           const nextPresale = updatedPresale?.presale ?? updatedPresale;
 
@@ -675,6 +648,11 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
         setPendingPassengerId(null);
         setConfirmLoading(false);
         setPaymentMethodSelected(null);
+          setPaymentSplitModalOpen(false);
+          setPaymentCashInput('');
+          setPaymentCardInput('');
+          setPaymentCashAmount(null);
+          setPaymentCardAmount(null);
 
         // Refresh slots list (seats_left) if needed
         if (refreshAllSlots) refreshAllSlots();
@@ -759,12 +737,6 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 <span>{payLabel}</span>
               </div>
 
-              {remaining <= 0 && getPaymentInfoText(presale) && (
-                <div className="text-xs text-gray-500 ml-1">
-                  {getPaymentInfoText(presale)}
-                </div>
-              )}
-
               {!isActive && (
                 <div className="text-xs text-gray-400">
                   Статус: {status}
@@ -828,11 +800,6 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
     const status = String(presale.status || 'ACTIVE');
     const allowTicketOps = ALLOWED_PRESALE_STATUSES_FOR_TICKET_OPS.includes(status);
 
-    const totalPrice = safeToInt(presale.total_price, 0);
-    const prepay = safeToInt(presale.prepayment_amount, 0);
-    const remaining = Math.max(0, totalPrice - prepay);
-    const presalePaid = remaining <= 0;
-
     if (!expandedPresales[presale.id]) return null;
 
     if (!list || list.length === 0) {
@@ -845,11 +812,6 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
     return (
       <div className="mt-3 space-y-2">
-        {presalePaid && (
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 px-3 py-2 text-sm">
-            Оплачено — перенос и удаление пассажиров недоступны
-          </div>
-        )}
         {list.map((ticket, idx) => {
           const tStatus = getTicketStatus(ticket);
           const isActive = tStatus === 'ACTIVE';
@@ -870,13 +832,25 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                     <span>{tStatus}</span>
                   </div>
                 </div>
+
+                <div className="shrink-0 flex gap-2">
+                  <button
+                    disabled={!allowTicketOps || shiftClosed || !isActive}
+                    className={`px-3 py-2 rounded-xl text-sm font-semibold ${
+                      !allowTicketOps || shiftClosed || !isActive ? 'bg-gray-200 text-gray-400' : 'bg-blue-600 text-white'
+                    }`}
+                    onClick={() => handleTicketActionClick(ticket.id, 'use')}
+                  >
+                    Посадить
+                  </button>
+                </div>
               </div>
 
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <button
-                  disabled={presalePaid || !allowTicketOps || shiftClosed || !isActive}
+                  disabled={!allowTicketOps || shiftClosed || !isActive}
                   className={`px-3 py-2 rounded-xl text-sm font-semibold ${
-                    presalePaid || !allowTicketOps || shiftClosed || !isActive ? 'bg-gray-200 text-gray-400' : 'bg-amber-500 text-white'
+                    !allowTicketOps || shiftClosed || !isActive ? 'bg-gray-200 text-gray-400' : 'bg-amber-500 text-white'
                   }`}
                   onClick={() => handleTicketActionClick(ticket.id, 'transfer')}
                 >
@@ -884,9 +858,9 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 </button>
 
                 <button
-                  disabled={presalePaid || !allowTicketOps || shiftClosed || !isActive}
+                  disabled={!allowTicketOps || shiftClosed || !isActive}
                   className={`px-3 py-2 rounded-xl text-sm font-semibold ${
-                    presalePaid || !allowTicketOps || shiftClosed || !isActive ? 'bg-gray-200 text-gray-400' : 'bg-red-600 text-white'
+                    !allowTicketOps || shiftClosed || !isActive ? 'bg-gray-200 text-gray-400' : 'bg-red-600 text-white'
                   }`}
                   onClick={() => handleTicketActionClick(ticket.id, 'delete')}
                 >
@@ -1099,9 +1073,11 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 onClick={() => {
                   setPaymentMethodModalOpen(false);
                   setPaymentMethodSelected(null);
-                  setMixedCashAmount('');
-                  setMixedCardAmount('');
-                  setMixedAmountError(null);
+          setPaymentSplitModalOpen(false);
+          setPaymentCashInput('');
+          setPaymentCardInput('');
+          setPaymentCashAmount(null);
+          setPaymentCardAmount(null);
                   setPendingPresaleOperation(null);
                   setPendingPresaleGroup(null);
                   setPendingPassengerId(null);
@@ -1139,6 +1115,34 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
               <button
                 className="w-full flex items-center justify-between gap-3 px-4 py-4 rounded-2xl bg-white border border-gray-200 shadow-sm"
                 onClick={() => {
+                  // Mixed payment requires split amounts (cash + card)
+                  setPaymentMethodSelected('mixed');
+                  setPaymentMethodModalOpen(false);
+
+                  const remaining = paymentRemainingAmount ?? 0;
+                  setPaymentCashInput(String(remaining));
+                  setPaymentCardInput('0');
+                  setPaymentCashAmount(null);
+                  setPaymentCardAmount(null);
+
+                  setPaymentSplitModalOpen(true);
+                  setConfirmError(null);
+                }}
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl leading-none">🧾</span>
+                  <div className="text-left">
+                    <div className="font-bold">Комбинированный</div>
+                    <div className="text-sm text-gray-500">Часть наличка / часть карта</div>
+                  </div>
+                </div>
+                <span className="text-gray-400">›</span>
+              </button>
+
+
+              <button
+                className="w-full flex items-center justify-between gap-3 px-4 py-4 rounded-2xl bg-white border border-gray-200 shadow-sm"
+                onClick={() => {
                   setPaymentMethodSelected('card');
                   setPaymentMethodModalOpen(false);
                   setConfirmBoardingOpen(true);
@@ -1154,62 +1158,6 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 </div>
                 <span className="text-gray-400">›</span>
               </button>
-
-
-              <button
-                className="w-full flex items-center justify-between gap-3 px-4 py-4 rounded-2xl bg-white border border-gray-200 shadow-sm"
-                onClick={() => {
-                  setPaymentMethodSelected('mixed');
-                  setMixedAmountError(null);
-                }}
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl leading-none">🧾</span>
-                  <div className="text-left">
-                    <div className="font-bold">Комбо</div>
-                    <div className="text-sm text-gray-500">Часть наличка / часть карта</div>
-                  </div>
-                </div>
-                <span className="text-gray-400">›</span>
-              </button>
-
-              {paymentMethodSelected === 'mixed' && (
-                <div className="mt-3 p-3 rounded-2xl bg-gray-50 border border-gray-200">
-                  <div className="text-sm font-semibold mb-2">Введи суммы</div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <input
-                      className="w-full px-3 py-2 rounded-xl border border-gray-200 bg-white"
-                      inputMode="numeric"
-                      placeholder="Наличка"
-                      value={mixedCashAmount}
-                      onChange={(e) => setMixedCashAmount(e.target.value)}
-                    />
-                    <input
-                      className="w-full px-3 py-2 rounded-xl border border-gray-200 bg-white"
-                      inputMode="numeric"
-                      placeholder="Карта"
-                      value={mixedCardAmount}
-                      onChange={(e) => setMixedCardAmount(e.target.value)}
-                    />
-                  </div>
-
-                  {mixedAmountError && (
-                    <div className="text-sm text-red-600 mt-2">{mixedAmountError}</div>
-                  )}
-
-                  <button
-                    className="mt-3 w-full px-4 py-3 rounded-2xl bg-purple-600 text-white font-bold"
-                    onClick={() => {
-                      setPaymentMethodModalOpen(false);
-                      setConfirmBoardingOpen(true);
-                      setConfirmError(null);
-                    }}
-                  >
-                    Продолжить
-                  </button>
-                </div>
-              )}
-
             </div>
 
             <div className="mt-4 text-xs text-gray-400">
@@ -1219,7 +1167,128 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
         </div>
       )}
 
-      <ConfirmBoardingModal
+      
+      {paymentSplitModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-end">
+          <div className="w-full bg-white rounded-t-2xl p-4 shadow-lg">
+            <div className="flex items-center justify-between">
+              <div className="text-lg font-bold">Комбинированная оплата</div>
+              <button
+                className="px-3 py-2 rounded-xl bg-gray-100 text-gray-700"
+                onClick={() => {
+                  setPaymentSplitModalOpen(false);
+                  setPaymentMethodSelected(null);
+          setPaymentSplitModalOpen(false);
+          setPaymentCashInput('');
+          setPaymentCardInput('');
+          setPaymentCashAmount(null);
+          setPaymentCardAmount(null);
+                  setPaymentCashInput('');
+                  setPaymentCardInput('');
+                  setPaymentCashAmount(null);
+                  setPaymentCardAmount(null);
+                  setPendingPresaleOperation(null);
+                  setPendingPresaleGroup(null);
+                  setPendingPassengerId(null);
+                  setConfirmError(null);
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mt-2 text-sm text-gray-600">
+              {paymentRemainingAmount != null ? (
+                <div>Сумма к оплате: <span className="font-semibold">{paymentRemainingAmount}</span> ₽</div>
+              ) : (
+                <div>Сумма к оплате: —</div>
+              )}
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <label className="block">
+                <div className="text-sm font-medium mb-1">Наличка</div>
+                <input
+                  inputMode="numeric"
+                  className="w-full px-3 py-3 rounded-xl border border-gray-200"
+                  value={paymentCashInput}
+                  onChange={(e) => setPaymentCashInput(e.target.value.replace(/[^\d]/g, ''))}
+                  placeholder="0"
+                />
+              </label>
+
+              <label className="block">
+                <div className="text-sm font-medium mb-1">Карта</div>
+                <input
+                  inputMode="numeric"
+                  className="w-full px-3 py-3 rounded-xl border border-gray-200"
+                  value={paymentCardInput}
+                  onChange={(e) => setPaymentCardInput(e.target.value.replace(/[^\d]/g, ''))}
+                  placeholder="0"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 flex gap-2">
+              <button
+                className="flex-1 px-4 py-3 rounded-2xl bg-gray-100 text-gray-800 font-semibold"
+                onClick={() => {
+                  setPaymentSplitModalOpen(false);
+                  setPaymentMethodSelected(null);
+          setPaymentSplitModalOpen(false);
+          setPaymentCashInput('');
+          setPaymentCardInput('');
+          setPaymentCashAmount(null);
+          setPaymentCardAmount(null);
+                  setPaymentCashInput('');
+                  setPaymentCardInput('');
+                  setPaymentCashAmount(null);
+                  setPaymentCardAmount(null);
+                  setPendingPresaleOperation(null);
+                  setPendingPresaleGroup(null);
+                  setPendingPassengerId(null);
+                  setConfirmError(null);
+                }}
+              >
+                Отмена
+              </button>
+
+              <button
+                className="flex-1 px-4 py-3 rounded-2xl bg-blue-600 text-white font-semibold"
+                onClick={() => {
+                  const cash = Number(paymentCashInput || 0);
+                  const card = Number(paymentCardInput || 0);
+                  const remaining = Number(paymentRemainingAmount ?? 0);
+
+                  if (!Number.isFinite(cash) || !Number.isFinite(card) || cash < 0 || card < 0) {
+                    setConfirmError('Некорректные суммы оплаты');
+                    return;
+                  }
+
+                  if (cash + card !== remaining) {
+                    setConfirmError(`Сумма наличка+карта должна быть ровно ${remaining} ₽`);
+                    return;
+                  }
+
+                  setPaymentCashAmount(cash);
+                  setPaymentCardAmount(card);
+
+                  setPaymentSplitModalOpen(false);
+                  setConfirmBoardingOpen(true);
+                  setConfirmError(null);
+                }}
+              >
+                Продолжить
+              </button>
+            </div>
+
+            <div className="mt-3 text-xs text-gray-400">
+              Для стабильности: сумма должна совпасть с суммой к оплате.
+            </div>
+          </div>
+        </div>
+      )}
+<ConfirmBoardingModal
         open={confirmBoardingOpen}
         onConfirm={handleConfirmBoarding}
         onClose={() => {
@@ -1227,6 +1296,11 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
           setConfirmError(null);
           setPendingTicketOperation(null); // Reset ticket operation
           setPaymentMethodSelected(null);
+          setPaymentSplitModalOpen(false);
+          setPaymentCashInput('');
+          setPaymentCardInput('');
+          setPaymentCashAmount(null);
+          setPaymentCardAmount(null);
         }}
         loading={confirmLoading}
         error={confirmError}

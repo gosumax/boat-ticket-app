@@ -44,19 +44,40 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       return total + (ticketCategories[category] * price);
     }, 0)
     : 0;
-  
+
+  // Phone validation (RU mobile)
+  const validatePhone = (raw) => {
+    const value = String(raw ?? "").trim();
+    if (!value) return { valid: false, error: "Введите номер телефона", normalized: "" };
+
+    const digits = value.replace(/\D/g, "");
+    if (digits.length !== 11) {
+      return { valid: false, error: "Номер должен содержать ровно 11 цифр", normalized: digits };
+    }
+
+    // Accept: 8XXXXXXXXXX, +7XXXXXXXXXX, 7XXXXXXXXXX
+    if (value.startsWith("+")) {
+      if (digits[0] !== "7") return { valid: false, error: "Номер с + должен начинаться с +7", normalized: digits };
+      return { valid: true, error: "", normalized: digits };
+    }
+
+    if (digits[0] === "8" || digits[0] === "7") return { valid: true, error: "", normalized: digits };
+    return { valid: false, error: "Номер должен начинаться с 8 или +7", normalized: digits };
+  };
+
+  const phoneCheck = validatePhone(customerPhone);
+  const isPhoneValid = phoneCheck.valid;
+  const phoneError = phoneCheck.error;
+
   const prepaymentAmount = parseFloat(prepaymentStr) || 0;
   const isPrepaymentValid = prepaymentAmount <= totalPrice && prepaymentAmount >= 0;
+
   const isFormValid = !!slotId &&
                       Number.isFinite(categoryTotalSeats) && categoryTotalSeats >= 1 &&
                       customerName.trim().length > 0 &&
-                      customerPhone.trim().length > 0 &&
+                      isPhoneValid &&
                       categoryTotalSeats > 0 && // Allow API call even if trip is closed, let backend decide
                       isPrepaymentValid;
-  
-  // Phone validation
-  const isPhoneValid = customerPhone.trim().length > 0;
-  const phoneError = customerPhone.trim().length === 0 ? 'Введите номер телефона' : '';
 
   // Update prepayment error message
   useEffect(() => {
@@ -111,7 +132,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
     
     if (!isFormValid) {
       // Show appropriate error instead of "Рейс закрыт" for local blocks
-      setErrors({ submit: "Форма не заполнена/локальная блокировка" });
+      setErrors({ submit: phoneError || prepaymentError || "Форма не заполнена" });
       return;
     }
 

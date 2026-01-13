@@ -171,6 +171,35 @@ class ApiClient {
     return this.request('/selling/presales');
   }
 
+  // UI helper: presales for конкретного рейса (manual/generated)
+  async getPresalesForSlot(slotUidOrId) {
+    const all = await this.getPresales();
+    const list = Array.isArray(all) ? all : (all?.presales || []);
+
+    const raw = slotUidOrId == null ? '' : String(slotUidOrId);
+    const isManualUid = raw.startsWith('manual:');
+    const isGeneratedUid = raw.startsWith('generated:');
+
+    let manualId = null;
+    if (isManualUid) {
+      const n = Number(raw.split(':')[1]);
+      manualId = Number.isFinite(n) ? n : null;
+    }
+
+    return list.filter((p) => {
+      const pSlotUid = String(p?.slot_uid || '');
+      const pBoatSlotId = Number(p?.boat_slot_id ?? p?.boatSlotId ?? NaN);
+
+      if (isGeneratedUid) return pSlotUid === raw;
+      if (isManualUid) return pSlotUid === raw || (manualId != null && pBoatSlotId === manualId);
+
+      // legacy: numeric id
+      const n = Number(raw);
+      if (Number.isFinite(n)) return pBoatSlotId === n || pSlotUid === `generated:${n}` || pSlotUid === `manual:${n}`;
+      return false;
+    });
+  }
+
   getPresalesCancelledTripPending() {
     return this.request('/selling/presales/cancelled-trip-pending');
   }
@@ -180,9 +209,19 @@ class ApiClient {
   }
 
   // main actions
-  acceptPayment(id) {
+  acceptPayment(id, payload) {
     // correct route (avoid the legacy /selling/presales/:id/paid duplication)
-    return this.request(`/selling/presales/${id}/accept-payment`, { method: 'PATCH' });
+    return this.request(`/selling/presales/${id}/accept-payment`, { method: 'PATCH', body: payload });
+  }
+
+  // Mark presale as "cancelled trip pending" (перенос в отменённые)
+  cancelTripPending(id) {
+    return this.request(`/selling/presales/${id}/cancel-trip-pending`, { method: 'PATCH' });
+  }
+
+  // Transfer whole presale to another рейс
+  transferPresaleToSlot(presaleId, toSlotUid) {
+    return this.request(`/selling/presales/${presaleId}/transfer`, { method: 'PATCH', body: { to_slot_uid: toSlotUid } });
   }
 
   markPresalePayment(id, payload) {
@@ -239,6 +278,20 @@ class ApiClient {
     return this.request(`/selling/tickets/${ticketId}/transfer`, { method: 'PATCH', body: payload });
   }
 
+  // Back-compat aliases used by some UI files
+  markTicketAsUsed(ticketId, payload) {
+    return this.markTicketUsed(ticketId, payload);
+  }
+
+  transferTicketToSlot(ticketId, toSlotUid) {
+    return this.transferTicket(ticketId, { to_slot_uid: toSlotUid });
+  }
+
+  // Active рейсы for transfer dropdown
+  getAllActiveSlots() {
+    return this.getTransferOptions();
+  }
+
   getTransferOptions() {
     return this.request('/selling/transfer-options');
   }
@@ -261,24 +314,41 @@ class ApiClient {
     return this.request(`/selling/schedule-templates/${id}`, { method: 'DELETE' });
   }
 
+  // Schedule template items (новый UI использует общий список items, без templateId)
+  // Поддерживаем оба формата, чтобы ничего не ломать.
   getScheduleTemplateItems(templateId) {
-    return this.request(`/selling/schedule-templates/${templateId}/items`);
+    if (templateId != null) {
+      return this.request(`/selling/schedule-templates/${templateId}/items`);
+    }
+    return this.request('/selling/schedule-template-items');
   }
 
-  createScheduleTemplateItem(templateId, payload) {
-    return this.request(`/selling/schedule-templates/${templateId}/items`, { method: 'POST', body: payload });
+  createScheduleTemplateItem(templateIdOrPayload, maybePayload) {
+    if (typeof templateIdOrPayload === 'number' || (typeof templateIdOrPayload === 'string' && templateIdOrPayload !== '')) {
+      const templateId = templateIdOrPayload;
+      const payload = maybePayload;
+      return this.request(`/selling/schedule-templates/${templateId}/items`, { method: 'POST', body: payload });
+    }
+    const payload = templateIdOrPayload;
+    return this.request('/selling/schedule-template-items', { method: 'POST', body: payload });
   }
 
   updateScheduleTemplateItem(itemId, payload) {
     return this.request(`/selling/schedule-template-items/${itemId}`, { method: 'PATCH', body: payload });
   }
 
-  deleteScheduleTemplateItem(itemId) {
-    return this.request(`/selling/schedule-template-items/${itemId}`, { method: 'DELETE' });
+  deleteScheduleTemplateItem(itemId, deleteFutureTrips) {
+    const q = deleteFutureTrips ? '?delete_future_trips=1' : '';
+    return this.request(`/selling/schedule-template-items/${itemId}${q}`, { method: 'DELETE' });
   }
 
   generateSchedule(payload) {
     return this.request('/selling/schedule-template-items/generate', { method: 'POST', body: payload });
+  }
+
+  // Alias name used in some UI files
+  generateSlotsFromTemplateItems(payload) {
+    return this.generateSchedule(payload);
   }
 
   // ---------------- OWNER ----------------
