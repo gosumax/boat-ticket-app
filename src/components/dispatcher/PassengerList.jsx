@@ -709,9 +709,9 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
     const payPill = remaining > 0 ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200';
 
     return (
-      <div className="bg-white rounded-2xl shadow border border-gray-100 p-4">
+      <div className="bg-neutral-950/40 rounded-2xl  border border-neutral-800 p-4">
         <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center text-gray-700">
+          <div className="w-10 h-10 rounded-xl bg-neutral-800/50 flex items-center justify-center text-neutral-200">
             <span className="text-lg">👤</span>
           </div>
 
@@ -721,35 +721,35 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 <div className="font-bold text-[18px] leading-snug truncate">
                   {presale.customer_name || 'Клиент'}
                 </div>
-                <div className="mt-0.5 text-sm text-gray-600 truncate">
+                <div className="mt-0.5 text-sm text-neutral-300 truncate">
                   {formatPhone(presale.customer_phone)}
                 </div>
               </div>
 
               <div className="shrink-0 flex flex-col items-end gap-1">
-                <div className="text-xs text-gray-500">{payPct}%</div>
-                <div className="h-2 w-16 bg-gray-100 rounded-full overflow-hidden">
+                <div className="text-xs text-neutral-400">{payPct}%</div>
+                <div className="h-2 w-16 bg-neutral-800/50 rounded-full overflow-hidden">
                   <div className="h-full bg-blue-600" style={{ width: `${payPct}%` }} />
                 </div>
               </div>
             </div>
 
             <div className="mt-3 grid grid-cols-2 gap-2">
-              <div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
-                <div className="text-xs text-gray-500">Предоплата</div>
+              <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-3">
+                <div className="text-xs text-neutral-400">Предоплата</div>
                 <div className="text-sm font-semibold">{formatCurrencyRub(prepay)} ₽</div>
               </div>
-              <div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
-                <div className="text-xs text-gray-500">Остаток</div>
+              <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-3">
+                <div className="text-xs text-neutral-400">Остаток</div>
                 <div className="text-sm font-semibold">{formatCurrencyRub(remaining)} ₽</div>
               </div>
             </div>
 
-            <div className="mt-3 text-sm text-gray-700 flex flex-wrap gap-x-3 gap-y-1">
+            <div className="mt-3 text-sm text-neutral-200 flex flex-wrap gap-x-3 gap-y-1">
               <span>Билетов: <span className="font-semibold">{expectedSeats}</span></span>
-              <span className="text-gray-300">•</span>
+              <span className="text-neutral-700">•</span>
               <span>Активно: <span className="font-semibold">{activeTicketsCount}</span></span>
-              <span className="text-gray-300">•</span>
+              <span className="text-neutral-700">•</span>
               <span>Сумма: <span className="font-semibold">{formatCurrencyRub(totalPrice)} ₽</span></span>
             </div>
 
@@ -760,13 +760,13 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
               </div>
 
               {remaining <= 0 && getPaymentInfoText(presale) && (
-                <div className="text-xs text-gray-500 ml-1">
+                <div className="text-xs text-neutral-400 ml-1">
                   {getPaymentInfoText(presale)}
                 </div>
               )}
 
               {!isActive && (
-                <div className="text-xs text-gray-400">
+                <div className="text-xs text-neutral-500">
                   Статус: {status}
                 </div>
               )}
@@ -776,7 +776,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
               <button
                 disabled={!isActive || shiftClosed}
                 className={`w-full px-4 py-3 rounded-2xl font-semibold ${
-                  !isActive || shiftClosed ? 'bg-gray-200 text-gray-400' : 'bg-blue-600 text-white'
+                  !isActive || shiftClosed ? 'bg-gray-200 text-neutral-500' : 'bg-blue-600 text-white'
                 }`}
                 onClick={() => handleAcceptPaymentClick(presale)}
               >
@@ -787,7 +787,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 <button
                   disabled={!isActive || shiftClosed}
                   className={`px-3 py-3 rounded-2xl font-semibold ${
-                    !isActive || shiftClosed ? 'bg-gray-200 text-gray-400' : 'bg-red-600 text-white'
+                    !isActive || shiftClosed ? 'bg-gray-200 text-neutral-500' : 'bg-red-600 text-white'
                   }`}
                   onClick={() => handleDeletePresaleClick(presale)}
                 >
@@ -797,7 +797,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 <button
                   disabled={!isActive || shiftClosed}
                   className={`px-3 py-3 rounded-2xl font-semibold ${
-                    !isActive || shiftClosed ? 'bg-gray-200 text-gray-400' : 'bg-purple-600 text-white'
+                    !isActive || shiftClosed ? 'bg-gray-200 text-neutral-500' : 'bg-purple-600 text-white'
                   }`}
                   onClick={() => handleOpenTransferForPresale(presale)}
                 >
@@ -810,11 +810,11 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
         <div className="mt-3">
           <button
-            className="text-sm font-semibold text-gray-700 flex items-center gap-2"
+            className="text-sm font-semibold text-neutral-200 flex items-center gap-2"
             onClick={() => togglePresaleExpanded(presale.id)}
           >
             <span>Пассажиры ({presaleTickets.length})</span>
-            <span className="text-gray-400">{expandedPresales[presale.id] ? '▲' : '▼'}</span>
+            <span className="text-neutral-500">{expandedPresales[presale.id] ? '▲' : '▼'}</span>
           </button>
           {/* Список пассажиров рендерится ниже через renderTickets(presale) */}
         </div>
@@ -837,7 +837,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
     if (!list || list.length === 0) {
       return (
-        <div className="mt-3 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm text-gray-600">
+        <div className="mt-3 bg-neutral-950/40 border border-neutral-800 rounded-2xl p-4 text-sm text-neutral-300">
           Пассажиров нет
         </div>
       );
@@ -857,16 +857,16 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
           return (
             <div
               key={ticket?.id ?? idx}
-              className={`bg-white rounded-2xl shadow border border-gray-100 p-3 ${!isActive ? 'opacity-60' : ''}`}
+              className={`bg-neutral-950/40 rounded-2xl  border border-neutral-800 p-3 ${!isActive ? 'opacity-60' : ''}`}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="font-bold truncate">
                     {buildPassengerLabel(ticket)}
                   </div>
-                  <div className="mt-1 text-sm text-gray-600 flex flex-wrap gap-x-3 gap-y-1">
+                  <div className="mt-1 text-sm text-neutral-300 flex flex-wrap gap-x-3 gap-y-1">
                     <span>№ {ticket?.ticket_number || ticket?.number || (ticket?.id ?? idx)}</span>
-                    <span className="text-gray-300">•</span>
+                    <span className="text-neutral-700">•</span>
                     <span>{tStatus}</span>
                   </div>
                 </div>
@@ -876,7 +876,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 <button
                   disabled={presalePaid || !allowTicketOps || shiftClosed || !isActive}
                   className={`px-3 py-2 rounded-xl text-sm font-semibold ${
-                    presalePaid || !allowTicketOps || shiftClosed || !isActive ? 'bg-gray-200 text-gray-400' : 'bg-amber-500 text-white'
+                    presalePaid || !allowTicketOps || shiftClosed || !isActive ? 'bg-gray-200 text-neutral-500' : 'bg-amber-500 text-white'
                   }`}
                   onClick={() => handleTicketActionClick(ticket.id, 'transfer')}
                 >
@@ -886,7 +886,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 <button
                   disabled={presalePaid || !allowTicketOps || shiftClosed || !isActive}
                   className={`px-3 py-2 rounded-xl text-sm font-semibold ${
-                    presalePaid || !allowTicketOps || shiftClosed || !isActive ? 'bg-gray-200 text-gray-400' : 'bg-red-600 text-white'
+                    presalePaid || !allowTicketOps || shiftClosed || !isActive ? 'bg-gray-200 text-neutral-500' : 'bg-red-600 text-white'
                   }`}
                   onClick={() => handleTicketActionClick(ticket.id, 'delete')}
                 >
@@ -930,21 +930,21 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
 
   return (
-    <div className="p-4 sticky top-0 bg-white z-40">
+    <div className="p-4 sticky top-0 bg-neutral-950 z-40 border-b border-neutral-900 max-w-[960px] mx-auto">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="font-bold text-[22px] leading-snug truncate">{trip.boat_name || 'Рейс'}</div>
-          <div className="mt-1 text-sm text-gray-600 flex flex-wrap gap-x-3 gap-y-1">
+          <div className="mt-1 text-sm text-neutral-300 flex flex-wrap gap-x-3 gap-y-1">
             <span>🕒 {trip.time || '—'}</span>
-            <span className="text-gray-300">•</span>
+            <span className="text-neutral-700">•</span>
             <span>📅 {trip.trip_date || '—'}</span>
-            <span className="text-gray-300">•</span>
+            <span className="text-neutral-700">•</span>
             <span>Свободно: <span className="font-semibold">{available}</span></span>
           </div>
         </div>
 
         <button
-          className="shrink-0 px-4 py-2 rounded-2xl bg-gray-100 text-gray-800 font-semibold"
+          className="shrink-0 px-4 py-2 rounded-2xl bg-neutral-800/50 text-neutral-100 font-semibold"
           onClick={() => (onBack || onClose)?.()}
         >
           Назад
@@ -961,7 +961,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
         <button
           disabled={shiftClosed}
           className={`w-full px-4 py-3 rounded-2xl font-semibold ${
-            shiftClosed ? 'bg-gray-200 text-gray-400' : 'bg-emerald-600 text-white'
+            shiftClosed ? 'bg-gray-200 text-neutral-500' : 'bg-emerald-600 text-white'
           }`}
           onClick={() => setShowQuickSale(true)}
         >
@@ -970,11 +970,11 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
       </div>
 
       {loading ? (
-        <div className="mt-4 text-center text-gray-500">Загрузка...</div>
+        <div className="mt-4 text-center text-neutral-400">Загрузка...</div>
       ) : (
         <div className="mt-4 space-y-3">
           {filteredPresales.length === 0 ? (
-            <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 text-center text-gray-600">
+            <div className="bg-neutral-950/40 border border-neutral-800 rounded-2xl p-4 text-center text-neutral-300">
               Нет билетов
             </div>
           ) : (
@@ -990,7 +990,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
       {showQuickSale && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-end">
-          <div className="w-full bg-gray-50 rounded-t-2xl p-4 shadow-lg max-h-[90vh] overflow-y-auto">
+          <div className="w-full bg-neutral-950/40 rounded-t-2xl p-4 -lg max-h-[90vh] overflow-y-auto">
             <QuickSaleForm
               trip={trip}
               onBack={() => setShowQuickSale(false)}
@@ -1008,11 +1008,11 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
       {transferModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-end">
-          <div className="w-full bg-white rounded-t-2xl p-4 shadow-lg">
+          <div className="w-full bg-neutral-950/40 rounded-t-2xl p-4 -lg">
             <div className="flex items-center justify-between">
               <div className="text-lg font-bold">Перенос</div>
               <button
-                className="px-3 py-2 rounded-xl bg-gray-100 text-gray-700"
+                className="px-3 py-2 rounded-xl bg-neutral-800/50 text-neutral-200"
                 onClick={() => {
                   setTransferModalOpen(false);
                   setTransferCtx(null);
@@ -1025,9 +1025,9 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
             </div>
 
             <div className="mt-3">
-              <label className="block text-sm text-gray-600 mb-1">Выбери рейс</label>
+              <label className="block text-sm text-neutral-300 mb-1">Выбери рейс</label>
               <select
-                className="w-full p-3 rounded-2xl border border-gray-200 bg-white"
+                className="w-full p-3 rounded-2xl border border-neutral-800 bg-neutral-950/40 text-neutral-100"
                 value={transferSelectedSlotUid}
                 onChange={(e) => setTransferSelectedSlotUid(e.target.value)}
               >
@@ -1048,7 +1048,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
             <div className="mt-4 grid grid-cols-2 gap-2">
               <button
-                className="px-4 py-3 rounded-2xl bg-gray-100 text-gray-800 font-semibold"
+                className="px-4 py-3 rounded-2xl bg-neutral-800/50 text-neutral-100 font-semibold"
                 onClick={() => {
                   setTransferModalOpen(false);
                   setTransferCtx(null);
@@ -1061,7 +1061,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
               <button
                 disabled={transferLoading}
-                className={`px-4 py-3 rounded-2xl font-semibold ${transferLoading ? 'bg-gray-200 text-gray-400' : 'bg-blue-600 text-white'}`}
+                className={`px-4 py-3 rounded-2xl font-semibold ${transferLoading ? 'bg-gray-200 text-neutral-500' : 'bg-blue-600 text-white'}`}
                 onClick={handleConfirmTransfer}
               >
                 {transferLoading ? '...' : 'Подтвердить перенос'}
@@ -1073,7 +1073,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
       {showQuickSale && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-end">
-          <div className="w-full bg-white rounded-t-2xl p-4 shadow-lg max-h-[95vh] overflow-auto">
+          <div className="w-full bg-neutral-950/40 rounded-t-2xl p-4 -lg max-h-[95vh] overflow-auto">
             <QuickSaleForm
               trip={trip}
               onBack={() => setShowQuickSale(false)}
@@ -1091,11 +1091,11 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
       {paymentMethodModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-end">
-          <div className="w-full bg-white rounded-t-2xl p-4 shadow-lg">
+          <div className="w-full bg-neutral-950/40 rounded-t-2xl p-4 -lg">
             <div className="flex items-center justify-between">
               <div className="text-lg font-bold">Способ оплаты</div>
               <button
-                className="px-3 py-2 rounded-xl bg-gray-100 text-gray-700"
+                className="px-3 py-2 rounded-xl bg-neutral-800/50 text-neutral-200"
                 onClick={() => {
                   setPaymentMethodModalOpen(false);
                   setPaymentMethodSelected(null);
@@ -1112,13 +1112,13 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
               </button>
             </div>
 
-            <div className="mt-3 text-sm text-gray-600">
+            <div className="mt-3 text-sm text-neutral-300">
               Выбери, как оплатили этот билет. Это нужно для контроля кассы у овнера.
             </div>
 
             <div className="mt-4 grid grid-cols-1 gap-3">
               <button
-                className="w-full flex items-center justify-between gap-3 px-4 py-4 rounded-2xl bg-white border border-gray-200 shadow-sm"
+                className="w-full flex items-center justify-between gap-3 px-4 py-4 rounded-2xl bg-neutral-950/40 border border-neutral-800 "
                 onClick={() => {
                   setPaymentMethodSelected('cash');
                   setPaymentMethodModalOpen(false);
@@ -1130,14 +1130,14 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                   <span className="text-2xl leading-none">💵</span>
                   <div className="text-left">
                     <div className="font-bold">Наличные</div>
-                    <div className="text-sm text-gray-500">Оплата в кассу</div>
+                    <div className="text-sm text-neutral-400">Оплата в кассу</div>
                   </div>
                 </div>
-                <span className="text-gray-400">›</span>
+                <span className="text-neutral-500">›</span>
               </button>
 
               <button
-                className="w-full flex items-center justify-between gap-3 px-4 py-4 rounded-2xl bg-white border border-gray-200 shadow-sm"
+                className="w-full flex items-center justify-between gap-3 px-4 py-4 rounded-2xl bg-neutral-950/40 border border-neutral-800 "
                 onClick={() => {
                   setPaymentMethodSelected('card');
                   setPaymentMethodModalOpen(false);
@@ -1149,15 +1149,15 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                   <span className="text-2xl leading-none">💳</span>
                   <div className="text-left">
                     <div className="font-bold">Безнал</div>
-                    <div className="text-sm text-gray-500">Карта / перевод</div>
+                    <div className="text-sm text-neutral-400">Карта / перевод</div>
                   </div>
                 </div>
-                <span className="text-gray-400">›</span>
+                <span className="text-neutral-500">›</span>
               </button>
 
 
               <button
-                className="w-full flex items-center justify-between gap-3 px-4 py-4 rounded-2xl bg-white border border-gray-200 shadow-sm"
+                className="w-full flex items-center justify-between gap-3 px-4 py-4 rounded-2xl bg-neutral-950/40 border border-neutral-800 "
                 onClick={() => {
                   setPaymentMethodSelected('mixed');
                   setMixedAmountError(null);
@@ -1167,25 +1167,25 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                   <span className="text-2xl leading-none">🧾</span>
                   <div className="text-left">
                     <div className="font-bold">Комбо</div>
-                    <div className="text-sm text-gray-500">Часть наличка / часть карта</div>
+                    <div className="text-sm text-neutral-400">Часть наличка / часть карта</div>
                   </div>
                 </div>
-                <span className="text-gray-400">›</span>
+                <span className="text-neutral-500">›</span>
               </button>
 
               {paymentMethodSelected === 'mixed' && (
-                <div className="mt-3 p-3 rounded-2xl bg-gray-50 border border-gray-200">
+                <div className="mt-3 p-3 rounded-2xl bg-neutral-950/40 border border-neutral-800">
                   <div className="text-sm font-semibold mb-2">Введи суммы</div>
                   <div className="grid grid-cols-2 gap-2">
                     <input
-                      className="w-full px-3 py-2 rounded-xl border border-gray-200 bg-white"
+                      className="w-full px-3 py-2 rounded-xl border border-neutral-800 bg-neutral-950/40"
                       inputMode="numeric"
                       placeholder="Наличка"
                       value={mixedCashAmount}
                       onChange={(e) => setMixedCashAmount(e.target.value)}
                     />
                     <input
-                      className="w-full px-3 py-2 rounded-xl border border-gray-200 bg-white"
+                      className="w-full px-3 py-2 rounded-xl border border-neutral-800 bg-neutral-950/40"
                       inputMode="numeric"
                       placeholder="Карта"
                       value={mixedCardAmount}
@@ -1212,7 +1212,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
             </div>
 
-            <div className="mt-4 text-xs text-gray-400">
+            <div className="mt-4 text-xs text-neutral-500">
               {paymentMethodSelected ? `Выбрано: ${paymentMethodSelected}` : ''}
             </div>
           </div>

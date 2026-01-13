@@ -510,7 +510,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
   return (
     <>
       {/* Tab Navigation */}
-      <div className="border-b border-gray-200 mb-4">
+      <div className="border-b border-neutral-800 mb-4">
         <nav className="flex space-x-8">
           <button
             onClick={() => setActiveTab('slots')}
@@ -553,13 +553,13 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
           
 
           {showForm && (
-            <div className="mb-6 bg-white rounded-xl shadow-md p-6">
+            <div className="mb-6 bg-neutral-900 rounded-2xl -md p-3">
               <h4 className="text-lg font-bold mb-4">
                 {editingSlot ? 'Редактировать рейс' : 'Создать новый рейс'}
               </h4>
               
               <form onSubmit={handleSubmit}>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                   {editingSlot ? (
                     <>
                       {/* Show boat as read-only when editing */}
@@ -595,7 +595,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                         
                         {/* Time selection tooltip */}
                         {showTimeTooltip && (
-                          <div className="absolute z-10 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg p-2 -left-4 top-full">
+                          <div className="absolute z-10 mt-1 w-48 bg-neutral-900 border border-neutral-800 rounded-lg -lg p-2 -left-4 top-full">
                             <div className="text-xs font-medium text-gray-700 mb-1">Доступные слоты:</div>
                             <div className="grid grid-cols-2 gap-1 max-h-40 overflow-y-auto">
                               {timeOptions.map(time => (
@@ -630,7 +630,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                         </label>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                           <div>
-                            <label className="block text-xs text-gray-600 mb-1">Взрослый</label>
+                            <label className="block text-xs text-neutral-400 mb-1">Взрослый</label>
                             <input
                               type="number"
                               value={formData.price_adult}
@@ -643,7 +643,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                           </div>
                           {boats.find(b => b.id === parseInt(formData.boat_id))?.type !== 'banana' && (
                             <div>
-                              <label className="block text-xs text-gray-600 mb-1">Подросток</label>
+                              <label className="block text-xs text-neutral-400 mb-1">Подросток</label>
                               <input
                                 type="number"
                                 value={formData.price_teen}
@@ -656,7 +656,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                             </div>
                           )}
                           <div>
-                            <label className="block text-xs text-gray-600 mb-1">Ребёнок</label>
+                            <label className="block text-xs text-neutral-400 mb-1">Ребёнок</label>
                             <input
                               type="number"
                               value={formData.price_child}
@@ -739,7 +739,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                         
                         {/* Time selection tooltip */}
                         {showTimeTooltip && (
-                          <div className="absolute z-10 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg p-2 -left-4 top-full">
+                          <div className="absolute z-10 mt-1 w-48 bg-neutral-900 border border-neutral-800 rounded-lg -lg p-2 -left-4 top-full">
                             <div className="text-xs font-medium text-gray-700 mb-1">Доступные слоты:</div>
                             <div className="grid grid-cols-2 gap-1 max-h-40 overflow-y-auto">
                               {timeOptions.map(time => (
@@ -774,7 +774,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                         </label>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                           <div>
-                            <label className="block text-xs text-gray-600 mb-1">Взрослый</label>
+                            <label className="block text-xs text-neutral-400 mb-1">Взрослый</label>
                             <input
                               type="number"
                               value={formData.price_adult}
@@ -787,7 +787,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                           </div>
                           {boats.find(b => b.id === parseInt(formData.boat_id))?.type !== 'banana' && (
                             <div>
-                              <label className="block text-xs text-gray-600 mb-1">Подросток</label>
+                              <label className="block text-xs text-neutral-400 mb-1">Подросток</label>
                               <input
                                 type="number"
                                 value={formData.price_teen}
@@ -800,7 +800,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                             </div>
                           )}
                           <div>
-                            <label className="block text-xs text-gray-600 mb-1">Ребёнок</label>
+                            <label className="block text-xs text-neutral-400 mb-1">Ребёнок</label>
                             <input
                               type="number"
                               value={formData.price_child}
@@ -867,7 +867,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                   <button
                     type="button"
                     onClick={resetForm}
-                    className="bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-medium hover:bg-gray-400 active:bg-gray-500 transition-colors"
+                    className="bg-gray-300 text-neutral-100 px-4 py-2 rounded-lg font-medium hover:bg-gray-400 active:bg-gray-500 transition-colors"
                   >
                     Отмена
                   </button>
@@ -917,14 +917,14 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                 const durationText = durationMin ? formatDurationMinutes(durationMin) : '~1 час';
 
                 return (
-                <div key={slot.slot_uid} className="bg-white rounded-xl shadow-md p-4 flex justify-between items-center">
+                <div key={slot.slot_uid} className="bg-neutral-900 rounded-2xl -md p-3 flex justify-between items-center">
                   <div>
                     <div className="font-bold">{slot.boat_name}</div>
-                    <div className="text-sm text-gray-600">
+                    <div className="text-sm text-neutral-400">
                       {(slot.source_type === 'generated' && slot.trip_date) ? `${slot.trip_date} • ` : ''}{slot.time} • Длительность: {durationText}
                     </div>
-                    <div className="text-sm text-gray-600">
-                      Свободно: <span className="font-bold text-gray-800">{seatsLeft ?? '—'}</span> • Занято: <span className="font-bold text-gray-800">{occupiedSeats ?? '—'}</span>{capacity !== null ? ` / ${capacity}` : ''} • {slot.boat_type === 'speed' ? 'Скоростная' : (slot.boat_type === 'banana' ? 'Банан' : 'Прогулочная')}
+                    <div className="text-sm text-neutral-400">
+                      Свободно: <span className="font-bold text-neutral-100">{seatsLeft ?? '—'}</span> • Занято: <span className="font-bold text-neutral-100">{occupiedSeats ?? '—'}</span>{capacity !== null ? ` / ${capacity}` : ''} • {slot.boat_type === 'speed' ? 'Скоростная' : (slot.boat_type === 'banana' ? 'Банан' : 'Прогулочная')}
                     </div>
                     <div className="text-xs text-gray-500">
                       ID: {slot.id} • {slot.is_active ? 'Активный' : 'Неактивный'} • {slot.source_type === 'generated' ? 'Сгенерированный' : 'Ручной'}
@@ -1024,17 +1024,17 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
       />
       
       {/* Delete confirmation modal */}
-      <div className={`fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 ${showDeleteDialog ? 'block' : 'hidden'}`}>
-        <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6">
-          <h3 className="text-lg font-bold text-gray-800 mb-2">Подтверждение удаления</h3>
-          <p className="text-gray-600 mb-6">
+      <div className={`fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-50 ${showDeleteDialog ? 'block' : 'hidden'}`}>
+        <div className="bg-neutral-900 rounded-2xl -lg max-w-md w-full p-3">
+          <h3 className="text-lg font-bold text-neutral-100 mb-2">Подтверждение удаления</h3>
+          <p className="text-neutral-400 mb-6">
             Вы уверены, что хотите удалить рейс <span className="font-semibold">{slotToDelete?.boat_name} в {slotToDelete?.time}</span>?<br />
             Это действие нельзя отменить.
           </p>
           <div className="flex justify-end space-x-3">
             <button
               onClick={cancelDeleteSlot}
-              className="bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-medium hover:bg-gray-400 active:bg-gray-500 transition-colors"
+              className="bg-gray-300 text-neutral-100 px-4 py-2 rounded-lg font-medium hover:bg-gray-400 active:bg-gray-500 transition-colors"
             >
               Отмена
             </button>

@@ -131,70 +131,70 @@ const PresaleListView = ({ dateFilter, typeFilter, statusFilter, searchTerm }) =
   };
 
   return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-gray-800">Предзаказы</h2>
+    <div className="space-y-4">
+      <h2 className="text-xl font-semibold text-neutral-100">Предзаказы</h2>
       
       {loading && (
-        <div className="text-center py-4">Загрузка...</div>
+        <div className="text-center py-4 text-neutral-400">Загрузка...</div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-2">
         {filteredPresales.map(presale => (
           <div 
             key={presale.id} 
-            className={`border rounded-lg p-4 shadow-sm cursor-pointer transition-all ${
-              selectedPresale?.id === presale.id 
-                ? 'border-blue-500 bg-blue-50' 
-                : 'border-gray-200 hover:border-gray-300'
+            className={`rounded-2xl border bg-neutral-900 p-3 cursor-pointer transition-all ${
+              selectedPresale?.id === presale.id
+                ? "border-sky-500/80 bg-sky-950/30"
+                : "border-neutral-800 hover:border-neutral-700"
             }`}
             onClick={() => setSelectedPresale(presale)}
           >
             <div className="flex justify-between items-start mb-2">
               <h3 className="font-bold text-lg">#{presale.id}</h3>
-              <span className="text-sm text-gray-500">{formatDate(presale.created_at)}</span>
+              <span className="text-sm text-neutral-400">{formatDate(presale.created_at)}</span>
             </div>
             
-            <p className="text-gray-600 mb-1">{presale.boat_name}</p>
-            <p className="text-gray-600 mb-2">{presale.slot_time}</p>
+            <p className="text-neutral-300 mb-1">{presale.boat_name}</p>
+            <p className="text-neutral-300 mb-2">{presale.slot_time}</p>
             
             <div className="flex justify-between items-center mb-2">
-              <span className="text-gray-600">Клиент:</span>
+              <span className="text-neutral-300">Клиент:</span>
               <span className="font-medium">{presale.customer_name}</span>
             </div>
             
             <div className="flex justify-between items-center mb-2">
-              <span className="text-gray-600">Телефон:</span>
-              <a href={`tel:${presale.customer_phone}`} className="font-medium text-blue-600 hover:underline">
+              <span className="text-neutral-300">Телефон:</span>
+              <a href={`tel:${presale.customer_phone}`} className="font-medium text-sky-400 hover:underline">
                 {presale.customer_phone}
               </a>
             </div>
             
             <div className="flex justify-between items-center mb-2">
-              <span className="text-gray-600">Мест:</span>
+              <span className="text-neutral-300">Мест:</span>
               <span className="font-medium">{presale.number_of_seats}</span>
             </div>
             
             <div className="flex justify-between items-center mb-1">
-              <span className="text-gray-600">Общая стоимость:</span>
+              <span className="text-neutral-300">Общая стоимость:</span>
               <span className="font-bold">{formatRUB(presale.total_price)}</span>
             </div>
             
             <div className="flex justify-between items-center mb-1">
-              <span className="text-gray-600">Предоплата:</span>
-              <span className="font-bold text-green-600">-{formatRUB(presale.prepayment_amount)}</span>
+              <span className="text-neutral-300">Предоплата:</span>
+              <span className="font-bold text-emerald-300">-{formatRUB(presale.prepayment_amount)}</span>
             </div>
             
-            <div className="flex justify-between items-center pt-2 border-t border-gray-200">
-              <span className="text-gray-800 font-bold">Остаток:</span>
+            <div className="flex justify-between items-center pt-2 border-t border-neutral-800">
+              <span className="text-neutral-100 font-bold">Остаток:</span>
               <span className={`text-lg font-bold ${
-                presale.remaining_amount > 0 ? 'text-blue-600' : 'text-green-600'
+                presale.remaining_amount > 0 ? 'text-sky-400' : 'text-emerald-300'
               }`}>
                 {formatRUB(presale.remaining_amount)}
               </span>
             </div>
             
             {presale.remaining_amount === 0 && (
-              <div className="mt-2 text-center text-green-600 font-medium text-sm">
+              <div className="mt-2 text-center text-emerald-300 font-medium text-sm">
                 Полностью оплачен
               </div>
             )}
@@ -202,19 +202,19 @@ const PresaleListView = ({ dateFilter, typeFilter, statusFilter, searchTerm }) =
         ))}
         
         {filteredPresales.length === 0 && !loading && (
-          <div className="col-span-full text-center py-8 text-gray-500">
+          <div className="col-span-full text-center py-8 text-neutral-500">
             Нет предзаказов
           </div>
         )}
       </div>
 
       {selectedPresale && (
-        <div className="bg-white rounded-xl shadow-md p-6 mt-6">
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4 mt-4">
           <div className="flex justify-between items-start mb-4">
-            <h3 className="text-xl font-bold">Детали заказа #{selectedPresale.id}</h3>
+            <h3 className="text-lg font-semibold text-neutral-100">Детали заказа #{selectedPresale.id}</h3>
             <button 
               onClick={() => setSelectedPresale(null)}
-              className="text-gray-500 hover:text-gray-700"
+              className="text-neutral-400 hover:text-neutral-200"
             >
               ✕
             </button>
@@ -222,60 +222,60 @@ const PresaleListView = ({ dateFilter, typeFilter, statusFilter, searchTerm }) =
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <h4 className="font-bold text-lg mb-3 text-gray-800">Информация о клиенте</h4>
+              <h4 className="font-bold text-lg mb-3 text-neutral-100">Информация о клиенте</h4>
               <div className="space-y-2">
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Имя:</span>
+                  <span className="text-neutral-300">Имя:</span>
                   <span className="font-medium">{selectedPresale.customer_name}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Телефон:</span>
-                  <a href={`tel:${selectedPresale.customer_phone}`} className="font-medium text-blue-600 hover:underline">
+                  <span className="text-neutral-300">Телефон:</span>
+                  <a href={`tel:${selectedPresale.customer_phone}`} className="font-medium text-sky-400 hover:underline">
                     {selectedPresale.customer_phone}
                   </a>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Дата создания:</span>
+                  <span className="text-neutral-300">Дата создания:</span>
                   <span className="font-medium">{formatDate(selectedPresale.created_at)}</span>
                 </div>
               </div>
             </div>
             
             <div>
-              <h4 className="font-bold text-lg mb-3 text-gray-800">Детали рейса</h4>
+              <h4 className="font-bold text-lg mb-3 text-neutral-100">Детали рейса</h4>
               <div className="space-y-2">
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Лодка:</span>
+                  <span className="text-neutral-300">Лодка:</span>
                   <span className="font-medium">{selectedPresale.boat_name}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Время:</span>
+                  <span className="text-neutral-300">Время:</span>
                   <span className="font-medium">{selectedPresale.slot_time}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Мест:</span>
+                  <span className="text-neutral-300">Мест:</span>
                   <span className="font-medium">{selectedPresale.number_of_seats}</span>
                 </div>
               </div>
             </div>
           </div>
           
-          <div className="mt-6 pt-6 border-t border-gray-200">
-            <h4 className="font-bold text-lg mb-3 text-gray-800">Платежная информация</h4>
-            <div className="bg-gray-50 p-4 rounded-lg">
+          <div className="mt-6 pt-6 border-t border-neutral-800">
+            <h4 className="font-bold text-lg mb-3 text-neutral-100">Платежная информация</h4>
+            <div className="bg-neutral-950/40 p-3 rounded-xl border border-neutral-800">
               <div className="space-y-2">
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Общая стоимость:</span>
+                  <span className="text-neutral-300">Общая стоимость:</span>
                   <span className="font-bold">{formatRUB(selectedPresale.total_price)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Предоплата:</span>
-                  <span className="font-bold text-green-600">-{formatRUB(selectedPresale.prepayment_amount)}</span>
+                  <span className="text-neutral-300">Предоплата:</span>
+                  <span className="font-bold text-emerald-300">-{formatRUB(selectedPresale.prepayment_amount)}</span>
                 </div>
-                <div className="flex justify-between pt-2 border-t border-gray-200">
-                  <span className="text-gray-800 font-bold">Остаток к оплате:</span>
+                <div className="flex justify-between pt-2 border-t border-neutral-800">
+                  <span className="text-neutral-100 font-bold">Остаток к оплате:</span>
                   <span className={`text-xl font-bold ${
-                    selectedPresale.remaining_amount > 0 ? 'text-blue-600' : 'text-green-600'
+                    selectedPresale.remaining_amount > 0 ? 'text-sky-400' : 'text-emerald-300'
                   }`}>
                     {formatRUB(selectedPresale.remaining_amount)}
                   </span>
@@ -285,8 +285,8 @@ const PresaleListView = ({ dateFilter, typeFilter, statusFilter, searchTerm }) =
           </div>
           
           {selectedPresale.remaining_amount > 0 && (
-            <div className="mt-6 pt-6 border-t border-gray-200">
-              <h4 className="font-bold text-lg mb-3 text-gray-800">Завершить оплату</h4>
+            <div className="mt-6 pt-6 border-t border-neutral-800">
+              <h4 className="font-bold text-lg mb-3 text-neutral-100">Завершить оплату</h4>
               <div className="flex flex-col sm:flex-row gap-3">
                 <div className="flex-1">
                   <label className="block text-gray-700 text-sm font-bold mb-2">
@@ -307,8 +307,8 @@ const PresaleListView = ({ dateFilter, typeFilter, statusFilter, searchTerm }) =
                   <button
                     onClick={handlePayRemaining}
                     disabled={loading}
-                    className={`px-6 py-2 bg-blue-600 text-white rounded-lg font-medium ${
-                      loading ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-700'
+                    className={`px-5 py-2 rounded-xl font-semibold text-white bg-sky-600 ${
+                      loading ? "opacity-50 cursor-not-allowed" : "hover:bg-sky-500"
                     }`}
                   >
                     Оплатить
@@ -319,8 +319,8 @@ const PresaleListView = ({ dateFilter, typeFilter, statusFilter, searchTerm }) =
           )}
           
           {selectedPresale.remaining_amount === 0 && (
-            <div className="border-t border-gray-200 pt-6">
-              <div className="text-center text-green-600 font-bold text-lg">
+            <div className="border-t border-neutral-800 pt-6">
+              <div className="text-center text-emerald-300 font-bold text-lg">
                 Заказ полностью оплачен!
               </div>
             </div>

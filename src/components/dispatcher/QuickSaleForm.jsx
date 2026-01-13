@@ -223,21 +223,23 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
   };
 
   return (
-    <div className="flex flex-col">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold text-gray-800">Быстрая продажа</h2>
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm overflow-y-auto">
+      <div className="min-h-0 flex items-start justify-center p-1">
+        <div className="w-full max-w-[900px] rounded-2xl border border-neutral-800 bg-neutral-950 p-1 transform scale-[0.7] origin-top">
+<div className="flex justify-between items-center mb-1">
+        <h2 className="text-2xl font-bold text-neutral-100"></h2>
         <button 
           onClick={onBack}
-          className="text-gray-500 hover:text-gray-700"
+          className="text-gray-500 hover:text-neutral-200"
         >
           ✕
         </button>
       </div>
       
-      <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-        <h3 className="font-bold text-lg mb-2">Детали рейса</h3>
-        <p className="text-gray-600">{trip.boat_name} • {trip.time}</p>
-        <p className="font-bold text-blue-600">
+      <div className="bg-neutral-900 rounded-xl shadow-lg p-1 mb-1 -mt-1 border border-neutral-800">
+        <h3 className="font-bold text-lg mb-1">Детали рейса</h3>
+        <p className="text-neutral-400">{trip.boat_name} • {trip.time}</p>
+        <p className="font-bold text-blue-400">
           {allowedCategories.map((category, index) => {
             const label = category === 'adult' ? 'Взрослый' : 
                      category === 'teen' ? 'Подросток' : 'Ребёнок';
@@ -258,12 +260,12 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
 
       
       {/* Ticket Categories Section */}
-      <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-        <h3 className="font-bold text-lg mb-4">Категории билетов</h3>
-        <p className="text-sm text-gray-500 mb-4 text-center">
+      <div className="mt-[20px] bg-neutral-900 rounded-xl shadow-lg p-1 mb-1 border border-neutral-800">
+        <h3 className="font-bold text-lg mb-1">Категории билетов</h3>
+        <p className="text-sm text-gray-500 mb-1 text-center">
           Максимум {getSlotAvailable(trip)} мест доступно
         </p>
-        <div className="space-y-4">
+        <div className="mt-[5px] space-y-2">
           {allowedCategories.map((category) => {
             const label = category === 'adult' ? 'Взрослый' : 
                      category === 'teen' ? 'Подросток' : 'Ребёнок';
@@ -272,12 +274,12 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
                        category === 'child' ? (trip?.price_child || trip?.price || 0) : 0;
             
             return (
-              <div key={category} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+              <div key={category} className="flex items-center justify-between p-3  bg-neutral-800 rounded-lg">
                 <span className="font-medium">{label}</span>
                 <div className="flex items-center space-x-3">
                   <button 
                     onClick={() => updateCategoryCount(category, -1)}
-                    className="bg-gray-200 text-gray-800 w-8 h-8 rounded-full flex items-center justify-center text-lg font-bold hover:bg-gray-300 active:bg-gray-400"
+                    className="bg-gray-200 !text-black w-8 h-8 rounded-full flex items-center justify-center text-lg font-bold hover:bg-gray-300 active:bg-gray-400"
                     disabled={ticketCategories[category] <= 0}
                   >
                     -
@@ -285,24 +287,24 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
                   <span className="text-lg font-bold w-6 text-center">{ticketCategories[category]}</span>
                   <button 
                     onClick={() => updateCategoryCount(category, 1)}
-                    className="bg-gray-200 text-gray-800 w-8 h-8 rounded-full flex items-center justify-center text-lg font-bold hover:bg-gray-300 active:bg-gray-400"
+                    className="bg-gray-200 !text-black w-8 h-8 rounded-full flex items-center justify-center text-lg font-bold hover:bg-gray-300 active:bg-gray-400"
                     disabled={false} // Allow adding more than available, let backend handle validation
                   >
                     +
                   </button>
                 </div>
-                <span className="text-gray-600">{formatRUB(price)} за билет</span>
+                <span className="font-bold">{formatRUB(price)} за билет</span>
               </div>
             );
           })}
         </div>
       </div>
       
-      <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+      <div className="bg-neutral-900 rounded-xl shadow-lg p-2 mb-2 border border-neutral-800 scale-[0.8] origin-top">
         <h3 className="font-bold text-lg mb-2">Информация о клиенте</h3>
         
-        <div className="mb-4">
-          <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="customerName">
+        <div className="mb-3">
+          <label className="block text-neutral-200 text-sm font-bold mb-2" htmlFor="customerName">
             Имя клиента
           </label>
           
@@ -311,42 +313,42 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             <button
               type="button"
               onClick={() => handleQuickName('Алексей')}
-              className={`py-2 rounded-lg font-medium transition-colors ${customerName === 'Алексей' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
+              className={`py-1 rounded-lg font-medium transition-colors ${customerName === 'Алексей' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               Алексей
             </button>
             <button
               type="button"
               onClick={() => handleQuickName('Дмитрий')}
-              className={`py-2 rounded-lg font-medium transition-colors ${customerName === 'Дмитрий' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
+              className={`py-1 rounded-lg font-medium transition-colors ${customerName === 'Дмитрий' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               Дмитрий
             </button>
             <button
               type="button"
               onClick={() => handleQuickName('Иван')}
-              className={`py-2 rounded-lg font-medium transition-colors ${customerName === 'Иван' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
+              className={`py-1 rounded-lg font-medium transition-colors ${customerName === 'Иван' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               Иван
             </button>
             <button
               type="button"
               onClick={() => handleQuickName('Анна')}
-              className={`py-2 rounded-lg font-medium transition-colors ${customerName === 'Анна' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
+              className={`py-1 rounded-lg font-medium transition-colors ${customerName === 'Анна' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               Анна
             </button>
             <button
               type="button"
               onClick={() => handleQuickName('Мария')}
-              className={`py-2 rounded-lg font-medium transition-colors ${customerName === 'Мария' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
+              className={`py-1 rounded-lg font-medium transition-colors ${customerName === 'Мария' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               Мария
             </button>
             <button
               type="button"
               onClick={() => handleQuickName('Елена')}
-              className={`py-2 rounded-lg font-medium transition-colors ${customerName === 'Елена' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
+              className={`py-1 rounded-lg font-medium transition-colors ${customerName === 'Елена' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               Елена
             </button>
@@ -357,12 +359,12 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             type="text"
             value={customerName}
             onChange={handleNameChange}
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+            className="shadow appearance-none border rounded w-full py-1 px-2 text-black font-bold leading-tight focus:outline-none focus:shadow-outline"
           />
         </div>
         
-        <div className="mb-4">
-          <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="customerPhone">
+        <div className="mb-3">
+          <label className="block text-neutral-200 text-sm font-bold mb-2" htmlFor="customerPhone">
             Телефон клиента
           </label>
           <input
@@ -370,7 +372,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             type="tel"
             value={customerPhone}
             onChange={handlePhoneChange}
-            className={`shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline ${!isPhoneValid ? 'border-red-500' : ''}`}
+            className={`shadow appearance-none border rounded w-full py-1 px-2 text-neutral-200 font-bold leading-tight focus:outline-none focus:shadow-outline ${!isPhoneValid ? 'border-red-500' : ''}`}
             placeholder="+7 (XXX) XXX-XXXX"
           />
           {!isPhoneValid && (
@@ -378,8 +380,8 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
           )}
         </div>
         
-        <div className="mb-4">
-          <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="prepayment">
+        <div className="mb-3">
+          <label className="block text-neutral-200 text-sm font-bold mb-2" htmlFor="prepayment">
             Предоплата (₽)
           </label>
           
@@ -388,21 +390,21 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             <button
               type="button"
               onClick={() => handleQuickPrepayment(500)}
-              className={`py-2 rounded-lg font-medium transition-colors ${prepaymentAmount === 500 ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
+              className={`py-1 rounded-lg font-medium transition-colors ${prepaymentAmount === 500 ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               500 ₽
             </button>
             <button
               type="button"
               onClick={() => handleQuickPrepayment(1000)}
-              className={`py-2 rounded-lg font-medium transition-colors ${prepaymentAmount === 1000 ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
+              className={`py-1 rounded-lg font-medium transition-colors ${prepaymentAmount === 1000 ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               1000 ₽
             </button>
             <button
               type="button"
               onClick={() => handleQuickPrepayment(2000)}
-              className={`py-2 rounded-lg font-medium transition-colors ${prepaymentAmount === 2000 ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
+              className={`py-1 rounded-lg font-medium transition-colors ${prepaymentAmount === 2000 ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               2000 ₽
             </button>
@@ -411,7 +413,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             type="button"
             onClick={() => handleQuickPrepayment(totalPrice)}
             disabled={totalPrice <= 0}
-            className={`w-full py-2 rounded-lg font-medium transition-colors mb-2 ${prepaymentAmount === totalPrice && totalPrice > 0 ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
+            className={`w-full py-1 rounded-lg font-medium transition-colors mb-2 ${prepaymentAmount === totalPrice && totalPrice > 0 ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
           >
             Полная предоплата
           </button>
@@ -424,7 +426,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             inputMode="numeric"
             value={prepaymentStr}
             onChange={handlePrepaymentChange}
-            className={`shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline ${prepaymentError ? 'border-red-500' : ''}`}
+            className={`shadow appearance-none border rounded w-full py-1 px-2 text-black font-bold leading-tight focus:outline-none focus:shadow-outline ${prepaymentError ? 'border-red-500' : ''}`}
           />
           {prepaymentError && (
             <p className="text-red-500 text-xs italic mt-2">{prepaymentError}</p>
@@ -432,21 +434,21 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
         </div>
       </div>
       
-      <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+      <div className="bg-neutral-900 rounded-xl shadow-lg p-3 mb-3 border border-neutral-800">
         <div className="flex justify-between items-center">
           <span className="font-bold text-lg">Итого:</span>
-          <span className="font-bold text-2xl text-blue-600">{formatRUB(totalPrice)}</span>
+          <span className="font-bold text-2xl text-blue-400">{formatRUB(totalPrice)}</span>
         </div>
       </div>
       
       {errors.submit && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 text-center">
+        <div className="bg-red-100 border border-red-400 text-red-700 px-2 py-1 rounded mb-3 text-center">
           {errors.submit}
         </div>
       )}
       
       {successMessage && (
-        <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4 text-center">
+        <div className="bg-green-100 border border-green-400 text-green-700 px-2 py-1 rounded mb-3 text-center">
           {successMessage}
         </div>
       )}
@@ -454,7 +456,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       <div className="flex space-x-3">
         <button
           onClick={onBack}
-          className="flex-1 py-3 bg-gray-300 text-gray-800 rounded-lg font-medium hover:bg-gray-400 active:bg-gray-500 transition-colors"
+          className="flex-1 py-1 bg-gray-300 text-neutral-100 rounded-lg font-medium hover:bg-gray-400 active:bg-neutral-8000 transition-colors"
         >
           Назад
         </button>
@@ -462,7 +464,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
           <button 
             onClick={handleSubmit}
             disabled={!isFormValid || isSubmitting}
-            className={`w-full py-3 font-medium rounded-lg transition-colors ${
+            className={`w-full py-1 font-medium rounded-lg transition-colors ${
               isFormValid 
                 ? (categoryTotalSeats <= getSlotAvailable(trip) 
                    ? 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800' 
@@ -480,6 +482,8 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
                categoryTotalSeats <= 0 ? 'Выберите хотя бы один билет' : ''}
             </div>
           )}
+        </div>
+      </div>
         </div>
       </div>
     </div>

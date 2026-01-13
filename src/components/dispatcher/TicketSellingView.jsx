@@ -51,7 +51,7 @@ function getSoldUi(level) {
     case 'high':
       return { text: 'text-green-600', bar: 'bg-green-500', ring: 'ring-green-200' };
     default:
-      return { text: 'text-gray-700', bar: 'bg-gray-400', ring: 'ring-gray-200' };
+      return { text: 'text-neutral-200', bar: 'bg-gray-400', ring: 'ring-gray-200' };
   }
 }
 
@@ -206,16 +206,16 @@ const TicketSellingView = ({
   }
 
   return (
-    <div>
-      {loading && <div className="text-center py-2 text-gray-400 text-sm">Обновление…</div>}
+    <div className="text-neutral-100">
+      {loading && <div className="text-center py-2 text-neutral-400 text-sm">Обновление…</div>}
 
       {!loading && filteredTrips.length === 0 && (
-        <div className="text-center py-6 text-gray-500">
+        <div className="text-center py-6 text-neutral-500">
           Нет рейсов
         </div>
       )}
 
-      <div className="space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
         {filteredTrips.map(trip => {
           const available = getSlotAvailable(trip);
           const capacity = getCapacity(trip);
@@ -240,17 +240,17 @@ const TicketSellingView = ({
           return (
             <div
               key={trip.slot_uid || trip.id}
-              className={`bg-white rounded-xl shadow p-4 cursor-pointer active:scale-[0.99] border border-gray-100 transition-all ${almostFull ? `ring-2 ${soldUi.ring}` : ''} ${isSlotSoldOut(trip) ? 'opacity-50' : ''}`}
+              className={`rounded-2xl border border-neutral-800 bg-neutral-900 p-3 cursor-pointer transition-all ${almostFull ? `ring-2 ${soldUi.ring}` : ''} ${isSlotSoldOut(trip) ? 'opacity-60' : ''}`}
               onClick={shiftClosed ? undefined : () => setSelectedTrip(trip)}
             >
               <div className="flex flex-col">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-lg leading-none">🚤</span>
-                    <div className="font-bold text-[22px] leading-snug truncate">{trip.boat_name}</div>
+                    <div className="font-semibold text-lg leading-tight truncate text-neutral-100">{trip.boat_name}</div>
                   </div>
 
-                  <div className="mt-1 flex items-center gap-2 text-sm text-gray-600">
+                  <div className="mt-1 flex items-center gap-2 text-sm text-neutral-300">
                     <span className="leading-none">📅</span>
                     <span>{trip.trip_date}</span>
                     <span className="text-gray-300">•</span>
@@ -258,25 +258,25 @@ const TicketSellingView = ({
                     <span>{trip.time}</span>
                   </div>
 
-                  <div className="mt-1 flex items-center gap-2 text-sm text-gray-500">
+                  <div className="mt-1 flex items-center gap-2 text-sm text-neutral-400">
                     <span className="leading-none">⏱️</span>
                     <span>Длительность: {durationText}</span>
                   </div>
                 </div>
 
                 <div className="mt-3 flex flex-col gap-2">
-                  <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm w-full">
+                  <div className="bg-neutral-950/40 border border-neutral-800 rounded-xl px-3 py-2 text-sm w-full">
                     <div className="flex items-center justify-between gap-3">
-                      <span className="text-gray-600 flex items-center gap-1">
+                      <span className="text-neutral-400 flex items-center gap-1">
                         <span className="leading-none">🟢</span>
                         Свободно
                       </span>
-                      <span className="font-bold text-gray-900">{available}</span>
+                      <span className="font-bold text-neutral-100">{available}</span>
                     </div>
 
                     {(typeof occupied === 'number' && typeof capacity === 'number') && (
                       <div className="mt-1 flex items-center justify-between gap-3">
-                        <span className="text-gray-600 flex items-center gap-1">
+                        <span className="text-neutral-400 flex items-center gap-1">
                           <span className="leading-none">👥</span>
                           Занято
                         </span>
@@ -289,11 +289,11 @@ const TicketSellingView = ({
 
                   {(typeof occupied === 'number' && typeof capacity === 'number') && (
                     <div className="w-full">
-                      <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                      <div className="flex items-center justify-between text-xs text-neutral-400 mb-1">
                         <span className="flex items-center gap-1"><span>📊</span>Заполнено</span>
-                        <span className="font-semibold text-gray-700">{fillPercent}%</span>
+                        <span className="font-semibold text-neutral-200">{fillPercent}%</span>
                       </div>
-                      <div className="h-2 w-full bg-gray-200 rounded-full overflow-hidden">
+                      <div className="h-2 w-full bg-neutral-800 rounded-full overflow-hidden">
                         <div
                           className={`h-2 ${soldUi.bar} rounded-full`}
                           style={{ width: `${fillPercent}%` }}

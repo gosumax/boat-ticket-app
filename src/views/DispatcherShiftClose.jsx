@@ -84,8 +84,8 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="p-4">
+      <div className="min-h-screen bg-neutral-950">
+        <div className="p-3">
           <div className="max-w-4xl mx-auto">
             <div className="text-center py-8">Загрузка...</div>
           </div>
@@ -95,50 +95,50 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="p-4">
+    <div className="min-h-screen bg-neutral-950">
+      <div className="p-3">
         <div className="max-w-4xl mx-auto space-y-6">
           {/* Daily Summary Card */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <h2 className="text-xl font-bold text-gray-800 mb-4">ИТОГО ЗА ДЕНЬ</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="text-gray-600">Общая выручка</div>
+          <div className="bg-neutral-900 rounded-2xl  p-3">
+            <h2 className="text-xl font-bold text-neutral-100 mb-4">ИТОГО ЗА ДЕНЬ</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="bg-neutral-950 p-3 rounded-lg">
+                <div className="text-neutral-400">Общая выручка</div>
                 <div className="text-2xl font-bold text-purple-600">{formatRUB(dailySummary.totalRevenue)}</div>
               </div>
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="text-gray-600">Наличка/предоплата</div>
+              <div className="bg-neutral-950 p-3 rounded-lg">
+                <div className="text-neutral-400">Наличка/предоплата</div>
                 <div className="text-2xl font-bold text-green-600">{formatRUB(dailySummary.cashRevenue)}</div>
               </div>
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="text-gray-600">Безнал/онлайн</div>
+              <div className="bg-neutral-950 p-3 rounded-lg">
+                <div className="text-neutral-400">Безнал/онлайн</div>
                 <div className="text-2xl font-bold text-blue-600">{formatRUB(dailySummary.cardRevenue)}</div>
               </div>
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="text-gray-600">Начислено ЗП продавцам</div>
+              <div className="bg-neutral-950 p-3 rounded-lg">
+                <div className="text-neutral-400">Начислено ЗП продавцам</div>
                 <div className="text-2xl font-bold text-orange-600">{formatRUB(dailySummary.commissionPaid)}</div>
               </div>
             </div>
           </div>
           
           {/* Sellers Table */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <h2 className="text-xl font-bold text-gray-800 mb-4">По продавцам</h2>
+          <div className="bg-neutral-900 rounded-2xl  p-3">
+            <h2 className="text-xl font-bold text-neutral-100 mb-4">По продавцам</h2>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="border-b">
-                    <th className="text-left py-2 text-gray-600 font-medium">Продавец</th>
-                    <th className="text-right py-2 text-gray-600 font-medium">Продал на</th>
-                    <th className="text-right py-2 text-gray-600 font-medium">Нал/предоплата</th>
-                    <th className="text-right py-2 text-gray-600 font-medium">Безнал/онлайн</th>
-                    <th className="text-right py-2 text-gray-600 font-medium">Сдать диспетчеру</th>
-                    <th className="text-right py-2 text-gray-600 font-medium">ЗП выдать</th>
+                    <th className="text-left py-2 text-neutral-400 font-medium">Продавец</th>
+                    <th className="text-right py-2 text-neutral-400 font-medium">Продал на</th>
+                    <th className="text-right py-2 text-neutral-400 font-medium">Нал/предоплата</th>
+                    <th className="text-right py-2 text-neutral-400 font-medium">Безнал/онлайн</th>
+                    <th className="text-right py-2 text-neutral-400 font-medium">Сдать диспетчеру</th>
+                    <th className="text-right py-2 text-neutral-400 font-medium">ЗП выдать</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sellersData.map(seller => (
-                    <tr key={seller.id} className="border-b hover:bg-gray-50">
+                    <tr key={seller.id} className="border-b hover:bg-neutral-950">
                       <td className="py-3">{seller.name}</td>
                       <td className="text-right py-3 font-medium">{formatRUB(seller.totalSales)}</td>
                       <td className="text-right py-3">{formatRUB(seller.cashSales)}</td>
@@ -157,15 +157,15 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
           </div>
           
           {shiftClosed ? (
-            <div className="bg-green-100 border border-green-300 rounded-xl p-5 mt-6">
+            <div className="bg-green-100 border border-green-300 rounded-2xl p-3 mt-6">
               <h3 className="text-lg font-semibold text-green-800 mb-3">Статус смены</h3>
               <p className="text-green-700 font-medium">Смена закрыта</p>
             </div>
           ) : (
             <>
               {/* Confirmation Checks */}
-              <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-5 mt-6">
-                <h3 className="text-lg font-semibold text-gray-800 mb-3">Подтверждение закрытия смены</h3>
+              <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-3 mt-6">
+                <h3 className="text-lg font-semibold text-neutral-100 mb-3">Подтверждение закрытия смены</h3>
                 <div className="space-y-2">
                   <label className="flex items-center space-x-3">
                     <input
@@ -175,7 +175,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                       disabled={shiftClosed}
                       className="h-5 w-5 text-purple-600 rounded focus:ring-purple-500"
                     />
-                    <span className="text-gray-700">Все продавцы сдали наличные/предоплаты</span>
+                    <span className="text-neutral-300">Все продавцы сдали наличные/предоплаты</span>
                   </label>
                   <label className="flex items-center space-x-3">
                     <input
@@ -185,7 +185,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                       disabled={shiftClosed}
                       className="h-5 w-5 text-purple-600 rounded focus:ring-purple-500"
                     />
-                    <span className="text-gray-700">ЗП продавцам рассчитана корректно</span>
+                    <span className="text-neutral-300">ЗП продавцам рассчитана корректно</span>
                   </label>
                   <label className="flex items-center space-x-3">
                     <input
@@ -195,7 +195,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                       disabled={shiftClosed}
                       className="h-5 w-5 text-purple-600 rounded focus:ring-purple-500"
                     />
-                    <span className="text-gray-700">Претензий по рейсам и билетам нет</span>
+                    <span className="text-neutral-300">Претензий по рейсам и билетам нет</span>
                   </label>
                 </div>
               </div>
@@ -211,7 +211,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                 </button>
                 <button
                   onClick={() => navigate('/dispatcher')}
-                  className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 py-3 px-4 rounded-lg font-medium transition-colors"
+                  className="flex-1 bg-gray-200 hover:bg-gray-300 text-neutral-100 py-3 px-4 rounded-lg font-medium transition-colors"
                 >
                   Вернуться к работе
                 </button>
