@@ -1,31 +1,37 @@
-import Database from 'better-sqlite3';
-import bcrypt from 'bcrypt';
-import fs from 'fs';
-import { ensureOwnerRoleAndUser } from './ownerSetup.mjs';
+import path from "path";
+import { fileURLToPath } from "url";
+import Database from "better-sqlite3";
+import bcrypt from "bcrypt";
+import fs from "fs";
+import { ensureOwnerRoleAndUser } from "./ownerSetup.mjs";
 
-const DB_FILE = 'database.sqlite';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// 🔒 ЖЁСТКО ФИКСИРУЕМ БАЗУ В КОРНЕ ПРОЕКТА
+const DB_FILE = path.join(process.cwd(), "database.sqlite");
 const SALT_ROUNDS = 10;
 
 // Initialize database
 let db;
 try {
   db = new Database(DB_FILE);
+  db.pragma('journal_mode = WAL');
+  db.pragma('busy_timeout = 5000');
+  console.log("[DB] Using database file:", DB_FILE);
 } catch (error) {
-  console.error('=== DATABASE INITIALIZATION ERROR ===');
-  console.error('Failed to initialize SQLite database:', error);
-  console.error('This might be due to native module compatibility issues with your Node.js version.');
-  console.error('Try reinstalling better-sqlite3 with: npm rebuild better-sqlite3');
+  console.error("=== DATABASE INITIALIZATION ERROR ===");
+  console.error("Failed to initialize SQLite database:", error);
   process.exit(1);
 }
 
-// Helper function to get the actual database file path
+// Helper: get actual db file path (for debug)
 export function getDatabaseFilePath() {
   try {
     const result = db.prepare("PRAGMA database_list").get();
     return result.file;
-  } catch (error) {
-    console.error('Error getting database file path:', error);
-    return DB_FILE; // fallback to configured file name
+  } catch {
+    return DB_FILE;
   }
 }
 
@@ -860,9 +866,8 @@ if (presalesSlotUidCheck.count === 0) {
       console.log('Initial boats and slots seeded successfully');
     }
   } catch (error) {
-    console.error('=== USER/BOAT SEEDING ERROR ===');
-    console.error('Failed to seed initial data:', error);
-    process.exit(1);
+    console.error('=== USER/BOAT SEEDING ERROR (SKIPPED) ===');
+    console.error('Failed to seed initial data, continuing startup:', error?.message || error);
   }
 
   // ONE-TIME SELLER CUTOFF COLUMN ADDITION - RUN ONLY ONCE

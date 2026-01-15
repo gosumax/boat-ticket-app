@@ -152,8 +152,20 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
         )
       : ticketCategories;
         
+    const computedSlotUid = (
+      trip?.slot_uid ||
+      (trip?.trip_date && (trip?.slot_id || trip?.id) ? `generated:${trip?.slot_id || trip?.id}` : null) ||
+      (trip?.boat_slot_id ? `manual:${trip?.boat_slot_id}` : null)
+    );
+
+    if (!computedSlotUid) {
+      setErrors({ submit: 'slotUid is required' });
+      setIsSubmitting(false);
+      return;
+    }
+
     const presaleData = {
-      slotUid: trip.slot_uid, // Use slotUid for deterministic slot identification
+      slotUid: computedSlotUid,
       numberOfSeats: categoryTotalSeats,
       tickets: filteredTicketCategories,  // Include ticket breakdown
       customerName: customerName.trim(),
@@ -185,6 +197,12 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       if (refreshAllSlots) {
         refreshAllSlots();
       }
+
+      // Notify dispatcher lists to reload immediately (cards update without page refresh)
+      try {
+        window.dispatchEvent(new CustomEvent('dispatcher:slots-changed'));
+        window.dispatchEvent(new CustomEvent('dispatcher:refresh'));
+      } catch (e) {}
     } catch (error) {
       console.error('Error creating presale:', error);
       
@@ -223,9 +241,10 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm overflow-y-auto">
-      <div className="min-h-0 flex items-start justify-center p-1">
-        <div className="w-full max-w-[900px] rounded-2xl border border-neutral-800 bg-neutral-950 p-1 transform scale-[0.7] origin-top">
+    <div
+  className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm overflow-hidden" style={{ paddingTop: 20, paddingBottom: 20, paddingLeft: "clamp(16px, 5vw, 24px)", paddingRight: "clamp(16px, 5vw, 24px)" }}>
+      <div className="min-h-screen flex items-start justify-center p-1 pb-10">
+        <div className="w-full max-w-[900px] min-h-[85vh] max-h-[90vh] overflow-y-auto rounded-2xl border border-neutral-800 bg-neutral-950 pt-1 transform scale-[1] origin-top">
 <div className="flex justify-between items-center mb-1">
         <h2 className="text-2xl font-bold text-neutral-100"></h2>
         <button 
@@ -300,7 +319,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
         </div>
       </div>
       
-      <div className="bg-neutral-900 rounded-xl shadow-lg p-2 mb-2 border border-neutral-800 scale-[0.8] origin-top">
+      <div className="bg-neutral-900 rounded-xl shadow-lg p-2 mb-2 border border-neutral-800 scale-[1] origin-top">
         <h3 className="font-bold text-lg mb-2">Информация о клиенте</h3>
         
         <div className="mb-3">
@@ -434,7 +453,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
         </div>
       </div>
       
-      <div className="bg-neutral-900 rounded-xl shadow-lg p-3 mb-3 border border-neutral-800">
+      <div className="bg-neutral-900 rounded-xl  p-3 mb-3 border border-neutral-800">
         <div className="flex justify-between items-center">
           <span className="font-bold text-lg">Итого:</span>
           <span className="font-bold text-2xl text-blue-400">{formatRUB(totalPrice)}</span>
@@ -456,7 +475,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       <div className="flex space-x-3">
         <button
           onClick={onBack}
-          className="flex-1 py-1 bg-gray-300 text-neutral-100 rounded-lg font-medium hover:bg-gray-400 active:bg-neutral-8000 transition-colors"
+          className="flex-1 py-2 bg-gray-300 text-neutral-900 font-medium rounded-lg hover:bg-gray-400 active:bg-gray-500 transition-colors"
         >
           Назад
         </button>

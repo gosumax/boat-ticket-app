@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import apiClient from '../../utils/apiClient';
-import PassengerList from './PassengerList';
+import PassengerList from './PassengerList.jsx';
 import { getSlotAvailable, isSlotSoldOut } from '../../utils/slotAvailability';
 
 function formatDurationMinutes(durationMinutes) {
@@ -195,15 +195,22 @@ const TicketSellingView = ({
 
   if (selectedTrip) {
     return (
-      <PassengerList
-        trip={selectedTrip}
-        onBack={() => setSelectedTrip(null)}
-        refreshTrips={loadTrips}
-        refreshAllSlots={refreshAllSlots}
-        shiftClosed={shiftClosed}
-      />
+      <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm overflow-y-auto">
+        <div className="min-h-0 flex items-start justify-center p-3">
+          <div className="w-full max-w-[1100px] rounded-2xl border border-neutral-800 bg-neutral-950 p-3 transform scale-[0.9] origin-top">
+            <PassengerList
+              trip={selectedTrip}
+              onBack={() => setSelectedTrip(null)}
+              refreshTrips={loadTrips}
+              refreshAllSlots={refreshAllSlots}
+              shiftClosed={shiftClosed}
+            />
+          </div>
+        </div>
+      </div>
     );
   }
+
 
   return (
     <div className="text-neutral-100">
@@ -220,6 +227,13 @@ const TicketSellingView = ({
           const available = getSlotAvailable(trip);
           const capacity = getCapacity(trip);
           const occupied = (typeof capacity === 'number') ? Math.max(0, capacity - available) : null;
+
+          // Галочка: рейс полностью заполнен и долгов нет (оплата принята по всем билетам)
+          const soldOut = (typeof available === 'number') ? available <= 0 : isSlotSoldOut(trip);
+          const hasDebt =
+            Number(trip?.has_debt ?? trip?.hasDebt ?? 0) === 1 ||
+            Number(trip?.debt_amount ?? trip?.debtAmount ?? 0) > 0;
+          const showPaidFullBadge = soldOut && !hasDebt;
 
           const soldLevel = getSoldLevel(occupied, capacity);
           const soldUi = getSoldUi(soldLevel);
@@ -240,9 +254,14 @@ const TicketSellingView = ({
           return (
             <div
               key={trip.slot_uid || trip.id}
-              className={`rounded-2xl border border-neutral-800 bg-neutral-900 p-3 cursor-pointer transition-all ${almostFull ? `ring-2 ${soldUi.ring}` : ''} ${isSlotSoldOut(trip) ? 'opacity-60' : ''}`}
+              className={`relative rounded-2xl border border-neutral-800 bg-neutral-900 p-3 cursor-pointer transition-all ${almostFull ? `ring-2 ${soldUi.ring}` : ''} ${isSlotSoldOut(trip) ? 'opacity-60' : ''}`}
               onClick={shiftClosed ? undefined : () => setSelectedTrip(trip)}
             >
+              {showPaidFullBadge && (
+                <div className="absolute top-3 right-3 w-12 h-12 rounded-2xl border border-emerald-600/50 bg-emerald-600/15 flex items-center justify-center">
+                  <span className="text-3xl text-emerald-400 leading-none">✓</span>
+                </div>
+              )}
               <div className="flex flex-col">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">

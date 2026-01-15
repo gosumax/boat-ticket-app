@@ -1,7 +1,79 @@
 import { Router } from 'express';
 import db from './db.js';
+
+// Seat-occupying ticket statuses (1 ticket = 1 seat)
+const SEAT_STATUS_LIST = [
+  'ACTIVE',
+  'PAID',
+  'UNPAID',
+  'RESERVED',
+  'PARTIALLY_PAID',
+  'CONFIRMED',
+  'USED',
+];
+
+const seatStatusSql = SEAT_STATUS_LIST.map(() => '?').join(',');
+
+const stmtCountOccupiedByBoatSlot = db.prepare(`
+  SELECT COUNT(*) AS cnt
+  FROM tickets
+  WHERE boat_slot_id = ?
+    AND status IN (${seatStatusSql})
+`);
+
+const stmtGetBoatSlotCapacity = db.prepare(`
+  SELECT capacity
+  FROM boat_slots
+  WHERE id = ?
+`);
+
+function countOccupiedSeatsForBoatSlot(boatSlotId) {
+  return Number(stmtCountOccupiedByBoatSlot.get(boatSlotId, ...SEAT_STATUS_LIST)?.cnt || 0);
+}
+
+function getCapacityForBoatSlot(boatSlotId) {
+  return Number(stmtGetBoatSlotCapacity.get(boatSlotId)?.capacity || 0);
+}
+
+function assertCapacityOrThrow(boatSlotId, requestedSeats) {
+  const cap = getCapacityForBoatSlot(boatSlotId);
+  const occ = countOccupiedSeatsForBoatSlot(boatSlotId);
+  if (requestedSeats > cap - occ) {
+    const err = new Error('CAPACITY_EXCEEDED');
+    err.details = { capacity: cap, occupied: occ, requested: requestedSeats, free: cap - occ, boatSlotId };
+    throw err;
+  }
+}
+
+function syncSeatsLeftCache(boatSlotId, capacityOverride = null) {
+  const cap = Number.isFinite(capacityOverride) ? Number(capacityOverride) : getCapacityForBoatSlot(boatSlotId);
+  const occ = countOccupiedSeatsForBoatSlot(boatSlotId);
+  const left = Math.max(0, cap - occ);
+  db.prepare(`UPDATE boat_slots SET seats_left = ? WHERE id = ?`).run(left, boatSlotId);
+  return { capacity: cap, occupied: occ, seats_left: left };
+}
 import { authenticateToken, canSell, canDispatchManageSlots } from './auth.js';
 import { getDatabaseFilePath } from './db.js';
+// ===== SLOT SEATS RECALC (TICKETS SOURCE OF TRUTH) =====
+function recalcSlotSeatsLeft(db, boat_slot_id) {
+  try {
+    const capRow = db.prepare(`SELECT capacity FROM boat_slots WHERE id = ?`).get(boat_slot_id);
+    if (!capRow) return;
+
+    const usedTickets = db.prepare(`
+      SELECT COUNT(*) as cnt
+      FROM tickets
+      WHERE boat_slot_id = ?
+        AND status IN ('ACTIVE','PAID','UNPAID','RESERVED')
+    `).get(boat_slot_id)?.cnt || 0;
+
+    const seatsLeft = Math.max(0, (capRow.capacity || 0) - usedTickets);
+    db.prepare(`UPDATE boat_slots SET seats_left = ? WHERE id = ?`).run(seatsLeft, boat_slot_id);
+  } catch (e) {
+    console.error('[RECALC seats_left]', e);
+  }
+}
+
 
 // Helper function to validate time format
 const validateTimeFormat = (time) => {
@@ -390,6 +462,8 @@ router.get('/boats/:type/slots', authenticateToken, canSell, (req, res) => {
     const slots = db.prepare(`
       SELECT
         gs.id as slot_id,
+        ('generated:' || gs.id) as slot_uid,
+        ('generated:' || gs.id) as slotUid,
         gs.id,
         gs.boat_id,
         gs.time,
@@ -927,6 +1001,8 @@ const transaction = db.transaction((slotId, slotType, seats, customerName, custo
   let boatSlotIdForFK = slotId;
   let presaleSlotUid = slotUidInput;
 
+  let resolvedCapacityForSlot = null;
+
   if (typeof slotUidInput === 'string' && slotUidInput.startsWith('generated:')) {
     const genId = Number(slotUidInput.split(':')[1]);
 
@@ -936,6 +1012,7 @@ const transaction = db.transaction((slotId, slotType, seats, customerName, custo
       FROM generated_slots
       WHERE id = ?
     `).get(genId);
+    resolvedCapacityForSlot = Number(gen?.capacity ?? null);
 
     if (!gen) {
       throw new Error('GEN_NOT_FOUND');
@@ -983,8 +1060,10 @@ const transaction = db.transaction((slotId, slotType, seats, customerName, custo
   }
 
   // 3) Create presale
+  assertCapacityOrThrow(boatSlotIdForFK, seats);
+
   const presaleStmt = db.prepare(`
-    INSERT INTO presales (
+INSERT INTO presales (
       boat_slot_id, slot_uid,
       customer_name, customer_phone, number_of_seats,
       total_price, prepayment_amount, prepayment_comment, status, tickets_json
@@ -1057,7 +1136,15 @@ const transaction = db.transaction((slotId, slotType, seats, customerName, custo
     );
   }
 
-  return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedTotalPrice };
+  
+  // Keep seats_left cache in sync (prevents negative UI values)
+  const sync = syncSeatsLeftCache(boatSlotIdForFK, resolvedCapacityForSlot || undefined);
+  if (typeof slotUidInput === 'string' && slotUidInput.startsWith('generated:')) {
+    const genId2 = Number(slotUidInput.split(':')[1]);
+    db.prepare(`UPDATE generated_slots SET seats_left = ? WHERE id = ?`).run(sync.seats_left, genId2);
+  }
+
+return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedTotalPrice };
 });
 
 // Execute the transaction
@@ -1131,6 +1218,9 @@ const transaction = db.transaction((slotId, slotType, seats, customerName, custo
     });
   } catch (error) {
     console.error('[PRESALE_CREATE_500]', { slotUid: req.body?.slotUid, message: error.message, stack: error.stack });
+    if (error?.message === 'CAPACITY_EXCEEDED') {
+      return res.status(409).json({ ok: false, code: 'CAPACITY_EXCEEDED', message: 'Недостаточно мест в рейсе', details: error.details || null });
+    }
     res.status(500).json({
       ok: false,
       code: 'INTERNAL',
@@ -1621,6 +1711,9 @@ router.patch('/dispatcher/slots/:id', authenticateToken, canDispatchManageSlots,
       stmt.run(normalizedTime, price_adult, normalizedDurationMinutes, activeValue, price_adult, price_child, price_teen, slotId);
     }
     
+    // Keep seats_left consistent after any activation/deactivation or edits
+    recalcSlotSeatsLeft(db, slotId);
+
     // Get the updated slot
     const updatedSlot = db.prepare('SELECT * FROM boat_slots WHERE id = ?').get(slotId);
     
@@ -1712,6 +1805,8 @@ router.patch('/dispatcher/slots/:id/active', authenticateToken, canDispatchManag
     
     // Get the updated slot
     const updatedSlot = db.prepare('SELECT * FROM boat_slots WHERE id = ?').get(slotId);
+    recalcSlotSeatsLeft(db, slotId);
+
     
     res.json({
       ...updatedSlot,
@@ -1822,169 +1917,50 @@ router.get('/dispatcher/boats', authenticateToken, canDispatchManageSlots, (req,
 // Get all slots for dispatcher (including inactive)
 router.get('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req, res) => {
   try {
-    const slots = db.prepare(`
-      SELECT 
-        bs.id as slot_id,
-        bs.id,
-        bs.boat_id, bs.time, bs.price, bs.capacity, bs.seats_left, bs.duration_minutes, bs.is_active,
-        bs.price_adult, bs.price_child, bs.price_teen,
-        b.name as boat_name, b.type as boat_type, bs.capacity as boat_capacity,
-        b.is_active as boat_is_active,
-        CASE WHEN b.id IS NULL THEN 1 ELSE 0 END as boat_missing,
-        'manual' as source_type,
-        date('now','localtime') as trip_date,
-        'manual:' || bs.id as slot_uid
-      FROM boat_slots bs
-      LEFT JOIN boats b ON bs.boat_id = b.id
-      
-      UNION ALL
-      
-      SELECT 
+    const rows = db.prepare(`
+      SELECT
         gs.id as slot_id,
+        ('generated:' || gs.id) as slot_uid,
+        ('generated:' || gs.id) as slotUid,
         gs.id,
-        gs.boat_id, gs.time, gs.price_adult as price, gs.capacity,
-        CASE
-          WHEN gs.seats_left IS NULL THEN gs.capacity
-          WHEN gs.seats_left = 0 AND (
-            SELECT COUNT(*)
-            FROM tickets t
-            JOIN presales p ON p.id = t.presale_id
-            WHERE p.slot_uid = ('generated:' || gs.id)
-              AND t.status IN ('ACTIVE','USED')
-              AND p.status NOT IN ('CANCELLED','CANCELLED_TRIP_PENDING','REFUNDED')
-          ) = 0 THEN gs.capacity
-          ELSE gs.seats_left
-        END as seats_left, gs.duration_minutes, gs.is_active,
-        gs.price_adult, gs.price_child, gs.price_teen,
-        b.name as boat_name, b.type as boat_type, gs.capacity as boat_capacity,
+        gs.boat_id,
+        gs.trip_date,
+        gs.time,
+        gs.capacity,
+        gs.duration_minutes,
+        gs.is_active,
+        gs.price_adult as price,
+        gs.price_adult,
+        gs.price_child,
+        gs.price_teen,
+        b.name as boat_name,
+        b.type as boat_type,
         b.is_active as boat_is_active,
         CASE WHEN b.id IS NULL THEN 1 ELSE 0 END as boat_missing,
         'generated' as source_type,
-        gs.trip_date,
-        'generated:' || gs.id as slot_uid
+        (gs.capacity - COALESCE(tc.active_tickets, 0)) as seats_left
       FROM generated_slots gs
-      LEFT JOIN boats b ON gs.boat_id = b.id
-      
-      ORDER BY trip_date, time
+      LEFT JOIN boats b ON b.id = gs.boat_id
+      LEFT JOIN (
+        SELECT
+          p.slot_uid as slot_uid,
+          COUNT(1) as active_tickets
+        FROM tickets t
+        JOIN presales p ON p.id = t.presale_id
+        WHERE t.status IN ('ACTIVE','PAID','UNPAID','RESERVED','PARTIALLY_PAID','CONFIRMED','USED')
+        GROUP BY p.slot_uid
+      ) tc ON tc.slot_uid = ('generated:' || gs.id)
+      WHERE gs.trip_date IS NOT NULL
+      ORDER BY gs.trip_date, gs.time
     `).all();
 
-    // Compute sales status for UI filters
-    const now = new Date();
-    const role = req.user?.role;
-
-    const withStatus = slots.map(s => {
-      if (!s.trip_date || !s.time) {
-        return { ...s, status: 'ACTIVE', sales_open_seller: true, sales_open_dispatcher: true };
-      }
-      const tripStart = new Date(`${s.trip_date}T${s.time}:00`);
-      const sellerOpen = now < new Date(tripStart.getTime() - 10 * 60 * 1000);
-      const dispatcherOpen = now <= new Date(tripStart.getTime() + 10 * 60 * 1000);
-
-      // For sales screen filtering:
-      // COMPLETED = starts more than 10 minutes ago
-      const status = now > new Date(tripStart.getTime() + 10 * 60 * 1000) ? 'COMPLETED' : 'ACTIVE';
-
-      return {
-        ...s,
-        status,
-        sales_open_seller: sellerOpen,
-        sales_open_dispatcher: dispatcherOpen,
-      };
-    });
-
-    // Hide phantom duplicates (same boat+date+time) to prevent UI "задвойка"
-    const deduped = (() => {
-      const groups = new Map();
-      for (const s of withStatus) {
-        const boatKey = (s.boat_id ?? s.boat_name ?? 'no-boat');
-        const dateKey = s.trip_date ?? '';
-        const timeKey = s.time ?? '';
-        const durKey = s.duration_minutes ?? '';
-        const key = `${boatKey}|${dateKey}|${timeKey}|${durKey}`;
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(s);
-      }
-
-      const keep = [];
-      for (const arr of groups.values()) {
-        if (arr.length === 1) { keep.push(arr[0]); continue; }
-
-        const scored = arr.map(x => {
-          const cap = Number(x.capacity ?? x.boat_capacity ?? 0) || 0;
-          const left = Number(x.seats_left ?? 0) || 0;
-          const sold = Math.max(0, cap - left);
-          const hasAny = sold > 0;
-          const id = Number(x.id ?? x.slot_id ?? 0) || 0;
-          return { x, sold, hasAny, id };
-        });
-
-        scored.sort((a, b) => {
-          if (a.hasAny !== b.hasAny) return (b.hasAny ? 1 : 0) - (a.hasAny ? 1 : 0);
-          if (a.sold !== b.sold) return b.sold - a.sold;
-          return a.id - b.id;
-        });
-
-        keep.push(scored[0].x);
-      }
-
-      return keep;
-    })();
-
-
-    // Role-based visibility on sales screen:
-    // - seller: hide trips that are not sellable (<= 10 minutes to start)
-    // - dispatcher: show all (including completed) so they appear in "Завершенные"
-    if (role === 'seller') {
-      return res.json(deduped.filter(s => s.sales_open_seller));
-    }
-
-    return res.json(deduped);
-
+    res.json(rows);
   } catch (error) {
-    console.error('[SELLING_500] route=/api/selling/dispatcher/slots method=GET message=' + error.message + ' stack=' + error.stack);
+    console.error('[SELLING_500] route=/api/selling/dispatcher/slots method=GET message=' + (error?.message || error) + ' stack=' + (error?.stack || ''));
     res.status(500).json({ error: 'Ошибка сервера' });
   }
 });
-// Get all active slots (seller view)
-router.get('/slots', authenticateToken, canSell, (req, res) => {
-  try {
-    const slots = db.prepare(`
-      SELECT
-  gs.id                 AS slot_id,
-  gs.id                 AS id,
-  gs.boat_id            AS boat_id,
-  bs_ref.id             AS base_boat_slot_id,
-  gs.time               AS time,
-  gs.price_adult        AS price,
-  gs.capacity           AS capacity,
-  gs.seats_left         AS seats_left,
-  gs.duration_minutes   AS duration_minutes,
-  gs.is_active          AS is_active,
-  gs.price_adult        AS price_adult,
-  gs.price_teen         AS price_teen,
-  gs.price_child        AS price_child,
-  b.name                AS boat_name,
-  b.type                AS boat_type,
-  gs.capacity           AS boat_capacity,
-  gs.seats_left         AS seats_available,
-  'generated'           AS source_type,
-  gs.trip_date          AS trip_date,
-  'generated:' || gs.id AS slot_uid
-FROM generated_slots gs
-JOIN boats b ON gs.boat_id = b.id
-       LEFT JOIN boat_slots bs_ref
-         ON bs_ref.boat_id = gs.boat_id
-        AND bs_ref.time = gs.time
-      WHERE gs.is_active = 1
-      ORDER BY trip_date, time
-    `).all();
 
-    res.json(slots);
-  } catch (error) {
-    console.error('[SELLING_500] route=/api/selling/slots message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
-  }
-});
 
 
 // Update presale payment (complete sale - for dispatcher)
@@ -2328,6 +2304,10 @@ router.patch('/presales/:id/move', authenticateToken, canDispatchManageSlots, (r
       
       // Compute FK-safe boat_slot_id and slot_uid for target
       let targetBoatSlotIdForFK = targetSlotId;
+      
+      // HARD STOP: prevent oversell on move
+      assertCapacityOrThrow(targetBoatSlotIdForFK, presale.number_of_seats);
+
       let targetSlotUid = `manual:${targetSlotId}`;
 
       if (!isManualSlot) {
@@ -2464,6 +2444,9 @@ router.patch('/presales/:id/move', authenticateToken, canDispatchManageSlots, (r
     res.json(updatedPresale);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales/:id/move method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
+    if (error?.message === 'CAPACITY_EXCEEDED') {
+      return res.status(409).json({ ok: false, code: 'CAPACITY_EXCEEDED', message: 'Недостаточно мест в рейсе', details: error.details || null });
+    }
     res.status(500).json({ error: 'Ошибка сервера' });
   }
 });
@@ -3312,6 +3295,8 @@ router.get('/transfer-options', authenticateToken, canSellOrDispatch, (req, res)
 
       SELECT
         gs.id as slot_id,
+        ('generated:' || gs.id) as slot_uid,
+        ('generated:' || gs.id) as slotUid,
         'generated:' || gs.id as slot_uid,
         gs.trip_date as trip_date,
         gs.time as time,
@@ -3389,7 +3374,7 @@ function getBaseBoatSlotIdForSlot(slotUid) {
 
   if (parsed.source === 'manual') return parsed.id;
 
-  // generated slot -> find base boat_slot_id by boat_id + time
+  // generated slot -> map to base boat_slots by (boat_id, time)
   const row = db.prepare(`
     SELECT bs_ref.id as base_boat_slot_id
     FROM generated_slots gs
@@ -3397,8 +3382,51 @@ function getBaseBoatSlotIdForSlot(slotUid) {
     WHERE gs.id = ?
   `).get(parsed.id);
 
-  return row?.base_boat_slot_id ?? null;
+  if (row?.base_boat_slot_id) return row.base_boat_slot_id;
+
+  // If missing base slot, create it once (does NOT show in dispatcher list because dispatcher uses generated_slots)
+  const gs = db.prepare(`
+    SELECT boat_id, time, capacity, seats_left, duration_minutes,
+           price_adult, price_child, price_teen, seller_cutoff_minutes
+    FROM generated_slots
+    WHERE id = ?
+  `).get(parsed.id);
+
+  if (!gs?.boat_id || !gs?.time) return null;
+
+  const price = Number(gs.price_adult ?? gs.price_teen ?? gs.price_child ?? 0);
+
+  // boat_slots.price is NOT NULL in schema -> always set
+  db.prepare(`
+    INSERT OR IGNORE INTO boat_slots (
+      boat_id, time, price, is_active, seats_left, capacity, duration_minutes,
+      price_adult, price_child, price_teen, seller_cutoff_minutes
+    ) VALUES (
+      ?, ?, ?, 1, ?, ?, ?,
+      ?, ?, ?, ?
+    )
+  `).run(
+    gs.boat_id,
+    String(gs.time),
+    price,
+    Number(gs.seats_left ?? gs.capacity ?? 0),
+    Number(gs.capacity ?? 0),
+    Number(gs.duration_minutes ?? 0),
+    gs.price_adult ?? null,
+    gs.price_child ?? null,
+    gs.price_teen ?? null,
+    gs.seller_cutoff_minutes ?? null
+  );
+
+  const created = db.prepare(`
+    SELECT id
+    FROM boat_slots
+    WHERE boat_id = ? AND time = ?
+  `).get(gs.boat_id, String(gs.time));
+
+  return created?.id ?? null;
 }
+
 
 // Helper: change seats_left for slot_uid (delta can be + or -)
 function applySeatsDelta(slotUid, delta) {

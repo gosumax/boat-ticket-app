@@ -276,7 +276,19 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
     loadTransferOptions(ctx);
   };
 
-  const loadTransferOptions = async (ctx) => {
+  
+  const getSlotUid = (s) => {
+    if (!s) return '';
+    const direct = s.slot_uid || s.slotUid;
+    if (direct) return String(direct);
+    const source = s.source_type || s.sourceType;
+    const id = s.id ?? s.slot_id ?? s.slotId;
+    if (source && (id !== undefined && id !== null)) return `${String(source)}:${String(id)}`;
+    if (id !== undefined && id !== null) return `generated:${String(id)}`;
+    return '';
+  };
+
+const loadTransferOptions = async (ctx) => {
     setTransferLoading(true);
 
     try {
@@ -390,9 +402,15 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
 
       // reload lists
       lastReloadAtRef.current = 0;
-        reloadPresalesAndTickets();
-        refreshSeatsLeft();
+      reloadPresalesAndTickets();
+      refreshSeatsLeft();
       if (refreshAllSlots) refreshAllSlots();
+
+      // notify dispatcher lists to update cards immediately
+      try {
+        window.dispatchEvent(new CustomEvent('dispatcher:slots-changed'));
+        window.dispatchEvent(new CustomEvent('dispatcher:refresh'));
+      } catch (e) {}
     } catch (e) {
       setTransferError(e?.message || 'Ошибка переноса');
     } finally {
@@ -564,6 +582,19 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
 
       // Refresh slots list (seats_left) if needed
       if (refreshAllSlots) refreshAllSlots();
+
+      // refresh current рейс view immediately (header "Свободно" + presales)
+      try {
+        lastReloadAtRef.current = 0;
+        reloadPresalesAndTickets();
+        refreshSeatsLeft();
+      } catch (e) {}
+
+      // notify dispatcher lists to update cards immediately
+      try {
+        window.dispatchEvent(new CustomEvent('dispatcher:slots-changed'));
+        window.dispatchEvent(new CustomEvent('dispatcher:refresh'));
+      } catch (e) {}
     } catch (error) {
       console.error('Error performing ticket operation:', error);
       setConfirmError(error?.message || 'Ошибка операции');
@@ -678,6 +709,19 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
         // Refresh slots list (seats_left) if needed
         if (refreshAllSlots) refreshAllSlots();
+
+        // refresh current рейс view immediately (header "Свободно" + presales)
+        try {
+          lastReloadAtRef.current = 0;
+          reloadPresalesAndTickets();
+          refreshSeatsLeft();
+        } catch (e) {}
+
+        // notify dispatcher lists to update cards immediately
+        try {
+          window.dispatchEvent(new CustomEvent('dispatcher:slots-changed'));
+          window.dispatchEvent(new CustomEvent('dispatcher:refresh'));
+        } catch (e) {}
       } catch (error) {
         console.error('Error performing presale operation:', error);
         setConfirmError(error?.message || 'Ошибка операции');
@@ -903,30 +947,8 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
   if (!trip) return null;
 
   
-  const computedAvailable = (() => {
-    try {
-      const seatsLeft =
-        Number(trip?.seats_left ?? trip?.seatsLeft ?? trip?.free_seats ?? trip?.freeSeats);
-
-      if (Number.isFinite(seatsLeft)) {
-        return Math.max(0, seatsLeft);
-      }
-
-      const capacity =
-        Number(trip?.capacity ?? trip?.boat_capacity ?? trip?.boatCapacity ?? trip?.max_capacity ?? trip?.maxCapacity) || 0;
-
-      const sold = Object.values(tickets || {}).reduce((acc, entry) => {
-        const list = Array.isArray(entry) ? entry : entry?.tickets || [];
-        return acc + list.filter(t => (t?.status || 'ACTIVE') === 'ACTIVE').length;
-      }, 0);
-
-      return Math.max(0, capacity - sold);
-    } catch {
-      return getSlotAvailable(trip);
-    }
-  })();
-
-  const available = Number.isFinite(seatsLeft) ? seatsLeft : computedAvailable;
+  // Single source of truth for header counters: seats_left from dispatcher slots API
+  const available = Number.isFinite(seatsLeft) ? Math.max(0, seatsLeft) : Math.max(0, Number(getSlotAvailable(trip)) || 0);
 
 
   return (

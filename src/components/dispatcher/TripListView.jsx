@@ -14,12 +14,12 @@ function seatLeft(trip) {
   return cap;
 }
 
-function formatDateLabel(trip) {
-  const d = trip?.trip_date ? String(trip.trip_date) : '';
-  if (!d) return '—';
-  const parts = d.split('-');
+function formatDateLabel(trip, fallbackDate) {
+  const raw = trip?.trip_date ? String(trip.trip_date) : (fallbackDate ? String(fallbackDate) : '');
+  if (!raw) return '—';
+  const parts = raw.split('-');
   if (parts.length === 3) return `${parts[2]}.${parts[1]}`;
-  return d;
+  return raw;
 }
 
 function normalizeType(t) {
@@ -89,7 +89,10 @@ const TripListView = ({
       .filter((s) => {
         if (!s) return false;
 
-        if (dateFrom && dateTo) {
+        
+        // hide any slots without a concrete trip_date (templates/invalid rows)
+        if (!s.trip_date) return false;
+if (dateFrom && dateTo) {
           const d = s.trip_date ? String(s.trip_date) : '';
           if (d && (d < String(dateFrom) || d > String(dateTo))) return false;
         }
@@ -180,7 +183,7 @@ const TripListView = ({
                     <div className="mt-1 text-sm text-neutral-400 flex flex-wrap gap-x-2 gap-y-1" style={{ fontSize: "130%" }}>
                       <span>🕒 {trip.time || '—'}</span>
                       <span className="text-neutral-700">•</span>
-                      <span>📅 {formatDateLabel(trip)}</span>
+                      <span>📅 {formatDateLabel(trip, dateFrom)}</span>
                     </div>
                   </div>
 
