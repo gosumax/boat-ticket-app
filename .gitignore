@@ -26,3 +26,11 @@ dist-ssr
 database.sqlite
 *.sqlite
 *.sqlite3
+# SQLite (local)
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+database.sqlite
+database.sqlite-wal
+database.sqlite-shm
+server/database.sqlite*

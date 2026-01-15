@@ -168,18 +168,25 @@ if (dateFrom && dateTo) {
             const cap = safeNum(trip?.capacity ?? trip?.boat_capacity ?? trip?.boatCapacity ?? 0, 0);
             const sold = cap > 0 ? Math.max(0, cap - left) : 0;
             const pct = cap > 0 ? Math.min(100, Math.round((sold / cap) * 100)) : 0;
-
+            const filled = Math.max(0, Math.min(cap, sold));
             const warn = Number.isFinite(left) && left <= 2 ? 'text-amber-200' : 'text-emerald-200';
 
             return (
               <div
                 key={key}
-                className="text-left rounded-2xl border border-neutral-800 bg-neutral-900 p-3 pointer-events-none">
+                className={`relative text-left rounded-2xl border border-neutral-800 bg-neutral-900 p-3 pointer-events-none ${filled <= 4 ? "ring-2 ring-red-500/40 shadow-[0_0_18px_rgba(239,68,68,0.25)]" : filled <= 9 ? "ring-2 ring-amber-400/40 shadow-[0_0_18px_rgba(251,191,36,0.25)]" : "ring-2 ring-emerald-500/40 shadow-[0_0_18px_rgba(16,185,129,0.28)]"}`}>
+                {false && (
+                  <div className="absolute top-16 right-6 w-10 h-10 rounded-2xl border border-emerald-600/50 bg-emerald-600/15 flex items-center justify-center">
+                    
+                  </div>
+                )}
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-base font-bold truncate text-neutral-100" style={{ fontSize: "130%" }}>
-                      {trip.boat_name || 'Рейс'}
-                    </div>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="text-base font-bold truncate text-neutral-100" style={{ fontSize: "130%" }}>
+                        {trip.boat_name || 'Рейс'}
+                      </div>
+</div>
                     <div className="mt-1 text-sm text-neutral-400 flex flex-wrap gap-x-2 gap-y-1" style={{ fontSize: "130%" }}>
                       <span>🕒 {trip.time || '—'}</span>
                       <span className="text-neutral-700">•</span>

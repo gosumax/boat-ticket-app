@@ -112,13 +112,7 @@ const DispatcherView = () => {
       <div className="border-b border-neutral-800 bg-neutral-950">
         <div className="h-14 px-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => navigate('/')}
-              className="px-3 py-1 rounded bg-neutral-800 hover:bg-neutral-700"
-            >
-              ← Назад
-            </button>
-            <div className="font-semibold">Диспетчер</div>
+            <div className="flex items-center gap-2 text-2xl font-bold"><span>🧭</span><span>Диспетчер</span></div>
           </div>
 
           <div className="flex items-center gap-2">
@@ -143,7 +137,7 @@ const DispatcherView = () => {
         <div className="px-4 pb-2 flex gap-2 flex-wrap">
           {[
             ['trips', 'Активные рейсы'],
-            ['selling', 'Продажа билетов'],
+            ['selling', 'Продажа | Посадка'],
             ['slots', 'Управление рейсами'],
             ['shiftClose', 'Закрытие смены']
           ].map(([key, label]) => (

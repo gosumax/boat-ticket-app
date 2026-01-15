@@ -530,7 +530,8 @@ const loadTransferOptions = async (ctx) => {
       } else if (action === 'refund') {
         updatedTicket = await apiClient.refundTicket(ticketId);
       } else if (action === 'transfer') {
-        updatedTicket = await apiClient.transferTicket(ticketId);
+        // transfer is handled via Transfer Modal (requires destination slot)
+        throw new Error('Перенос требует выбора рейса');
       } else if (action === 'delete') {
         updatedTicket = await apiClient.deleteTicket(ticketId);
       }
@@ -619,7 +620,14 @@ const loadTransferOptions = async (ctx) => {
       return;
     }
 
-    setPendingTicketOperation({ ticketId, action });
+      // Transfer requires choosing destination trip/slot first
+      if (action === 'transfer') {
+        const currentSlotUid = trip?.slot_uid || trip?.id;
+        openTransferModal({ mode: 'TICKET', ticketId, currentSlotUid, requiredSeats: 1 });
+        return;
+      }
+
+  setPendingTicketOperation({ ticketId, action });
     setConfirmBoardingOpen(true);
     setConfirmError(null);
   };
@@ -871,6 +879,9 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
     const list = Array.isArray(entry) ? entry : (entry?.tickets || []);
     const status = String(presale.status || 'ACTIVE');
     const allowTicketOps = ALLOWED_PRESALE_STATUSES_FOR_TICKET_OPS.includes(status);
+    const activeCount = Array.isArray(list) ? list.filter(t => getTicketStatus(t) === 'ACTIVE').length : 0;
+    // UI правило: если в билете 1 человек — не показываем список пассажиров (и блок кнопок на уровне пассажира)
+    if (activeCount <= 1) return null;
 
     const totalPrice = safeToInt(presale.total_price, 0);
     const prepay = safeToInt(presale.prepayment_amount, 0);
@@ -952,63 +963,71 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
 
   return (
-    <div className="p-4 sticky top-0 bg-neutral-950 z-40 border-b border-neutral-900 max-w-[960px] mx-auto">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="font-bold text-[22px] leading-snug truncate">{trip.boat_name || 'Рейс'}</div>
-          <div className="mt-1 text-sm text-neutral-300 flex flex-wrap gap-x-3 gap-y-1">
-            <span>🕒 {trip.time || '—'}</span>
-            <span className="text-neutral-700">•</span>
-            <span>📅 {trip.trip_date || '—'}</span>
-            <span className="text-neutral-700">•</span>
-            <span>Свободно: <span className="font-semibold">{available}</span></span>
+    <div className="h-full min-h-[98vh]">
+      {/* Sticky header */}
+      <div className="sticky top-0 z-40 bg-neutral-950 border-b border-neutral-900">
+        <div className="max-w-[650px] mx-auto p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="font-bold text-[22px] leading-snug truncate">{trip.boat_name || 'Рейс'}</div>
+              <div className="mt-1 text-sm text-neutral-300 flex flex-wrap gap-x-3 gap-y-1">
+                <span>🕒 {trip.time || '—'}</span>
+                <span className="text-neutral-700">•</span>
+                <span>📅 {trip.trip_date || '—'}</span>
+                <span className="text-neutral-700">•</span>
+                <span>Свободно: <span className="font-semibold">{available}</span></span>
+              </div>
+            </div>
+
+            <button
+              className="shrink-0 px-4 py-2 rounded-2xl bg-neutral-800/50 text-neutral-100 font-semibold"
+              onClick={() => (onBack || onClose)?.()}
+            >
+              Назад
+            </button>
+          </div>
+
+          {error && (
+            <div className="mt-3 bg-red-50 border border-red-200 text-red-700 rounded-2xl p-3 text-sm">
+              {error}
+            </div>
+          )}
+
+          <div className="mt-3">
+            <button
+              disabled={shiftClosed}
+              className={`w-full px-4 py-3 rounded-2xl font-semibold ${
+                shiftClosed ? 'bg-gray-200 text-neutral-500' : 'bg-emerald-600 text-white'
+              }`}
+              onClick={() => setShowQuickSale(true)}
+            >
+              Продать билет
+            </button>
           </div>
         </div>
-
-        <button
-          className="shrink-0 px-4 py-2 rounded-2xl bg-neutral-800/50 text-neutral-100 font-semibold"
-          onClick={() => (onBack || onClose)?.()}
-        >
-          Назад
-        </button>
       </div>
 
-      {error && (
-        <div className="mt-3 bg-red-50 border border-red-200 text-red-700 rounded-2xl p-3 text-sm">
-          {error}
-        </div>
-      )}
-
-      <div className="mt-3">
-        <button
-          disabled={shiftClosed}
-          className={`w-full px-4 py-3 rounded-2xl font-semibold ${
-            shiftClosed ? 'bg-gray-200 text-neutral-500' : 'bg-emerald-600 text-white'
-          }`}
-          onClick={() => setShowQuickSale(true)}
-        >
-          Продать билет
-        </button>
-      </div>
-
-      {loading ? (
-        <div className="mt-4 text-center text-neutral-400">Загрузка...</div>
-      ) : (
-        <div className="mt-4 space-y-3">
-          {filteredPresales.length === 0 ? (
-            <div className="bg-neutral-950/40 border border-neutral-800 rounded-2xl p-4 text-center text-neutral-300">
-              Нет билетов
-            </div>
-          ) : (
-            filteredPresales.map((presale) => (
-              <div key={presale.id}>
-                {renderPresaleHeader(presale)}
-                {renderTickets(presale)}
+      {/* Body */}
+      <div className="max-w-[960px] mx-auto px-4 pb-6 pt-4">
+        {loading ? (
+          <div className="text-center text-neutral-400">Загрузка...</div>
+        ) : (
+          <div className="space-y-3">
+            {filteredPresales.length === 0 ? (
+              <div className="bg-neutral-950/40 border border-neutral-800 rounded-2xl p-4 text-center text-neutral-300">
+                Нет билетов
               </div>
-            ))
-          )}
-        </div>
-      )}
+            ) : (
+              filteredPresales.map((presale) => (
+                <div key={presale.id}>
+                  {renderPresaleHeader(presale)}
+                  {renderTickets(presale)}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
 
       {showQuickSale && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-end">

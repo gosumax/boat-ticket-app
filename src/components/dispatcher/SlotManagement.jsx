@@ -514,20 +514,20 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
         <nav className="flex space-x-8">
           <button
             onClick={() => setActiveTab('slots')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+            className={`pb-3 px-1 border-b-2 font-semibold text-sm transition-colors ${
               activeTab === 'slots'
-                ? 'border-purple-600 text-purple-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-purple-500 text-purple-400'
+                : 'border-transparent text-neutral-400 hover:text-neutral-200'
             }`}
           >
             Рейсы (даты)
           </button>
           <button
             onClick={() => setActiveTab('schedule')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
+            className={`pb-3 px-1 border-b-2 font-semibold text-sm transition-colors ${
               activeTab === 'schedule'
-                ? 'border-purple-600 text-purple-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-purple-500 text-purple-400'
+                : 'border-transparent text-neutral-400 hover:text-neutral-200'
             }`}
           >
             Расписание (шаблоны)
@@ -860,14 +860,14 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                 <div className="flex space-x-3">
                   <button
                     type="submit"
-                    className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 active:bg-blue-800 transition-colors"
+                    className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-semibold hover:bg-blue-700 active:bg-blue-800 transition-colors"
                   >
                     {editingSlot ? 'Сохранить' : 'Создать'}
                   </button>
                   <button
                     type="button"
                     onClick={resetForm}
-                    className="bg-gray-300 text-neutral-100 px-4 py-2 rounded-lg font-medium hover:bg-gray-400 active:bg-gray-500 transition-colors"
+                    className="bg-neutral-800/60 text-neutral-100 px-4 py-2 rounded-2xl font-semibold hover:bg-neutral-700/60 active:bg-neutral-700 transition-colors"
                   >
                     Отмена
                   </button>
@@ -887,7 +887,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                     onClick={handleCreateNew}
                     disabled={shiftClosed}
                     title={shiftClosed ? 'Смена закрыта — действия запрещены' : ''}
-                    className={`${shiftClosed ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 active:bg-blue-800 transition-colors'}`}
+                    className={`${shiftClosed ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800'} px-4 py-2 rounded-2xl font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed`}
                   >
                     Создать рейс
                   </button>
@@ -896,7 +896,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                     onClick={handleRemoveTripsForDeletedBoats}
                     disabled={shiftClosed}
                     title={shiftClosed ? 'Смена закрыта — действия запрещены' : 'Удалить все рейсы для удалённых лодок'}
-                    className={`${shiftClosed ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-red-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-red-700 active:bg-red-800 transition-colors'}`}
+                    className={`${shiftClosed ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-700 active:bg-red-800'} px-4 py-2 rounded-2xl font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed`}
                   >
                     Удалить рейсы для удалённых лодок
                   </button>
@@ -945,7 +945,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                       <button
                         disabled
                         title="Редактирование сгенерированных рейсов недоступно. Измените шаблон."
-                        className="bg-gray-100 text-gray-400 px-3 py-1 rounded-lg text-sm font-medium cursor-not-allowed"
+                        className="bg-neutral-800/30 text-neutral-500 px-4 py-2 rounded-2xl text-sm font-semibold cursor-not-allowed"
                       >
                         Редактировать
                       </button>
@@ -954,7 +954,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                         onClick={() => handleEdit(slot)}
                         disabled={!slot.boat_is_active || slot.boat_missing || shiftClosed}
                         title={shiftClosed ? 'Смена закрыта — действия запрещены' : !slot.boat_is_active && !slot.boat_missing ? 'Редактирование недоступно: лодка неактивна' : slot.boat_missing ? 'Редактирование недоступно: лодка удалена' : ''}
-                        className={`${shiftClosed ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : (!slot.boat_is_active || slot.boat_missing) ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'} px-3 py-1 rounded-lg text-sm font-medium transition-colors`}
+                        className={`${shiftClosed ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : (!slot.boat_is_active || slot.boat_missing) ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : 'bg-neutral-800/60 text-neutral-100 hover:bg-neutral-700/60 active:bg-neutral-700'} px-4 py-2 rounded-2xl text-sm font-semibold transition-colors`}
                       >
                         Редактировать
                       </button>
@@ -964,7 +964,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                         onClick={() => handleCancelTrip(slot)}
                         disabled={!slot.boat_is_active || slot.boat_missing || shiftClosed}
                         title={shiftClosed ? 'Смена закрыта — действия запрещены' : !slot.boat_is_active && !slot.boat_missing ? 'Отмена недоступна: лодка неактивна' : slot.boat_missing ? 'Отмена недоступна: лодка удалена' : ''}
-                        className={`${shiftClosed ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : (!slot.boat_is_active || slot.boat_missing) ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-red-100 text-red-800 hover:bg-red-200 active:bg-red-300'} px-3 py-1 rounded-lg text-sm font-medium transition-colors`}
+                        className={`${shiftClosed ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : (!slot.boat_is_active || slot.boat_missing) ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : 'bg-amber-500 text-white hover:bg-amber-600 active:bg-amber-700'} px-4 py-2 rounded-2xl text-sm font-semibold transition-colors`}
                       >
                         Отменить рейс
                       </button>
@@ -973,7 +973,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                         onClick={() => handleActivate(slot)}
                         disabled={!slot.boat_is_active || slot.boat_missing || shiftClosed}
                         title={shiftClosed ? 'Смена закрыта — действия запрещены' : !slot.boat_is_active && !slot.boat_missing ? 'Активация недоступна: лодка неактивна' : slot.boat_missing ? 'Активация недоступна: лодка удалена' : ''}
-                        className={`${shiftClosed ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : (!slot.boat_is_active || slot.boat_missing) ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-green-100 text-green-800 hover:bg-green-200 active:bg-green-300'} px-3 py-1 rounded-lg text-sm font-medium transition-colors`}
+                        className={`${shiftClosed ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : (!slot.boat_is_active || slot.boat_missing) ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700 active:bg-green-800'} px-4 py-2 rounded-2xl text-sm font-semibold transition-colors`}
                       >
                         Активировать
                       </button>
@@ -982,7 +982,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                       <button
                         disabled
                         title="Удаление сгенерированных рейсов недоступно. Удалите шаблон."
-                        className="bg-gray-600 text-gray-300 px-3 py-1 rounded-lg text-sm font-medium cursor-not-allowed"
+                        className="bg-neutral-800/30 text-neutral-500 px-4 py-2 rounded-2xl text-sm font-semibold cursor-not-allowed"
                       >
                         Удалить
                       </button>
@@ -991,7 +991,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                         onClick={() => handleDelete(slot)}
                         disabled={shiftClosed}
                         title={shiftClosed ? 'Смена закрыта — действия запрещены' : ''}
-                        className={`${shiftClosed ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-red-600 text-white px-3 py-1 rounded-lg text-sm font-medium hover:bg-red-700 active:bg-red-800 transition-colors'}`}
+                        className={`${shiftClosed ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-700 active:bg-red-800'} px-4 py-2 rounded-2xl text-sm font-semibold transition-colors`}
                       >
                         Удалить
                       </button>
@@ -1034,7 +1034,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
           <div className="flex justify-end space-x-3">
             <button
               onClick={cancelDeleteSlot}
-              className="bg-gray-300 text-neutral-100 px-4 py-2 rounded-lg font-medium hover:bg-gray-400 active:bg-gray-500 transition-colors"
+              className="bg-neutral-800/60 text-neutral-100 px-4 py-2 rounded-2xl font-semibold hover:bg-neutral-700/60 active:bg-neutral-700 transition-colors"
             >
               Отмена
             </button>

@@ -389,31 +389,31 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
   };
 
   return (
-    <div className="mt-6">
+    <div className="mt-6 text-neutral-100">
       {formError && (
-        <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg">
+        <div className="mb-4 p-3 rounded-2xl border border-red-900 bg-red-950/40 text-red-200">
           {formError}
         </div>
       )}
 
       {successMessage && (
-        <div className="mb-4 p-3 bg-green-100 text-green-700 rounded-lg">
+        <div className="mb-4 p-3 rounded-2xl border border-emerald-900 bg-emerald-950/40 text-emerald-200">
           {successMessage}
         </div>
       )}
 
       <div className="flex justify-between items-center mb-4">
-        <h3 className="text-lg font-bold">Шаблоны расписания</h3>
+        <h3 className="text-lg font-bold text-neutral-100">Шаблоны расписания</h3>
         <div className="space-x-2">
           <button
             onClick={() => setShowGenerationForm(!showGenerationForm)}
-            className="bg-purple-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-purple-700 active:bg-purple-800 transition-colors"
+            className="bg-purple-600 text-white px-4 py-2 rounded-2xl font-semibold hover:bg-purple-700 active:bg-purple-800 transition-colors"
           >
             Сгенерировать рейсы
           </button>
           <button
             onClick={handleCreateNewTemplate}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 active:bg-blue-800 transition-colors"
+            className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-semibold hover:bg-blue-700 active:bg-blue-800 transition-colors"
           >
             Добавить шаблон
           </button>
@@ -422,12 +422,12 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
 
       {/* Generation Form */}
       {showGenerationForm && (
-        <div className="mb-6 bg-white rounded-xl shadow-md p-6">
-          <h4 className="text-lg font-bold mb-4">Генерация рейсов по шаблонам</h4>
+        <div className="mb-6 bg-neutral-950/40 border border-neutral-800 rounded-2xl p-6">
+          <h4 className="text-lg font-bold mb-4 text-neutral-100">Генерация рейсов по шаблонам</h4>
           <form onSubmit={handleGenerateSlots}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-neutral-300 mb-1">
                   Дата начала
                 </label>
                 <input
@@ -435,12 +435,12 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
                   name="date_from"
                   value={generationForm.date_from}
                   onChange={(e) => setGenerationForm(prev => ({ ...prev, date_from: e.target.value }))}
-                  className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
                   required
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-neutral-300 mb-1">
                   Дата окончания
                 </label>
                 <input
@@ -448,7 +448,7 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
                   name="date_to"
                   value={generationForm.date_to}
                   onChange={(e) => setGenerationForm(prev => ({ ...prev, date_to: e.target.value }))}
-                  className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
                   required
                 />
               </div>
@@ -456,14 +456,14 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
             <div className="flex space-x-3">
               <button
                 type="submit"
-                className="bg-purple-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-purple-700 active:bg-purple-800 transition-colors"
+                className="bg-purple-600 text-white px-4 py-2 rounded-2xl font-semibold hover:bg-purple-700 active:bg-purple-800 transition-colors"
               >
                 Сгенерировать
               </button>
               <button
                 type="button"
                 onClick={() => setShowGenerationForm(false)}
-                className="bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-medium hover:bg-gray-400 active:bg-gray-500 transition-colors"
+                className="bg-neutral-800/60 text-neutral-100 px-4 py-2 rounded-2xl font-semibold hover:bg-neutral-800 active:bg-neutral-700 transition-colors"
               >
                 Отмена
               </button>
@@ -474,15 +474,15 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
 
       {/* Template Form */}
       {showForm && (
-        <div className="mb-6 bg-white rounded-xl shadow-md p-6">
-          <h4 className="text-lg font-bold mb-4">
+        <div className="mb-6 bg-neutral-950/40 border border-neutral-800 rounded-2xl p-6">
+          <h4 className="text-lg font-bold mb-4 text-neutral-100">
             {editingItem ? 'Редактировать шаблон' : 'Создать шаблон расписания'}
           </h4>
           
           <form onSubmit={handleSubmit}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-neutral-300 mb-1">
                   Название (необязательно)
                 </label>
                 <input
@@ -490,12 +490,12 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
                   name="name"
                   value={itemFormData.name}
                   onChange={handleInputChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
                 />
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-neutral-300 mb-1">
                   Время (ЧЧ:ММ)
                 </label>
                 <input
@@ -503,20 +503,20 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
                   name="departure_time"
                   value={itemFormData.departure_time}
                   onChange={handleInputChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
                   required
                 />
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-neutral-300 mb-1">
                   Тип лодки
                 </label>
                 <select
                   name="type"
                   value={itemFormData.type}
                   onChange={handleInputChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
                   required
                 >
                   <option value="speed">Скоростная</option>
@@ -526,14 +526,14 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-neutral-300 mb-1">
                   Лодка (необязательно)
                 </label>
                 <select
                   name="boat_id"
                   value={itemFormData.boat_id}
                   onChange={handleInputChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
                 >
                   <option value="">Любая подходящая лодка</option>
                   {(() => {
@@ -551,7 +551,7 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-neutral-300 mb-1">
                   Вместимость
                 </label>
                 <input
@@ -560,13 +560,13 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
                   value={itemFormData.capacity}
                   onChange={handleInputChange}
                   min="1"
-                  className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
                   required
                 />
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-neutral-300 mb-1">
                   Длительность (мин)
                 </label>
                 <input
@@ -575,50 +575,50 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
                   value={itemFormData.duration_minutes}
                   onChange={handleInputChange}
                   min="1"
-                  className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
                   required
                 />
               </div>
               
               <div className="col-span-full">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-neutral-300 mb-1">
                   Цены по категориям
                 </label>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                   <div>
-                    <label className="block text-xs text-gray-600 mb-1">Взрослый</label>
+                    <label className="block text-xs text-neutral-400 mb-1">Взрослый</label>
                     <input
                       type="number"
                       value={itemFormData.price_adult}
                       onChange={(e) => handlePriceChange('adult', e.target.value)}
                       min="0"
                       step="0.01"
-                      className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
+                      className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40 text-sm"
                       required
                     />
                   </div>
                   {itemFormData.type !== 'banana' && (
                     <div>
-                      <label className="block text-xs text-gray-600 mb-1">Подросток</label>
+                      <label className="block text-xs text-neutral-400 mb-1">Подросток</label>
                       <input
                         type="number"
                         value={itemFormData.price_teen}
                         onChange={(e) => handlePriceChange('teen', e.target.value)}
                         min="0"
                         step="0.01"
-                        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
+                        className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40 text-sm"
                       />
                     </div>
                   )}
                   <div>
-                    <label className="block text-xs text-gray-600 mb-1">Ребёнок</label>
+                    <label className="block text-xs text-neutral-400 mb-1">Ребёнок</label>
                     <input
                       type="number"
                       value={itemFormData.price_child}
                       onChange={(e) => handlePriceChange('child', e.target.value)}
                       min="0"
                       step="0.01"
-                      className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
+                      className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40 text-sm"
                       required
                     />
                   </div>
@@ -626,7 +626,7 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
               </div>
               
               <div className="col-span-full">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-semibold text-neutral-300 mb-1">
                   Дни недели
                 </label>
                 <div className="grid grid-cols-7 gap-2">
@@ -636,9 +636,9 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
                         type="checkbox"
                         checked={(itemFormData.weekdays_mask & (1 << index)) !== 0}
                         onChange={() => handleWeekdayChange(index)}
-                        className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        className="h-4 w-4 text-blue-600 border-neutral-700 rounded focus:ring-blue-600/40 bg-neutral-950/40"
                       />
-                      <span className="text-sm">{day}</span>
+                      <span className="text-sm text-neutral-200">{day}</span>
                     </label>
                   ))}
                 </div>
@@ -652,9 +652,9 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
                 id="is_active"
                 checked={itemFormData.is_active}
                 onChange={(e) => setItemFormData(prev => ({ ...prev, is_active: e.target.checked ? 1 : 0 }))}
-                className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                className="h-4 w-4 text-blue-600 border-neutral-700 rounded bg-neutral-950/40"
               />
-              <label htmlFor="is_active" className="ml-2 block text-sm text-gray-700">
+              <label htmlFor="is_active" className="ml-2 block text-sm text-neutral-200">
                 Активный
               </label>
             </div>
@@ -662,14 +662,14 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
             <div className="flex space-x-3">
               <button
                 type="submit"
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 active:bg-blue-800 transition-colors"
+                className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-semibold hover:bg-blue-700 active:bg-blue-800 transition-colors"
               >
                 {editingItem ? 'Сохранить' : 'Создать'}
               </button>
               <button
                 type="button"
                 onClick={resetForm}
-                className="bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-medium hover:bg-gray-400 active:bg-gray-500 transition-colors"
+                className="bg-neutral-800/60 text-neutral-100 px-4 py-2 rounded-2xl font-semibold hover:bg-neutral-800 active:bg-neutral-700 transition-colors"
               >
                 Отмена
               </button>
@@ -680,31 +680,31 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
 
       {/* Items List */}
       {loading ? (
-        <div className="text-center py-4">Загрузка...</div>
+        <div className="text-center py-4 text-neutral-400">Загрузка...</div>
       ) : (
         <div className="space-y-3">
           {items.map(item => (
-            <div key={item.id} className="bg-white rounded-xl shadow-md p-4 flex justify-between items-center">
+            <div key={item.id} className="bg-neutral-950/40 border border-neutral-800 rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div>
                 <div className="font-bold">{item.departure_time} • {getBoatTypeLabel(item.type)} • Лодка: {getBoatName(item.boat_id)} • Мест: {item.capacity} • Дни: {item.weekdays_formatted || getDayNamesFromMask(item.weekdays_mask)}</div>
-                <div className="text-sm text-gray-600">
+                <div className="text-sm text-neutral-300">
                   Взр: {item.price_adult} ₽ • Дет: {item.price_child} ₽
                   {item.price_teen && ` • Подр: ${item.price_teen} ₽`}
                 </div>
-                <div className="text-xs text-gray-500">
+                <div className="text-xs text-neutral-500">
                   ID: {item.id} • {item.is_active ? 'Активный' : 'Неактивный'}
                 </div>
               </div>
               <div className="flex space-x-2">
                 <button
                   onClick={() => handleEdit(item)}
-                  className="bg-blue-100 text-blue-800 px-3 py-1 rounded-lg text-sm font-medium hover:bg-blue-200 active:bg-blue-300 transition-colors"
+                  className="bg-blue-600 text-white px-4 py-2 rounded-2xl text-sm font-semibold hover:bg-blue-700 active:bg-blue-800 transition-colors"
                 >
                   Редактировать
                 </button>
                 <button
                   onClick={() => handleDelete(item.id)}
-                  className="bg-red-600 text-white px-3 py-1 rounded-lg text-sm font-medium hover:bg-red-700 active:bg-red-800 transition-colors"
+                  className="bg-red-600 text-white px-4 py-2 rounded-2xl text-sm font-semibold hover:bg-red-700 active:bg-red-800 transition-colors"
                 >
                   Удалить
                 </button>
@@ -713,7 +713,7 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
           ))}
           
           {items.length === 0 && (
-            <div className="text-center py-8 text-gray-500">
+            <div className="text-center py-8 text-neutral-500">
               Нет шаблонов расписания
             </div>
           )}

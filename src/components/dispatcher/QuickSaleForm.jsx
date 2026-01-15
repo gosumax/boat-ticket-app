@@ -244,7 +244,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
     <div
   className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm overflow-hidden" style={{ paddingTop: 20, paddingBottom: 20, paddingLeft: "clamp(16px, 5vw, 24px)", paddingRight: "clamp(16px, 5vw, 24px)" }}>
       <div className="min-h-screen flex items-start justify-center p-1 pb-10">
-        <div className="w-full max-w-[900px] min-h-[85vh] max-h-[90vh] overflow-y-auto rounded-2xl border border-neutral-800 bg-neutral-950 pt-1 transform scale-[1] origin-top">
+        <div className="w-full max-w-[1200px] min-h-[95vh] max-h-[100vh] overflow-y-auto rounded-2xl border border-neutral-800 bg-neutral-950 pt-1 transform scale-[1] origin-top">
 <div className="flex justify-between items-center mb-1">
         <h2 className="text-2xl font-bold text-neutral-100"></h2>
         <button 
@@ -483,7 +483,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
           <button 
             onClick={handleSubmit}
             disabled={!isFormValid || isSubmitting}
-            className={`w-full py-1 font-medium rounded-lg transition-colors ${
+            className={`w-full py-4 font-medium rounded-lg transition-colors ${
               isFormValid 
                 ? (categoryTotalSeats <= getSlotAvailable(trip) 
                    ? 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800' 
