@@ -76,7 +76,6 @@ const DispatcherView = () => {
     setSearchTerm('');
   };
 
-  // --- status dropdown menu ---
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const statusWrapRef = useRef(null);
 
@@ -89,41 +88,29 @@ const DispatcherView = () => {
       const sWrap = statusWrapRef.current;
       if (statusMenuOpen && sWrap && !sWrap.contains(e.target)) setStatusMenuOpen(false);
     };
-
     const onKey = (e) => {
-      if (e.key === 'Escape') {
-        setStatusMenuOpen(false);
-      }
+      if (e.key === 'Escape') setStatusMenuOpen(false);
     };
-
     document.addEventListener('mousedown', onDown);
-    document.addEventListener('touchstart', onDown, { passive: true });
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('touchstart', onDown);
       document.removeEventListener('keydown', onKey);
     };
   }, [statusMenuOpen]);
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
-      {/* HEADER */}
       <div className="border-b border-neutral-800 bg-neutral-950">
         <div className="h-14 px-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 text-2xl font-bold"><span>🧭</span><span>Диспетчер</span></div>
-          </div>
-
+          <div className="flex items-center gap-2 text-2xl font-bold">🧭 Диспетчер</div>
           <div className="flex items-center gap-2">
             <button
               onClick={() => window.dispatchEvent(new CustomEvent('dispatcher:refresh'))}
               className="px-3 py-1 rounded bg-neutral-800 hover:bg-neutral-700"
-              title="Обновить данные"
             >
               Обновить
             </button>
-
             <button
               onClick={logout}
               className="px-3 py-1 rounded bg-red-600 hover:bg-red-700 text-white"
@@ -133,13 +120,13 @@ const DispatcherView = () => {
           </div>
         </div>
 
-        {/* TABS */}
         <div className="px-4 pb-2 flex gap-2 flex-wrap">
           {[
             ['trips', 'Активные рейсы'],
             ['selling', 'Продажа | Посадка'],
             ['slots', 'Управление рейсами'],
-            ['shiftClose', 'Закрытие смены']
+            ['maps', 'Карты'],
+            ['shiftClose', 'Закрытие смены'],
           ].map(([key, label]) => (
             <button
               key={key}
@@ -155,109 +142,55 @@ const DispatcherView = () => {
           ))}
         </div>
 
-        {/* FILTER BAR (ONE LINE) */}
         <div className="px-4 pb-3">
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => {
-                  const t = getTodayDate();
-                  setDateRange({ from: t, to: t });
-                }}
-                className={`px-3 py-2 rounded-xl text-sm font-semibold border ${
-                  datePreset === 'today'
-                    ? 'bg-blue-600 border-blue-500 text-white'
-                    : 'bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800'
-                }`}
-              >
-                Сегодня
-              </button>
-              <button
-                onClick={() => {
-                  const t = getTomorrowDate();
-                  setDateRange({ from: t, to: t });
-                }}
-                className={`px-3 py-2 rounded-xl text-sm font-semibold border ${
-                  datePreset === 'tomorrow'
-                    ? 'bg-blue-600 border-blue-500 text-white'
-                    : 'bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800'
-                }`}
-              >
-                Завтра
-              </button>
-            </div>
+            <button
+              onClick={() => {
+                const t = getTodayDate();
+                setDateRange({ from: t, to: t });
+              }}
+              className={`px-3 py-2 rounded-xl text-sm font-semibold border ${
+                datePreset === 'today'
+                  ? 'bg-blue-600 border-blue-500 text-white'
+                  : 'bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800'
+              }`}
+            >
+              Сегодня
+            </button>
 
-            <div className="flex items-center gap-2">
-              <input
-                type="date"
-                value={dateRange.from}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setDateRange((prev) => ({ from: v, to: prev.to >= v ? prev.to : v }));
-                }}
-                className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-sm"
-              />
-              <input
-                type="date"
-                value={dateRange.to}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setDateRange((prev) => ({ from: prev.from <= v ? prev.from : v, to: v }));
-                }}
-                className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-sm"
-              />
-            </div>
+            <button
+              onClick={() => {
+                const t = getTomorrowDate();
+                setDateRange({ from: t, to: t });
+              }}
+              className={`px-3 py-2 rounded-xl text-sm font-semibold border ${
+                datePreset === 'tomorrow'
+                  ? 'bg-blue-600 border-blue-500 text-white'
+                  : 'bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800'
+              }`}
+            >
+              Завтра
+            </button>
 
-            {/* TYPE BUTTONS */}
-            <div className="flex items-center gap-2 flex-wrap">
-              {TYPE_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => setTypeFilter(opt.value)}
-                  className={`px-3 py-2 rounded-xl text-sm font-semibold border ${
-                    typeFilter === opt.value
-                      ? 'bg-blue-600 border-blue-500 text-white'
-                      : 'bg-neutral-900 border-neutral-800 text-neutral-300 hover:bg-neutral-800'
-                  }`}
-                  title="Тип лодки"
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+            <input
+              type="date"
+              value={dateRange.from}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDateRange((prev) => ({ from: v, to: prev.to >= v ? prev.to : v }));
+              }}
+              className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-sm"
+            />
 
-            {/* STATUS MENU */}
-            <div className="relative" ref={statusWrapRef}>
-              <button
-                onClick={() => {
-                  setStatusMenuOpen(v => !v);
-                                  }}
-                className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-sm hover:bg-neutral-800 flex items-center gap-2"
-                title="Статус рейса"
-              >
-                <span className="whitespace-nowrap">{statusLabel}</span>
-                <span className="text-neutral-500">▾</span>
-              </button>
-
-              {statusMenuOpen && (
-                <div className="absolute z-50 mt-2 w-56 rounded-xl border border-neutral-800 bg-neutral-950 shadow-xl overflow-hidden">
-                  {STATUS_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => {
-                        setStatusFilter(opt.value);
-                        setStatusMenuOpen(false);
-                      }}
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-neutral-900 ${
-                        statusFilter === opt.value ? 'bg-blue-600/20 text-blue-100' : 'text-neutral-200'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <input
+              type="date"
+              value={dateRange.to}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDateRange((prev) => ({ from: prev.from <= v ? prev.from : v, to: v }));
+              }}
+              className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-sm"
+            />
 
             <input
               type="text"
@@ -282,13 +215,6 @@ const DispatcherView = () => {
         </div>
       </div>
 
-      {shiftClosed && (
-        <div className="px-4 py-2 text-sm bg-red-950/40 border-b border-red-900 text-red-200">
-          Смена закрыта. Все действия заблокированы.
-        </div>
-      )}
-
-      {/* CONTENT */}
       <div className="p-4">
         {activeTab === 'trips' && (
           <TripListView
@@ -327,6 +253,16 @@ const DispatcherView = () => {
             onTripCountsChange={setTripCounts}
             shiftClosed={shiftClosed}
           />
+        )}
+
+        {activeTab === 'maps' && (
+          <div className="h-[60vh] flex items-center justify-center rounded-2xl border border-neutral-800 bg-neutral-900">
+            <div className="text-center text-neutral-400">
+              <div className="text-4xl mb-2">🗺️</div>
+              <div className="text-lg font-semibold text-neutral-200">Карты</div>
+              <div className="text-sm mt-1">Скоро здесь появится карта с локациями и маршрутами</div>
+            </div>
+          </div>
         )}
 
         {activeTab === 'shiftClose' && (

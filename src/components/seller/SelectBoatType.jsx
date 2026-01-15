@@ -1,55 +1,45 @@
-const SelectBoatType = ({ selectedType, onSelect, onBack }) => {
+import React from 'react';
+
+const SelectBoatType = ({ onSelect, onBack }) => {
   return (
-    <div className="flex flex-col items-center">
-      <h2 className="text-2xl font-bold text-gray-800 mb-8 text-center">Тип лодки</h2>
+    <div className="flex flex-col gap-4">
+      <h2 className="text-2xl font-bold text-center">Выберите тип лодки</h2>
 
-      <div className="w-full max-w-sm space-y-4">
-        <button
-          type="button"
-          onClick={() => onSelect('speed')}
-          className={`w-full py-6 text-xl font-medium rounded-xl transition-all shadow-lg flex items-center justify-center transform hover:scale-[1.02] active:scale-[0.98] ${
-            selectedType === 'speed'
-              ? 'bg-blue-700 text-white'
-              : 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800'
-          }`}
-        >
-          <span className="mr-2 text-2xl">⚡</span> Скоростная
-        </button>
+      <button
+        className="w-full py-4 rounded-xl bg-blue-600 text-white text-lg font-semibold"
+        onClick={() => onSelect('speed')}
+      >
+        Скоростная
+      </button>
 
-        <button
-          type="button"
-          onClick={() => onSelect('cruise')}
-          className={`w-full py-6 text-xl font-medium rounded-xl transition-all shadow-lg flex items-center justify-center transform hover:scale-[1.02] active:scale-[0.98] ${
-            selectedType === 'cruise'
-              ? 'bg-green-700 text-white'
-              : 'bg-green-600 text-white hover:bg-green-700 active:bg-green-800'
-          }`}
-        >
-          <span className="mr-2 text-2xl">🚢</span> Прогулочная
-        </button>
+      <button
+        className="w-full py-4 rounded-xl bg-green-600 text-white text-lg font-semibold"
+        onClick={() => onSelect('cruise')}
+      >
+        Прогулочная
+      </button>
 
-        <button
-          type="button"
-          onClick={() => onSelect('banana')}
-          className={`w-full py-6 text-xl font-medium rounded-xl transition-all shadow-lg flex items-center justify-center transform hover:scale-[1.02] active:scale-[0.98] ${
-            selectedType === 'banana'
-              ? 'bg-yellow-600 text-white'
-              : 'bg-yellow-500 text-white hover:bg-yellow-600 active:bg-yellow-700'
-          }`}
-        >
-          <span className="mr-2 text-2xl">🍌</span> Банан
-        </button>
-      </div>
+      <button
+        className="w-full py-4 rounded-xl bg-yellow-500 text-white text-lg font-semibold"
+        onClick={() => onSelect('banana')}
+      >
+        Банан
+      </button>
 
-      <div className="mt-6 w-full max-w-sm">
-        <button
-          type="button"
-          onClick={onBack}
-          className="w-full py-4 text-lg font-medium rounded-xl bg-gray-300 text-gray-800 hover:bg-gray-400 active:bg-gray-500 transition-all shadow-lg"
-        >
-          Назад
-        </button>
-      </div>
+      {/* Заглушка: Рыбалка (пока не активна) */}
+      <button
+        className="w-full py-4 rounded-xl bg-gray-200 text-gray-500 text-lg font-semibold cursor-not-allowed"
+        disabled
+      >
+        🎣 Рыбалка (скоро)
+      </button>
+
+      <button
+        className="w-full py-3 rounded-xl bg-gray-300 text-gray-800 font-medium"
+        onClick={onBack}
+      >
+        Назад
+      </button>
     </div>
   );
 };

@@ -7,7 +7,7 @@ const DebugButton = () => {
       onClick={downloadBugReport}
       style={{
         position: 'fixed',
-        bottom: 12,
+        top: 12,          // ⬅ было bottom
         right: 12,
         zIndex: 9999,
         padding: '8px 12px',
@@ -15,7 +15,7 @@ const DebugButton = () => {
         background: '#111',
         color: '#fff',
         borderRadius: 6,
-        opacity: 0.7
+        opacity: 0.75,
       }}
     >
       Скачать debug

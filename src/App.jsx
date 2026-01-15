@@ -13,21 +13,22 @@ import SellerEarnings from './views/SellerEarnings';
 import SellerMedia from './views/SellerMedia';
 import DispatcherShiftClose from './views/DispatcherShiftClose';
 
-// Import OwnerView
+// Owner UI
 import OwnerView from './views/OwnerView';
+import OwnerMoneyView from './views/OwnerMoneyView';
+
 import DebugButton from './components/DebugButton';
 
-// Component that redirects based on user role
+// Role redirect
 const RoleHomeRedirect = () => {
   const { currentUser, loadingAuth } = useAuth();
 
   if (loadingAuth) return null;
-
   if (!currentUser) return <Navigate to="/login" replace />;
 
   const role = (currentUser.role || '').toLowerCase();
 
-  if (role === 'owner') return <Navigate to="/owner/dashboard" replace />;
+  if (role === 'owner') return <Navigate to="/owner-ui" replace />;
   if (role === 'admin') return <Navigate to="/admin" replace />;
   if (role === 'dispatcher') return <Navigate to="/dispatcher" replace />;
   if (role === 'seller') return <Navigate to="/seller" replace />;
@@ -38,81 +39,97 @@ const RoleHomeRedirect = () => {
 function App() {
   return (
     <>
-    <Routes>
-      {/* Public routes */}
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/unauthorized" element={<UnauthorizedPage />} />
+      <Routes>
+        {/* Public */}
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
-      {/* Role-based redirect */}
-      <Route path="/" element={<RoleHomeRedirect />} />
-      <Route path="*" element={<RoleHomeRedirect />} />
+        {/* Entry */}
+        <Route path="/" element={<RoleHomeRedirect />} />
+        <Route path="*" element={<RoleHomeRedirect />} />
 
-      {/* Seller routes */}
-      <Route
-        path="/seller/*"
-        element={
-          <ProtectedRoute requiredRole="seller">
-            <SellerView />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/seller/home"
-        element={
-          <ProtectedRoute requiredRole="seller">
-            <SellerHome />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/seller/earnings"
-        element={
-          <ProtectedRoute requiredRole="seller">
-            <SellerEarnings />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/seller/media"
-        element={
-          <ProtectedRoute requiredRole="seller">
-            <SellerMedia />
-          </ProtectedRoute>
-        }
-      />
+        {/* Seller */}
+        <Route
+          path="/seller/*"
+          element={
+            <ProtectedRoute requiredRole="seller">
+              <SellerView />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/seller/home"
+          element={
+            <ProtectedRoute requiredRole="seller">
+              <SellerHome />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/seller/earnings"
+          element={
+            <ProtectedRoute requiredRole="seller">
+              <SellerEarnings />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/seller/media"
+          element={
+            <ProtectedRoute requiredRole="seller">
+              <SellerMedia />
+            </ProtectedRoute>
+          }
+        />
 
-      {/* Dispatcher routes */}
-      <Route
-        path="/dispatcher/*"
-        element={
-          <ProtectedRoute requiredRole="dispatcher">
-            <DispatcherView />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/dispatcher/shift-close"
-        element={
-          <ProtectedRoute requiredRole="dispatcher">
-            <DispatcherShiftClose />
-          </ProtectedRoute>
-        }
-      />
+        {/* Dispatcher */}
+        <Route
+          path="/dispatcher/*"
+          element={
+            <ProtectedRoute requiredRole="dispatcher">
+              <DispatcherView />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/dispatcher/shift-close"
+          element={
+            <ProtectedRoute requiredRole="dispatcher">
+              <DispatcherShiftClose />
+            </ProtectedRoute>
+          }
+        />
 
-      {/* Admin routes */}
-      <Route
-        path="/admin/*"
-        element={
-          <ProtectedRoute requiredRole="admin">
-            <AdminView />
-          </ProtectedRoute>
-        }
-      />
+        {/* Admin */}
+        <Route
+          path="/admin/*"
+          element={
+            <ProtectedRoute requiredRole="admin">
+              <AdminView />
+            </ProtectedRoute>
+          }
+        />
 
-      {/* Owner routes - separate from admin (no ProtectedRoute) */}
-      <Route path="/owner/*" element={<OwnerView />} />
-    </Routes>
-    <DebugButton />
+        {/* OWNER UI (НЕ backend) */}
+        <Route
+          path="/owner-ui"
+          element={
+            <ProtectedRoute requiredRole="owner">
+              <OwnerView />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/owner-ui/money"
+          element={
+            <ProtectedRoute requiredRole="owner">
+              <OwnerMoneyView />
+            </ProtectedRoute>
+          }
+        />
+      </Routes>
+
+      <DebugButton />
     </>
   );
 }

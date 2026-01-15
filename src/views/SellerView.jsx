@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import SellTicketScreen from '../components/seller/SellTicketScreen';
 import SelectBoatType from '../components/seller/SelectBoatType';
 import SelectTrip from '../components/seller/SelectTrip';
 import SelectSeats from '../components/seller/SelectSeats';
@@ -38,7 +37,7 @@ const SellerView = () => {
   const navigate = useNavigate();
   const { logout } = useAuth();
 
-  const [currentStep, setCurrentStep] = useState(0);
+  const [currentStep, setCurrentStep] = useState(1);
 
   const [boats, setBoats] = useState([]);
   const [trips, setTrips] = useState([]);
@@ -127,7 +126,7 @@ const SellerView = () => {
     if (!type) {
       // back from Type screen
       setSelectedType(null);
-      setCurrentStep(0);
+      navigate('/seller/home');
       return;
     }
     setSelectedType(type);
@@ -166,7 +165,8 @@ const SellerView = () => {
   useEffect(() => {
     const loadBoats = async () => {
       try {
-        const activeBoats = await apiClient.getActiveBoats();
+        const res = await (apiClient.get ? apiClient.get('/boats/active') : Promise.resolve([]));
+        const activeBoats = res?.data ?? res;
         setBoats(activeBoats || []);
       } catch (e) {
         console.error('Error loading boats:', e);
@@ -225,15 +225,6 @@ const SellerView = () => {
 
   const renderStep = () => {
     switch (currentStep) {
-      case 0:
-        return (
-          <SellTicketScreen
-            onSellTicket={handleSellTicket}
-            onBack={() => navigate('/seller/home')}
-            onShowSalesHistory={() => setShowSalesHistory(true)}
-          />
-        );
-
       case 1:
         return (
           <SelectBoatType
@@ -312,14 +303,9 @@ const SellerView = () => {
           />
         );
 default:
-        return (
-          <SellTicketScreen
-            onSellTicket={handleSellTicket}
-            onBack={() => navigate('/seller/home')}
-            onShowSalesHistory={() => setShowSalesHistory(true)}
-          />
-        );
-    }
+        navigate('/seller/home');
+        return null;
+}
   };
 
   return (

@@ -228,6 +228,7 @@ const SelectSeats = ({
     
     // Also check prepayment validity
     return hasName && hasValidPhone && hasValidSeats && isPrepaymentValid && hasValidTicketBreakdown;
+  sValidTicketBreakdown;
   })();
   
   // Update prepayment error message
@@ -241,348 +242,286 @@ const SelectSeats = ({
     }
   }, [prepaymentAmount, totalPrice]);
 
-
-  
   return (
     <div className="flex flex-col">
-      <h2 className="text-2xl font-bold text-gray-800 mb-6 text-center">Количество мест</h2>
-      
-      {/* Debug information - only shown in development */}
-      {process.env.NODE_ENV === 'development' && (
-        <div className="space-y-2 mb-4">
-          {lastError && lastError.resolvedUrl && lastError.status !== 400 && (
-            <div className="bg-red-100 border-l-4 border-red-500 p-2">
-              <p className="text-sm text-red-700">
-                <strong>Presale create failed:</strong> {lastError.status} - {lastError.message}
-              </p>
-              <p className="text-sm text-red-700">
-                Request: {lastError.method} {lastError.resolvedUrl}
-              </p>
-            </div>
-          )}
-          {lastError && !lastError.resolvedUrl && lastError.status !== 400 && (
-            <div className="bg-red-100 border-l-4 border-red-500 p-2">
-              <p className="text-sm text-red-700">
-                <strong>Presale create failed:</strong> {lastError.status} - {lastError.message}
-              </p>
-            </div>
-          )}
-        </div>
-      )}
-      
-      <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-        <h3 className="font-bold text-lg mb-2">Детали рейса</h3>
-        <p className="text-gray-600">{trip?.boat_name} • {trip?.time} • Длительность: {trip?.duration}</p>
-        {trip?.boat_type === 'banana' ? (
-          <div className="text-sm text-gray-600">
-            <p>Взрослый: {formatRUB(trip?.price_adult || trip?.price)}</p>
-            <p>Детский: {formatRUB(trip?.price_child || trip?.price)}</p>
-          </div>
-        ) : (
-          <div className="text-sm text-gray-600">
-            <p>Взрослый: {formatRUB(trip?.price_adult || trip?.price)}</p>
-            <p>Подросток: {formatRUB(trip?.price_teen || trip?.price)}</p>
-            <p>Детский: {formatRUB(trip?.price_child || trip?.price)}</p>
-          </div>
-        )}
-        
-        {/* Show warning for banana trips */}
+      <h2 className="text-2xl font-extrabold text-gray-900 mb-5 text-center">Количество мест</h2>
+
+      {/* Trip Details */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 mb-4">
+        <h3 className="font-bold text-lg mb-1 text-gray-900">Детали рейса</h3>
+        <p className="text-gray-700 text-sm">
+          <span className="font-semibold">{trip?.boat_name || '—'}</span>
+          <span className="mx-2 text-gray-400">•</span>
+          <span className="font-semibold">{trip?.time || '—'}</span>
+          {trip?.duration ? (
+            <>
+              <span className="mx-2 text-gray-400">•</span>
+              <span className="text-gray-700">Длительность: <span className="font-semibold">{trip?.duration}</span></span>
+            </>
+          ) : null}
+        </p>
+
+        {/* Banana warning */}
         {trip?.boat_type === 'banana' && (
-          <div className="mt-2 p-2 bg-yellow-100 text-yellow-800 rounded-lg text-sm">
-            Банан: только взрослый/детский билеты, вместимость 12 мест
+          <div className="mt-3 rounded-xl bg-yellow-50 border border-yellow-200 px-3 py-2 text-sm text-yellow-900">
+            Банан: только взрослый/детский билет, вместимость 12 мест
           </div>
         )}
       </div>
-      
-      <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-        <h3 className="font-bold text-lg mb-4">Количество мест</h3>
-        
-        <div className="space-y-4">
-          <div className={`grid ${isBananaTrip ? "grid-cols-2" : "grid-cols-3"} gap-6 justify-items-center`}>
-            <div className="text-center">
-              <p className="font-medium text-gray-700">Взрослый</p>
-              <div className="flex items-center justify-between mt-3 w-[140px]">
-                <button 
-                  type="button"
-                  onClick={() => decrementTicket('adult')}
-                  className="bg-gray-200 text-gray-800 w-8 h-8 rounded-full flex items-center justify-center text-xl font-bold hover:bg-gray-300 active:bg-gray-400"
-                  disabled={ticketBreakdown.adult <= 0}
-                >
-                  -
-                </button>
-                <span className="mx-3 text-xl font-bold">{ticketBreakdown.adult}</span>
-                <button 
-                  type="button"
-                  onClick={() => incrementTicket('adult')}
-                  className="bg-gray-200 text-gray-800 w-8 h-8 rounded-full flex items-center justify-center text-xl font-bold hover:bg-gray-300 active:bg-gray-400"
-                  disabled={ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child >= getSlotAvailable(trip)}
-                >
-                  +
-                </button>
-              </div>
-            </div>
-            {!isBananaTrip && (
 
-            
+      {/* Seats / Breakdown */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 mb-4">
+        <h3 className="font-bold text-lg mb-4 text-gray-900">Количество мест</h3>
+
+        <div className={`grid ${isBananaTrip ? "grid-cols-2" : "grid-cols-3"} gap-x-8 gap-y-6 justify-items-center max-w-[520px] mx-auto`}>
+          {/* Adult */}
+          <div className="text-center">
+            <p className="text-xs font-extrabold text-gray-800 uppercase tracking-wider">Взрослый</p>
+            <div className="mt-3 inline-flex items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => decrementTicket('adult')}
+                disabled={ticketBreakdown.adult <= 0}
+                className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
+              >
+                −
+              </button>
+
+              <span className="w-8 text-center text-2xl font-extrabold text-gray-900 tabular-nums">
+                {ticketBreakdown.adult}
+              </span>
+
+              <button
+                type="button"
+                onClick={() => incrementTicket('adult')}
+                disabled={(ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child) >= getSlotAvailable(trip)}
+                className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
+              >
+                +
+              </button>
+            </div>
+          </div>
+
+          {/* Teen */}
+          {!isBananaTrip && (
             <div className="text-center">
-              <p className="font-medium text-gray-700">Подросток</p>
-              <div className="flex items-center justify-between mt-3 w-[140px]">
-                <button 
+              <p className="text-xs font-extrabold text-gray-800 uppercase tracking-wider">Подросток</p>
+              <div className="mt-3 inline-flex items-center justify-center gap-2">
+                <button
                   type="button"
                   onClick={() => decrementTicket('teen')}
-                  className={`bg-gray-200 text-gray-800 w-8 h-8 rounded-full flex items-center justify-center text-xl font-bold hover:bg-gray-300 active:bg-gray-400 ${trip?.boat_type === 'banana' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  disabled={ticketBreakdown.teen <= 0 || trip?.boat_type === 'banana'}
+                  disabled={ticketBreakdown.teen <= 0}
+                  className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
                 >
-                  -
+                  −
                 </button>
-                <span className="mx-3 text-xl font-bold">{ticketBreakdown.teen}</span>
-                <button 
+
+                <span className="w-8 text-center text-2xl font-extrabold text-gray-900 tabular-nums">
+                  {ticketBreakdown.teen}
+                </span>
+
+                <button
                   type="button"
                   onClick={() => incrementTicket('teen')}
-                  className={`bg-gray-200 text-gray-800 w-8 h-8 rounded-full flex items-center justify-center text-xl font-bold hover:bg-gray-300 active:bg-gray-400 ${trip?.boat_type === 'banana' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  disabled={ticketBreakdown.teen + ticketBreakdown.adult + ticketBreakdown.child >= getSlotAvailable(trip) || trip?.boat_type === 'banana'}
+                  disabled={(ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child) >= getSlotAvailable(trip)}
+                  className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
                 >
                   +
                 </button>
               </div>
-              {trip?.boat_type === 'banana' && (
-                <p className="text-xs text-red-600 mt-1">Недоступно для банана</p>
-              )}
-            </div>
-                        )}
-
-                        <div className="text-center">
-              <p className="font-medium text-gray-700">Детский</p>
-              <div className="flex items-center justify-between mt-3 w-[140px]">
-                <button 
-                  type="button"
-                  onClick={() => decrementTicket('child')}
-                  className="bg-gray-200 text-gray-800 w-8 h-8 rounded-full flex items-center justify-center text-xl font-bold hover:bg-gray-300 active:bg-gray-400"
-                  disabled={ticketBreakdown.child <= 0}
-                >
-                  -
-                </button>
-                <span className="mx-3 text-xl font-bold">{ticketBreakdown.child}</span>
-                <button 
-                  type="button"
-                  onClick={() => incrementTicket('child')}
-                  className="bg-gray-200 text-gray-800 w-8 h-8 rounded-full flex items-center justify-center text-xl font-bold hover:bg-gray-300 active:bg-gray-400"
-                  disabled={ticketBreakdown.child + ticketBreakdown.adult + ticketBreakdown.teen >= getSlotAvailable(trip)}
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-          
-          <div className="text-center font-bold text-lg">
-            Итого: {ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child} мест
-          </div>
-        </div>
-        
-        <p className="text-sm text-gray-500 mt-2 text-center">
-          Максимум {getSlotAvailable(trip)} мест доступно
-        </p>
-        <div className="mt-4 p-3 bg-gray-50 rounded-lg">
-          <p className="text-sm text-gray-600">Стоимость билетов:</p>
-          <div className="flex justify-between mt-1">
-            <span>Взрослый:</span>
-            <span className="font-medium">{formatRUB(trip?.price_adult || trip?.price)}</span>
-          </div>
-          {!isBananaTrip && (
-            <div className="flex justify-between mt-1">
-              <span>Подросток:</span>
-              <span className="font-medium">{formatRUB(trip?.price_teen || trip?.price)}</span>
             </div>
           )}
-          <div className="flex justify-between mt-1">
-            <span>Детский:</span>
-            <span className="font-medium">{formatRUB(trip?.price_child || trip?.price)}</span>
+
+          {/* Child */}
+          <div className="text-center">
+            <p className="text-xs font-extrabold text-gray-800 uppercase tracking-wider">Детский</p>
+            <div className="mt-3 inline-flex items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => decrementTicket('child')}
+                disabled={ticketBreakdown.child <= 0}
+                className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
+              >
+                −
+              </button>
+
+              <span className="w-8 text-center text-2xl font-extrabold text-gray-900 tabular-nums">
+                {ticketBreakdown.child}
+              </span>
+
+              <button
+                type="button"
+                onClick={() => incrementTicket('child')}
+                disabled={(ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child) >= getSlotAvailable(trip)}
+                className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
+              >
+                +
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 text-center">
+          <p className="font-bold text-gray-900">
+            Итого: <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-300 bg-white text-gray-900 tabular-nums">{seats}</span> мест
+          </p>
+          <p className="text-sm text-gray-600 mt-1">Максимум {getSlotAvailable(trip)} мест доступно</p>
+        </div>
+
+        {/* Ticket prices (visible) */}
+        <div className="mt-4 rounded-2xl border border-gray-300 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-sm font-extrabold text-gray-900 tracking-wide">Стоимость билетов</p>
+            <span className="text-xs font-semibold text-gray-600">за 1 место</span>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between rounded-xl bg-gray-50 px-3 py-2 border border-gray-200">
+              <span className="text-sm font-semibold text-gray-800">Взрослый</span>
+              <span className="text-sm font-extrabold text-gray-900 tabular-nums">
+                {formatRUB(trip?.price_adult || trip?.price)}
+              </span>
+            </div>
+
+            {!isBananaTrip && (
+              <div className="flex items-center justify-between rounded-xl bg-gray-50 px-3 py-2 border border-gray-200">
+                <span className="text-sm font-semibold text-gray-800">Подросток</span>
+                <span className="text-sm font-extrabold text-gray-900 tabular-nums">
+                  {formatRUB(trip?.price_teen || trip?.price)}
+                </span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between rounded-xl bg-gray-50 px-3 py-2 border border-gray-200">
+              <span className="text-sm font-semibold text-gray-800">Детский</span>
+              <span className="text-sm font-extrabold text-gray-900 tabular-nums">
+                {formatRUB(trip?.price_child || trip?.price)}
+              </span>
+            </div>
           </div>
         </div>
       </div>
-      
+
       {/* Customer Information Section */}
-      <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-        <h3 className="font-bold text-lg mb-4">Информация о клиенте</h3>
-        
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 mb-4">
+        <h3 className="font-bold text-lg mb-4 text-gray-900">Информация о клиенте</h3>
+
         <div className="mb-4">
-          <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="customerName">
-            Имя клиента
-          </label>
-          
-          {/* Quick name buttons */}
+          <label className="block text-gray-800 text-sm font-bold mb-2" htmlFor="customerName">Имя клиента</label>
+
           <div className="grid grid-cols-3 gap-2 mb-2">
-            <button
-              type="button"
-              onClick={() => {
-                setLocalCustomerName('Алексей');
-                if (setCustomerName) setCustomerName('Алексей');
-              }}
-              className={`py-2 rounded-lg font-medium transition-colors ${localCustomerName === 'Алексей' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
-            >
-              Алексей
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setLocalCustomerName('Дмитрий');
-                if (setCustomerName) setCustomerName('Дмитрий');
-              }}
-              className={`py-2 rounded-lg font-medium transition-colors ${localCustomerName === 'Дмитрий' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
-            >
-              Дмитрий
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setLocalCustomerName('Иван');
-                if (setCustomerName) setCustomerName('Иван');
-              }}
-              className={`py-2 rounded-lg font-medium transition-colors ${localCustomerName === 'Иван' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
-            >
-              Иван
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setLocalCustomerName('Анна');
-                if (setCustomerName) setCustomerName('Анна');
-              }}
-              className={`py-2 rounded-lg font-medium transition-colors ${localCustomerName === 'Анна' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
-            >
-              Анна
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setLocalCustomerName('Мария');
-                if (setCustomerName) setCustomerName('Мария');
-              }}
-              className={`py-2 rounded-lg font-medium transition-colors ${localCustomerName === 'Мария' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
-            >
-              Мария
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setLocalCustomerName('Елена');
-                if (setCustomerName) setCustomerName('Елена');
-              }}
-              className={`py-2 rounded-lg font-medium transition-colors ${localCustomerName === 'Елена' ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200 active:bg-blue-300'}`}
-            >
-              Елена
-            </button>
+            {['Алексей','Дмитрий','Иван','Анна','Мария','Елена'].map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => {
+                  setLocalCustomerName(n);
+                  if (setCustomerName) setCustomerName(n);
+                }}
+                className={`py-2 rounded-lg font-semibold transition ${
+                  localCustomerName === n ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-900 hover:bg-blue-200 active:bg-blue-300'
+                }`}
+              >
+                {n}
+              </button>
+            ))}
           </div>
-          
+
           <input
             id="customerName"
             type="text"
             value={localCustomerName}
             onChange={handleNameChange}
             onBlur={() => setTouched(prev => ({ ...prev, customerName: true }))}
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+            className="shadow-sm border border-gray-300 rounded-xl w-full py-3 px-3 text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
+            placeholder="Введите имя"
           />
           {touched.customerName && errors.customerName && (
-            <p className="text-red-500 text-xs italic mt-2">{errors.customerName}</p>
+            <p className="text-red-600 text-xs mt-1">{errors.customerName}</p>
           )}
         </div>
-        
+
         <div className="mb-4">
-          <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="customerPhone">
-            Телефон клиента
-          </label>
+          <label className="block text-gray-800 text-sm font-bold mb-2" htmlFor="customerPhone">Телефон клиента</label>
           <input
             id="customerPhone"
-            type="text"
+            type="tel"
             value={localCustomerPhone}
             onChange={handlePhoneChange}
             onBlur={() => setTouched(prev => ({ ...prev, customerPhone: true }))}
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+            className="shadow-sm border border-gray-300 rounded-xl w-full py-3 px-3 text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
+            placeholder="+7 9xx xxx-xx-xx"
           />
           {touched.customerPhone && errors.customerPhone && (
-            <p className="text-red-500 text-xs italic mt-2">{errors.customerPhone}</p>
+            <p className="text-red-600 text-xs mt-1">{errors.customerPhone}</p>
           )}
         </div>
-        
-        <div className="mb-4">
-          <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="prepayment">
-            Предоплата (₽)
-          </label>
-          
-          {/* Quick prepayment buttons */}
-          <div className="flex space-x-2 mb-2">
-            <button
-              type="button"
-              onClick={() => {
-                setLocalPrepaymentStr('500');
-                if (setPrepaymentStr) setPrepaymentStr('500');
-                setPrepaymentError('');
-              }}
-              className="flex-1 py-2 bg-blue-100 text-blue-800 rounded-lg font-medium hover:bg-blue-200 active:bg-blue-300 transition-colors"
-            >
-              500 ₽
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setLocalPrepaymentStr('1000');
-                if (setPrepaymentStr) setPrepaymentStr('1000');
-                setPrepaymentError('');
-              }}
-              className="flex-1 py-2 bg-blue-100 text-blue-800 rounded-lg font-medium hover:bg-blue-200 active:bg-blue-300 transition-colors"
-            >
-              1000 ₽
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setLocalPrepaymentStr('2000');
-                if (setPrepaymentStr) setPrepaymentStr('2000');
-                setPrepaymentError('');
-              }}
-              className="flex-1 py-2 bg-blue-100 text-blue-800 rounded-lg font-medium hover:bg-blue-200 active:bg-blue-300 transition-colors"
-            >
-              2000 ₽
-            </button>
+
+        <div className="mb-1">
+          <label className="block text-gray-800 text-sm font-bold mb-2" htmlFor="prepayment">Предоплата (₽)</label>
+
+          <div className="grid grid-cols-3 gap-2 mb-2">
+            {[500, 1000, 2000].map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => {
+                  setLocalPrepaymentStr(String(v));
+                  if (setPrepaymentStr) setPrepaymentStr(String(v));
+                }}
+                className="py-2 rounded-lg font-semibold bg-blue-100 text-blue-900 hover:bg-blue-200 active:bg-blue-300 transition"
+              >
+                {v} ₽
+              </button>
+            ))}
           </div>
-          
+
           <input
             id="prepayment"
             type="number"
-            min="0"
-            step="1"
-            inputMode="numeric"
             value={localPrepaymentStr}
             onChange={handlePrepaymentChange}
-            className={`shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline ${prepaymentError ? 'border-red-500' : ''}`}
+            className="shadow-sm border border-gray-300 rounded-xl w-full py-3 px-3 text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
+            placeholder="0"
+            min="0"
           />
+
           {prepaymentError && (
-            <p className="text-red-500 text-xs italic mt-2">{prepaymentError}</p>
+            <p className="text-red-600 text-xs mt-1">{prepaymentError}</p>
           )}
         </div>
       </div>
-      
-      <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-        <div className="flex justify-between items-center">
-          <span className="font-bold text-lg">Итого:</span>
-          <span className="font-bold text-2xl text-blue-600">{formatRUB(totalPrice)}</span>
+
+      {/* Total */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 mb-4">
+        <div className="flex items-center justify-between">
+          <span className="text-gray-900 font-bold">Итого:</span>
+          <span className="text-blue-700 font-extrabold text-xl tabular-nums">{formatRUB(totalPrice)}</span>
         </div>
+        {lastError && (
+          <div className="mt-3 rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-800">
+            {lastError}
+          </div>
+        )}
       </div>
-      
-      <div className="flex space-x-3">
+
+      {/* Actions */}
+      <div className="flex gap-3">
         <button
           onClick={onBack}
-          className="flex-1 py-5 text-xl font-medium rounded-xl bg-gray-300 text-gray-800 hover:bg-gray-400 active:bg-gray-500 transition-all shadow-lg"
+          type="button"
+          className="flex-1 py-4 text-lg font-bold rounded-xl bg-gray-200 text-gray-900 hover:bg-gray-300 active:bg-gray-400 shadow"
         >
           Назад
         </button>
-        <button 
+
+        <button
           onClick={handleConfirm}
+          type="button"
           disabled={!isFormValid || isSubmitting}
-          className={`flex-1 py-5 text-xl font-medium rounded-xl transition-all shadow-lg transform hover:scale-[1.02] active:scale-[0.98] ${
-            isFormValid 
-              ? 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800' 
+          className={`flex-1 py-4 text-lg font-bold rounded-xl shadow transform transition ${
+            isFormValid && !isSubmitting
+              ? 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800'
               : 'bg-gray-400 text-gray-200 cursor-not-allowed'
           }`}
         >

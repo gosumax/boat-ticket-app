@@ -118,23 +118,27 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
                 <div
                   key={trip.slot_uid}
                   onClick={() => onSelect({ ...trip, seatsLeft })}
-                  className="bg-white rounded-2xl shadow-md p-4 flex justify-between gap-4 cursor-pointer hover:shadow-lg transition"
+                  className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 flex justify-between gap-4 cursor-pointer hover:shadow-md active:shadow-sm active:scale-[0.99] transition"
                 >
                   {/* Левая часть */}
                   <div>
-                    <div className="font-bold text-lg">{trip.boat_name}</div>
-                    <div className="text-sm text-gray-600">
-                      {trip.trip_date} • {trip.time}
+                    <div className="font-bold text-lg text-gray-900">{trip.boat_name}</div>
+
+                    <div className="mt-1 flex items-center gap-2 text-base text-gray-800">
+                      <span className="text-blue-600 text-lg">📅</span>
+                      <span>{trip.trip_date} • {trip.time}</span>
                     </div>
-                    <div className="text-sm text-gray-500">
-                      Длительность: {formatDuration(durationMinutes)}
+
+                    <div className="mt-0.5 flex items-center gap-2 text-base text-gray-700">
+                      <span className="text-blue-600 text-lg">⏱</span>
+                      <span>Длительность: {formatDuration(durationMinutes)}</span>
                     </div>
                   </div>
 
                   {/* Правая мини-карточка */}
-                  <div className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 min-w-[120px]">
+                  <div className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 min-w-[128px] text-gray-900">
                     <div className="flex justify-between text-sm mb-1">
-                      <span className="flex items-center gap-1">
+                      <span className="flex items-center gap-1 text-gray-700">
                         <span className="w-2 h-2 bg-green-500 rounded-full" />
                         Свободно
                       </span>
@@ -142,7 +146,7 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
                     </div>
 
                     <div className="flex justify-between text-sm mb-1">
-                      <span>Занято</span>
+                      <span className="text-gray-700">Занято</span>
                       <span className="font-bold">
                         <span className="text-red-600">{sold}</span> / {capacity}
                       </span>
