@@ -82,8 +82,7 @@ export default function OwnerMoneyView() {
   });
 
   // ===== Pending (future days) =====
-  const [pendingDay, setPendingDay] = useState("tomorrow");
-
+  const [pendingDay, setPendingDay] = useState("today");
   const [pendingData, setPendingData] = useState(null);
   const [pendingLoading, setPendingLoading] = useState(false);
 
@@ -187,14 +186,10 @@ export default function OwnerMoneyView() {
   const revenue = Number(money.totals?.revenue || 0);
   const cash = Number(money.totals?.cash || 0);
   const card = Number(money.totals?.card || 0);
-  const pendingFromApi = money.totals?.pending;
 
   // "Ожидает оплаты" = продано, но оплата ещё не зафиксирована
   // Показываем ТОЛЬКО для "Сегодня", для остальных пресетов = 0
-  const awaitingPaymentRaw =
-    pendingFromApi !== undefined && pendingFromApi !== null
-      ? Number(pendingFromApi || 0)
-      : revenue - (cash + card);
+  const awaitingPaymentRaw = revenue - (cash + card);
   const isToday = preset === "today";
   const awaitingPayment = isToday ? Math.max(awaitingPaymentRaw, 0) : 0;
 
@@ -304,7 +299,7 @@ export default function OwnerMoneyView() {
           <div className="text-sm font-semibold">Ожидает оплаты (по дате рейса)</div>
           <div className="flex gap-1">
             {[
-              
+              { key: "today", label: "Сегодня" },
               { key: "tomorrow", label: "Завтра" },
               { key: "day2", label: "Послезавтра" },
             ].map((d) => (
@@ -329,12 +324,9 @@ export default function OwnerMoneyView() {
           <div className="mt-3 text-sm text-neutral-500">Загрузка…</div>
         ) : pendingData ? (
           <div className="mt-3 grid grid-cols-3 gap-2">
-            <MiniCard
-              label="Сумма"
-              value={formatRUB(pendingData.sum ?? pendingData.sum_pending ?? pendingData.amount ?? pendingData.total ?? 0)}
-            />
-            <MiniCard label="Билетов" value={formatInt(pendingData.tickets ?? pendingData.tickets_count ?? 0)} />
-            <MiniCard label="Рейсов" value={formatInt(pendingData.trips ?? pendingData.trips_count ?? 0)} />
+            <MiniCard label="Сумма" value={formatRUB(pendingData.pending_total)} />
+            <MiniCard label="Билетов" value={formatInt(pendingData.tickets_count)} />
+            <MiniCard label="Рейсов" value={formatInt(pendingData.trips_count)} />
           </div>
         ) : (
           <div className="mt-3 text-sm text-red-200">Ошибка загрузки pending</div>

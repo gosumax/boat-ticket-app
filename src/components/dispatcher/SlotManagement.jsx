@@ -105,17 +105,20 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
       });
     }
     
-    // Status filter - map based on is_active field
+    // Status filter
+    // active    = продаётся сейчас: активен + ещё не ушёл по времени
+    // completed = уже ушёл по времени (только для generated slots с trip_date)
+    // all       = без фильтра
     if (statusFilter !== 'all') {
+      const nowMs = Date.now();
       result = result.filter(slot => {
-        const isActive = slot.is_active;
-        
-        if (statusFilter === 'active') {
-          return isActive;
-        } else if (statusFilter === 'completed') {
-          // Assuming completed is not applicable for slots
-          return false;
-        }
+        const isActive = Boolean(Number(slot.is_active ?? 0));
+        const hasDateTime = !!slot.trip_date && !!slot.time;
+        const dt = hasDateTime ? new Date(`${slot.trip_date}T${slot.time}:00`) : null;
+        const finished = dt && Number.isFinite(dt.getTime()) ? dt.getTime() < nowMs : false;
+
+        if (statusFilter === 'active') return isActive && !finished;
+        if (statusFilter === 'completed') return finished;
         return true;
       });
     }

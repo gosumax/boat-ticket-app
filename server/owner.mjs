@@ -1,697 +1,421 @@
 import express from 'express';
 import db from './db.js';
-import { authenticateToken } from './auth.js';
 
 const router = express.Router();
 
-/* =========================
-   OWNER ONLY middleware
-========================= */
-function canOwnerAccess(req, res, next) {
+// =====================
+// Schema-safe helpers
+// =====================
+function pragmaTableInfo(table) {
   try {
-    const role = String(req.user?.role || '').toLowerCase();
-    if (role !== 'owner') return res.status(403).json({ error: 'OWNER_ONLY' });
-    return next();
+    return db.prepare(`PRAGMA table_info(${table})`).all();
   } catch {
-    return res.status(403).json({ error: 'OWNER_ONLY' });
+    return [];
   }
 }
 
-/* =========================
-   Safe DB helpers (NO CRASH)
-========================= */
-function safeGet(sql, params = [], fallback = null) {
-  try {
-    const row = db.prepare(sql).get(params);
-    return row ?? fallback;
-  } catch {
-    return fallback;
+function hasColumn(table, col) {
+  const cols = pragmaTableInfo(table);
+  const c = String(col).toLowerCase();
+  return cols.some((r) => String(r.name).toLowerCase() === c);
+}
+
+function pickFirstExisting(table, candidates, fallback) {
+  for (const c of candidates) {
+    if (hasColumn(table, c)) return c;
   }
+  return fallback;
 }
 
-function safeAll(sql, params = [], fallback = []) {
-  try {
-    const rows = db.prepare(sql).all(params);
-    return rows ?? fallback;
-  } catch {
-    return fallback;
+// Business rule:
+// - Revenue = SUM(total_price) by TRIP DAY (use presales.business_day if present, else DATE(created_at)).
+// - Cash/Card = only customer money received (exclude deposits/salary), from money_ledger POSTED.
+// - Pending = revenue - (cash+card) (UI computes it).
+
+function getTripDayExpr() {
+  // Prefer actual trip date for generated slots when available.
+  // This prevents "pending/revenue for today" from including tickets moved to tomorrow.
+
+  const gsDayCol = pickFirstExisting('generated_slots', ['trip_date', 'trip_day', 'day', 'date'], null);
+
+  // If boat_slots.start_time exists AND the caller JOINs boat_slots as "bs",
+  // prefer DATE(bs.start_time) as the trip day for regular slots.
+  const hasBoatSlotsStart = hasColumn('boat_slots', 'start_time');
+
+  const presaleDayFallback = hasColumn('presales', 'business_day')
+    ? 'COALESCE(p.business_day, DATE(p.created_at))'
+    : 'DATE(p.created_at)';
+
+  if (gsDayCol) {
+    // NOTE: slot_uid format is "generated:<id>".
+    // For non-generated slots: use boat_slots.start_time when present (requires JOIN boat_slots bs).
+    return `CASE
+      WHEN p.slot_uid LIKE 'generated:%' THEN (
+        SELECT DATE(gs.${gsDayCol})
+        FROM generated_slots gs
+        WHERE gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER)
+      )
+      ELSE ${hasBoatSlotsStart ? `COALESCE(DATE(bs.start_time), ${presaleDayFallback})` : presaleDayFallback}
+    END`;
   }
+
+  return hasBoatSlotsStart ? `COALESCE(DATE(bs.start_time), ${presaleDayFallback})` : presaleDayFallback;
 }
 
-function safeRun(sql, params = []) {
-  try {
-    return db.prepare(sql).run(params);
-  } catch {
-    return null;
+function salesLedgerWhere() {
+  // Only sales-related entries.
+  // Keep it conservative to avoid counting deposits/salary.
+  return `(
+    (ml.kind='PAYMENT' AND ml.type='PRESALE_PAYMENT')
+    OR (ml.kind='SELLER_SHIFT' AND (ml.type LIKE 'SALE_ACCEPTED_%' OR ml.type LIKE 'SALE_PREPAYMENT_%'))
+  )`;
+}
+
+function presetRange(preset) {
+  const p = String(preset || 'today');
+  // UI compatibility (OwnerBoatsView): today | yesterday | d7 | month | all
+  if (p === 'd7') return presetRange('7d');
+  if (p === 'month') return presetRange('30d');
+  if (p === 'today') {
+    return { from: "DATE('now','localtime')", to: "DATE('now','localtime')" };
   }
-}
-
-function tableExists(name) {
-  const r = safeGet(
-    `SELECT name FROM sqlite_master WHERE type='table' AND name=?`,
-    [name],
-    null
-  );
-  return !!r;
-}
-
-function columnExists(table, column) {
-  try {
-    const cols = db.prepare(`PRAGMA table_info(${table})`).all();
-    return cols.some((c) => c.name === column);
-  } catch {
-    return false;
+  if (p === 'yesterday') {
+    return { from: "DATE('now','localtime','-1 day')", to: "DATE('now','localtime','-1 day')" };
   }
+  if (p === '7d') {
+    return { from: "DATE('now','localtime','-6 day')", to: "DATE('now','localtime')" };
+  }
+  if (p === '30d') {
+    return { from: "DATE('now','localtime','-29 day')", to: "DATE('now','localtime')" };
+  }
+  if (p === '90d') {
+    return { from: "DATE('now','localtime','-89 day')", to: "DATE('now','localtime')" };
+  }
+  // last_nonzero_day handled separately
+  return { from: "DATE('now','localtime')", to: "DATE('now','localtime')" };
 }
 
-function fmtDate(d) {
-  return d.toISOString().slice(0, 10);
-}
-
-/* =========================
-   SETTINGS storage (NO CRASH)
-========================= */
-function ensureOwnerSettingsTable() {
-  safeRun(`
-    CREATE TABLE IF NOT EXISTS owner_settings (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      currency TEXT DEFAULT 'RUB',
-      timezone TEXT DEFAULT 'Europe/Moscow',
-      owner_name TEXT DEFAULT '',
-      company_name TEXT DEFAULT '',
-      phone TEXT DEFAULT '',
-      payout_target_rub INTEGER DEFAULT 0,
-      motivation_mode TEXT DEFAULT 'v1',
-      updated_at TEXT DEFAULT (datetime('now'))
+function resolveLastNonzeroDay() {
+  const tripDayExpr = getTripDayExpr();
+  const row = db
+    .prepare(
+      `SELECT ${tripDayExpr} AS day, COALESCE(SUM(p.total_price),0) AS revenue
+       FROM presales p
+       LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+       WHERE p.status='ACTIVE'
+       GROUP BY ${tripDayExpr}
+       HAVING revenue > 0
+       ORDER BY day DESC
+       LIMIT 1`
     )
-  `);
-
-  const row = safeGet(`SELECT id FROM owner_settings WHERE id=1`, [], null);
-  if (!row) safeRun(`INSERT INTO owner_settings (id) VALUES (1)`);
+    .get();
+  return row?.day || null;
 }
 
-/* =========================================================
-   GET /api/owner/dashboard
-   Агрегаты: today/yesterday/month + avg_check + trips + fill%
-            + topBoat/topSeller + revenueByDays(7)
-   НЕ ПАДАТЬ при отсутствии таблиц/полей.
-========================================================= */
-router.get('/dashboard', authenticateToken, canOwnerAccess, (req, res) => {
+// =====================
+// GET /api/owner/money/summary?preset=
+// =====================
+router.get('/money/summary', (req, res) => {
   try {
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const preset = String(req.query.preset || 'today');
 
-    const todayStr = fmtDate(today);
-    const yestStr = fmtDate(yesterday);
-    const monthStr = fmtDate(monthStart);
-
-    // если нет tickets — всё нули
-    const hasTickets = tableExists('tickets');
-    const hasBoatSlots = tableExists('boat_slots');
-    const hasBoats = tableExists('boats');
-    const hasUsers = tableExists('users');
-    const hasCreatedAt = hasTickets && columnExists('tickets', 'created_at');
-    const hasStatus = hasTickets && columnExists('tickets', 'status');
-    const hasBoatSlotId = hasTickets && columnExists('tickets', 'boat_slot_id');
-    const hasSellerId = hasTickets && columnExists('tickets', 'seller_id');
-
-    const statusFilter = hasStatus ? `status IN ('ACTIVE','USED') AND ` : ``;
-    const dateFilter = hasCreatedAt ? `DATE(created_at)=?` : `1=0`; // если created_at нет — 0
-
-    const revToday = hasTickets
-      ? safeGet(
-          `SELECT COALESCE(SUM(price),0) AS v FROM tickets WHERE ${statusFilter}${dateFilter}`,
-          [todayStr],
-          { v: 0 }
-        ).v
-      : 0;
-
-    const revYest = hasTickets
-      ? safeGet(
-          `SELECT COALESCE(SUM(price),0) AS v FROM tickets WHERE ${statusFilter}DATE(created_at)=?`,
-          [yestStr],
-          { v: 0 }
-        )?.v ?? 0
-      : 0;
-
-    const revMonth = hasTickets && hasCreatedAt
-      ? safeGet(
-          `SELECT COALESCE(SUM(price),0) AS v FROM tickets WHERE ${statusFilter}DATE(created_at) >= ?`,
-          [monthStr],
-          { v: 0 }
-        ).v
-      : 0;
-
-    const ticketsToday = hasTickets && hasCreatedAt
-      ? safeGet(
-          `SELECT COALESCE(COUNT(*),0) AS c FROM tickets WHERE ${statusFilter}DATE(created_at)=?`,
-          [todayStr],
-          { c: 0 }
-        ).c
-      : 0;
-
-    const ticketsMonth = hasTickets && hasCreatedAt
-      ? safeGet(
-          `SELECT COALESCE(COUNT(*),0) AS c FROM tickets WHERE ${statusFilter}DATE(created_at) >= ?`,
-          [monthStr],
-          { c: 0 }
-        ).c
-      : 0;
-
-    const avgCheckToday = ticketsToday > 0 ? Math.round(revToday / ticketsToday) : 0;
-    const avgCheckMonth = ticketsMonth > 0 ? Math.round(revMonth / ticketsMonth) : 0;
-
-    const tripsToday = hasTickets && hasBoatSlotId && hasCreatedAt
-      ? safeGet(
-          `SELECT COALESCE(COUNT(DISTINCT boat_slot_id),0) AS c
-           FROM tickets
-           WHERE ${statusFilter}DATE(created_at)=?`,
-          [todayStr],
-          { c: 0 }
-        ).c
-      : 0;
-
-    const tripsMonth = hasTickets && hasBoatSlotId && hasCreatedAt
-      ? safeGet(
-          `SELECT COALESCE(COUNT(DISTINCT boat_slot_id),0) AS c
-           FROM tickets
-           WHERE ${statusFilter}DATE(created_at) >= ?`,
-          [monthStr],
-          { c: 0 }
-        ).c
-      : 0;
-
-    // fill%: считаем только если есть boat_slots + tickets.boat_slot_id + tickets.created_at
-    let fillToday = 0;
-    let fillMonth = 0;
-
-    if (hasBoatSlots && hasTickets && hasBoatSlotId && hasCreatedAt) {
-      const fillTodayRow = safeGet(
-        `
-        SELECT
-          COALESCE(SUM(x.sold),0) AS sold,
-          COALESCE(SUM(x.cap),0)  AS cap
-        FROM (
-          SELECT
-            bs.id,
-            COALESCE(COUNT(t.id),0) AS sold,
-            COALESCE(bs.capacity,0) AS cap
-          FROM boat_slots bs
-          LEFT JOIN tickets t
-            ON t.boat_slot_id = bs.id
-           AND ${statusFilter}DATE(t.created_at)=?
-          GROUP BY bs.id
-        ) x
-        `,
-        [todayStr],
-        { sold: 0, cap: 0 }
-      );
-
-      fillToday = fillTodayRow.cap > 0 ? Math.round((fillTodayRow.sold / fillTodayRow.cap) * 100) : 0;
-
-      const fillMonthRow = safeGet(
-        `
-        SELECT
-          COALESCE(SUM(x.sold),0) AS sold,
-          COALESCE(SUM(x.cap),0)  AS cap
-        FROM (
-          SELECT
-            bs.id,
-            COALESCE(COUNT(t.id),0) AS sold,
-            COALESCE(bs.capacity,0) AS cap
-          FROM boat_slots bs
-          LEFT JOIN tickets t
-            ON t.boat_slot_id = bs.id
-           AND ${statusFilter}DATE(t.created_at) >= ?
-          GROUP BY bs.id
-        ) x
-        `,
-        [monthStr],
-        { sold: 0, cap: 0 }
-      );
-
-      fillMonth = fillMonthRow.cap > 0 ? Math.round((fillMonthRow.sold / fillMonthRow.cap) * 100) : 0;
-    }
-
-    // topBoat today (если нет схемы — null/0)
-    let topBoat = { name: null, type: null, revenue: 0, tickets: 0 };
-    if (hasTickets && hasBoatSlots && hasBoats && hasBoatSlotId && hasCreatedAt) {
-      topBoat = safeGet(
-        `
-        SELECT
-          b.name AS name,
-          COALESCE(b.type,'') AS type,
-          COALESCE(SUM(t.price),0) AS revenue,
-          COALESCE(COUNT(t.id),0) AS tickets
-        FROM tickets t
-        JOIN boat_slots bs ON bs.id = t.boat_slot_id
-        JOIN boats b ON b.id = bs.boat_id
-        WHERE ${statusFilter}DATE(t.created_at)=?
-        GROUP BY b.id
-        ORDER BY revenue DESC
-        LIMIT 1
-        `,
-        [todayStr],
-        topBoat
-      ) || topBoat;
-    }
-
-    // topSeller today (если нет seller_id/users — null/0)
-    let topSeller = { name: null, revenue: 0, tickets: 0 };
-    if (hasTickets && hasUsers && hasSellerId && hasCreatedAt) {
-      topSeller = safeGet(
-        `
-        SELECT
-          COALESCE(u.username, u.name, ('seller#' || u.id)) AS name,
-          COALESCE(SUM(t.price),0) AS revenue,
-          COALESCE(COUNT(t.id),0) AS tickets
-        FROM tickets t
-        JOIN users u ON u.id = t.seller_id
-        WHERE ${statusFilter}DATE(t.created_at)=?
-        GROUP BY u.id
-        ORDER BY revenue DESC
-        LIMIT 1
-        `,
-        [todayStr],
-        topSeller
-      ) || topSeller;
-    }
-
-    // revenueByDays last 7
-    const days = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-      days.push(fmtDate(d));
-    }
-
-    const revenueByDays = days.map((d) => {
-      const v = (hasTickets && hasCreatedAt)
-        ? (safeGet(
-            `SELECT COALESCE(SUM(price),0) AS v FROM tickets WHERE ${statusFilter}DATE(created_at)=?`,
-            [d],
-            { v: 0 }
-          )?.v ?? 0)
-        : 0;
-      return { date: d, revenue: v };
-    });
-
-    
-    // payments (safe, may be not ready)
-    const hasPaymentMethod = hasTickets && columnExists('tickets','payment_method');
-    let paymentsReady = false;
-    let payCash = 0;
-    let payCard = 0;
-
-    if (hasPaymentMethod && hasCreatedAt) {
-      paymentsReady = true;
-      payCash = safeGet(
-        `SELECT COALESCE(SUM(price),0) AS v FROM tickets WHERE ${statusFilter}DATE(created_at)=? AND payment_method='cash'`,
-        [todayStr],
-        { v: 0 }
-      ).v;
-      payCard = safeGet(
-        `SELECT COALESCE(SUM(price),0) AS v FROM tickets WHERE ${statusFilter}DATE(created_at)=? AND payment_method='card'`,
-        [todayStr],
-        { v: 0 }
-      ).v;
-    }
-
-    // byProduct today (safe)
-    let byProduct = { speed:0, cruise:0, banana:0, fishing:0 };
-    if (hasTickets && hasBoatSlots && hasBoats && hasCreatedAt) {
-      const rows = safeAll(
-        `
-        SELECT COALESCE(b.type,'') AS type, COALESCE(SUM(t.price),0) AS v
-        FROM tickets t
-        JOIN boat_slots bs ON bs.id = t.boat_slot_id
-        JOIN boats b ON b.id = bs.boat_id
-        WHERE ${statusFilter}DATE(t.created_at)=?
-        GROUP BY b.type
-        `,
-        [todayStr],
-        []
-      );
-      for (const r of rows) {
-        if (r.type === 'speed') byProduct.speed += r.v;
-        else if (r.type === 'cruise') byProduct.cruise += r.v;
-        else if (r.type === 'banana') byProduct.banana += r.v;
-        else if (r.type === 'fishing') byProduct.fishing += r.v;
+    let fromExpr;
+    let toExpr;
+    if (preset === 'last_nonzero_day') {
+      const day = resolveLastNonzeroDay();
+      if (!day) {
+        return res.json({
+          ok: true,
+          data: {
+            preset,
+            range: null,
+            totals: { revenue: 0, cash: 0, card: 0 },
+          },
+          meta: { warnings: ['no revenue days found'] },
+        });
       }
+      fromExpr = `'${day}'`;
+      toExpr = `'${day}'`;
+    } else {
+      const r = presetRange(preset);
+      fromExpr = r.from;
+      toExpr = r.to;
     }
 
-return res.json({
-      today: { revenue: revToday, tickets: ticketsToday, trips: tripsToday, avgCheck: avgCheckToday, fillPercent: fillToday, payments: { cash: payCash, card: payCard, ready: paymentsReady }, byProduct },
-      yesterday: { revenue: revYest },
-      month: { revenue: revMonth, tickets: ticketsMonth, trips: tripsMonth, avgCheck: avgCheckMonth, fillPercent: fillMonth },
-      topBoat: { name: topBoat.name, type: topBoat.type, revenue: topBoat.revenue, tickets: topBoat.tickets },
-      topSeller: { name: topSeller.name, revenue: topSeller.revenue, tickets: topSeller.tickets },
-      revenueByDays
-    });
-  } catch (e) {
-    console.error('OWNER dashboard error', e);
-    return res.status(500).json({ error: 'OWNER_DASHBOARD_FAILED' });
-  }
-});
+    const tripDayExpr = getTripDayExpr();
 
-/* =========================================================
-   GET /api/owner/boats
-   Список лодок + today/month агрегаты
-   НЕ ПАДАТЬ при отсутствии таблиц.
-========================================================= */
-router.get('/boats', authenticateToken, canOwnerAccess, (req, res) => {
-  try {
-    if (!tableExists('boats')) return res.json([]);
+    const revenueRow = db
+      .prepare(
+        `SELECT COALESCE(SUM(p.total_price),0) AS revenue
+         FROM presales p
+         LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+         WHERE p.status='ACTIVE'
+           AND ${tripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}`
+      )
+      .get();
 
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const todayStr = fmtDate(today);
-    const monthStr = fmtDate(monthStart);
+    const paidRow = db
+      .prepare(
+        `SELECT
+           COALESCE(SUM(CASE WHEN ml.method='CASH' THEN ml.amount ELSE 0 END),0) AS cash,
+           COALESCE(SUM(CASE WHEN ml.method='CARD' THEN ml.amount ELSE 0 END),0) AS card
+         FROM money_ledger ml
+         WHERE ml.status='POSTED'
+           AND ml.business_day BETWEEN ${fromExpr} AND ${toExpr}
+           AND ${salesLedgerWhere()}`
+      )
+      .get();
 
-    const hasTickets = tableExists('tickets');
-    const hasBoatSlots = tableExists('boat_slots');
-    const hasCreatedAt = hasTickets && columnExists('tickets', 'created_at');
-    const hasStatus = hasTickets && columnExists('tickets', 'status');
-    const hasBoatSlotId = hasTickets && columnExists('tickets', 'boat_slot_id');
+    const revenue = Number(revenueRow?.revenue || 0);
+    const cash = Number(paidRow?.cash || 0);
+    const card = Number(paidRow?.card || 0);
 
-    const statusFilter = hasStatus ? `t.status IN ('ACTIVE','USED') AND ` : ``;
-
-    // базовый список лодок (без падения)
-    const boatsBase = safeAll(
-      `
-      SELECT
-        b.id AS boat_id,
-        b.name AS boat_name,
-        COALESCE(b.type,'') AS boat_type
-      FROM boats b
-      ORDER BY b.id DESC
-      `
-    );
-
-    // если нет tickets/slots — вернём только базу с нулями
-    if (!hasTickets || !hasBoatSlots || !hasCreatedAt || !hasBoatSlotId) {
-      return res.json(
-        boatsBase.map((b) => ({
-          boat_id: b.boat_id,
-          boat_name: b.boat_name,
-          boat_type: b.boat_type,
-          today: { revenue: 0, tickets: 0, trips: 0, avgCheck: 0, fillPercent: 0 },
-          month: { revenue: 0, tickets: 0, trips: 0, avgCheck: 0, fillPercent: 0 }
-        }))
-      );
-    }
-
-    const todayRows = safeAll(
-      `
-      SELECT
-        b.id AS boat_id,
-        COALESCE(SUM(t.price),0) AS revenue_today,
-        COALESCE(COUNT(t.id),0) AS tickets_today,
-        COALESCE(COUNT(DISTINCT bs.id),0) AS trips_today,
-        COALESCE(SUM(bs.capacity),0) AS cap_sum_today
-      FROM boats b
-      LEFT JOIN boat_slots bs ON bs.boat_id = b.id
-      LEFT JOIN tickets t
-        ON t.boat_slot_id = bs.id
-       AND ${statusFilter}DATE(t.created_at)=?
-      GROUP BY b.id
-      `,
-      [todayStr],
-      []
-    );
-
-    const monthRows = safeAll(
-      `
-      SELECT
-        b.id AS boat_id,
-        COALESCE(SUM(t.price),0) AS revenue_month,
-        COALESCE(COUNT(t.id),0) AS tickets_month,
-        COALESCE(COUNT(DISTINCT bs.id),0) AS trips_month,
-        COALESCE(SUM(bs.capacity),0) AS cap_sum_month
-      FROM boats b
-      LEFT JOIN boat_slots bs ON bs.boat_id = b.id
-      LEFT JOIN tickets t
-        ON t.boat_slot_id = bs.id
-       AND ${statusFilter}DATE(t.created_at) >= ?
-      GROUP BY b.id
-      `,
-      [monthStr],
-      []
-    );
-
-    const todayMap = new Map(todayRows.map((r) => [r.boat_id, r]));
-    const monthMap = new Map(monthRows.map((r) => [r.boat_id, r]));
-
-    const out = boatsBase.map((b) => {
-      const t = todayMap.get(b.boat_id) || {};
-      const m = monthMap.get(b.boat_id) || {};
-
-      const fillToday = (t.cap_sum_today || 0) > 0 ? Math.round(((t.tickets_today || 0) / t.cap_sum_today) * 100) : 0;
-      const fillMonth = (m.cap_sum_month || 0) > 0 ? Math.round(((m.tickets_month || 0) / m.cap_sum_month) * 100) : 0;
-
-      const avgCheckToday = (t.tickets_today || 0) > 0 ? Math.round((t.revenue_today || 0) / t.tickets_today) : 0;
-      const avgCheckMonth = (m.tickets_month || 0) > 0 ? Math.round((m.revenue_month || 0) / m.tickets_month) : 0;
-
-      return {
-        boat_id: b.boat_id,
-        boat_name: b.boat_name,
-        boat_type: b.boat_type,
-        today: {
-          revenue: t.revenue_today || 0,
-          tickets: t.tickets_today || 0,
-          trips: t.trips_today || 0,
-          avgCheck: avgCheckToday,
-          fillPercent: fillToday,
-        },
-        month: {
-          revenue: m.revenue_month || 0,
-          tickets: m.tickets_month || 0,
-          trips: m.trips_month || 0,
-          avgCheck: avgCheckMonth,
-          fillPercent: fillMonth,
-        },
-      };
-    });
-
-    return res.json(out);
-  } catch (e) {
-    console.error('OWNER boats error', e);
-    return res.status(500).json({ error: 'OWNER_BOATS_FAILED' });
-  }
-});
-
-/* =========================================================
-   GET /api/owner/sellers
-   today/month leaderboard
-   Если нет users или нет tickets.seller_id — вернуть [].
-========================================================= */
-router.get('/sellers', authenticateToken, canOwnerAccess, (req, res) => {
-  try {
-    const hasTickets = tableExists('tickets');
-    const hasUsers = tableExists('users');
-    if (!hasTickets || !hasUsers) return res.json([]);
-
-    const hasSellerId = columnExists('tickets', 'seller_id');
-    const hasCreatedAt = columnExists('tickets', 'created_at');
-    if (!hasSellerId || !hasCreatedAt) return res.json([]);
-
-    const hasStatus = columnExists('tickets', 'status');
-    const statusFilter = hasStatus ? `t.status IN ('ACTIVE','USED') AND ` : ``;
-
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const todayStr = fmtDate(today);
-    const monthStr = fmtDate(monthStart);
-
-    const todayRows = safeAll(
-      `
-      SELECT
-        u.id AS seller_id,
-        COALESCE(u.username, u.name, ('seller#' || u.id)) AS seller_name,
-        COALESCE(SUM(t.price),0) AS revenue_today,
-        COALESCE(COUNT(t.id),0) AS tickets_today
-      FROM tickets t
-      JOIN users u ON u.id = t.seller_id
-      WHERE ${statusFilter}DATE(t.created_at)=?
-      GROUP BY u.id
-      ORDER BY revenue_today DESC
-      `,
-      [todayStr],
-      []
-    );
-
-    const monthRows = safeAll(
-      `
-      SELECT
-        u.id AS seller_id,
-        COALESCE(SUM(t.price),0) AS revenue_month,
-        COALESCE(COUNT(t.id),0) AS tickets_month
-      FROM tickets t
-      JOIN users u ON u.id = t.seller_id
-      WHERE ${statusFilter}DATE(t.created_at) >= ?
-      GROUP BY u.id
-      ORDER BY revenue_month DESC
-      `,
-      [monthStr],
-      []
-    );
-
-    const monthMap = new Map(monthRows.map((r) => [r.seller_id, r]));
-
-    const out = todayRows.map((r) => {
-      const m = monthMap.get(r.seller_id) || {};
-      return {
-        seller_id: r.seller_id,
-        seller_name: r.seller_name,
-        today: {
-          revenue: r.revenue_today || 0,
-          tickets: r.tickets_today || 0,
-        },
-        month: {
-          revenue: m.revenue_month || 0,
-          tickets: m.tickets_month || 0,
-        },
-      };
-    });
-
-    return res.json(out);
-  } catch (e) {
-    console.error('OWNER sellers error', e);
-    return res.status(500).json({ error: 'OWNER_SELLERS_FAILED' });
-  }
-});
-
-/* =========================================================
-   GET /api/owner/finance
-   Простой отчёт: totals + last 30 days (если tickets.created_at есть)
-========================================================= */
-router.get('/finance', authenticateToken, canOwnerAccess, (req, res) => {
-  try {
-    const hasTickets = tableExists('tickets');
-    const hasCreatedAt = hasTickets && columnExists('tickets', 'created_at');
-    const hasStatus = hasTickets && columnExists('tickets', 'status');
-    const statusFilter = hasStatus ? `status IN ('ACTIVE','USED') AND ` : ``;
-
-    if (!hasTickets || !hasCreatedAt) {
-      return res.json({
-        rangeDays: 30,
-        totals: { revenue: 0, tickets: 0 },
-        days: []
-      });
-    }
-
-    const rows = safeAll(
-      `
-      SELECT
-        date(created_at) AS day,
-        COALESCE(SUM(price),0) AS revenue,
-        COALESCE(COUNT(id),0) AS tickets
-      FROM tickets
-      WHERE ${statusFilter}date(created_at) >= date('now','-30 day')
-      GROUP BY date(created_at)
-      ORDER BY day ASC
-      `
-    );
-
-    const days = rows.map((r) => ({
-      day: r.day,
-      revenue: Number(r.revenue || 0),
-      tickets: Number(r.tickets || 0),
-    }));
-
-    const totals = {
-      revenue: days.reduce((a, x) => a + (x.revenue || 0), 0),
-      tickets: days.reduce((a, x) => a + (x.tickets || 0), 0),
-    };
-
-    return res.json({ rangeDays: 30, totals, days });
-  } catch (e) {
-    console.error('OWNER finance error', e);
-    return res.status(500).json({ error: 'OWNER_FINANCE_FAILED' });
-  }
-});
-
-/* =========================================================
-   GET /api/owner/settings
-========================================================= */
-router.get('/settings', authenticateToken, canOwnerAccess, (req, res) => {
-  try {
-    ensureOwnerSettingsTable();
-    const row = safeGet(`SELECT * FROM owner_settings WHERE id=1`, [], {}) || {};
-    return res.json({
-      settings: {
-        currency: row.currency ?? 'RUB',
-        timezone: row.timezone ?? 'Europe/Moscow',
-        ownerName: row.owner_name ?? '',
-        companyName: row.company_name ?? '',
-        phone: row.phone ?? '',
-        payoutTargetRub: Number(row.payout_target_rub ?? 0),
-        motivationMode: row.motivation_mode ?? 'v1',
-        updatedAt: row.updated_at ?? null,
-      }
-    });
-  } catch (e) {
-    console.error('OWNER settings get error', e);
-    return res.status(500).json({ error: 'OWNER_SETTINGS_GET_FAILED' });
-  }
-});
-
-/* =========================================================
-   PUT /api/owner/settings
-========================================================= */
-router.put('/settings', authenticateToken, canOwnerAccess, (req, res) => {
-  try {
-    ensureOwnerSettingsTable();
-    const p = req?.body || {};
-
-    const currency = typeof p.currency === 'string' ? p.currency : 'RUB';
-    const timezone = typeof p.timezone === 'string' ? p.timezone : 'Europe/Moscow';
-    const ownerName = typeof p.ownerName === 'string' ? p.ownerName : '';
-    const companyName = typeof p.companyName === 'string' ? p.companyName : '';
-    const phone = typeof p.phone === 'string' ? p.phone : '';
-    const payoutTargetRub =
-      typeof p.payoutTargetRub === 'number' && Number.isFinite(p.payoutTargetRub)
-        ? Math.trunc(p.payoutTargetRub)
-        : 0;
-    const motivationMode = typeof p.motivationMode === 'string' ? p.motivationMode : 'v1';
-
-    safeRun(
-      `
-      UPDATE owner_settings
-      SET
-        currency = ?,
-        timezone = ?,
-        owner_name = ?,
-        company_name = ?,
-        phone = ?,
-        payout_target_rub = ?,
-        motivation_mode = ?,
-        updated_at = datetime('now')
-      WHERE id = 1
-      `,
-      [currency, timezone, ownerName, companyName, phone, payoutTargetRub, motivationMode]
-    );
-
-    const row = safeGet(`SELECT * FROM owner_settings WHERE id=1`, [], {}) || {};
     return res.json({
       ok: true,
-      settings: {
-        currency: row.currency ?? 'RUB',
-        timezone: row.timezone ?? 'Europe/Moscow',
-        ownerName: row.owner_name ?? '',
-        companyName: row.company_name ?? '',
-        phone: row.phone ?? '',
-        payoutTargetRub: Number(row.payout_target_rub ?? 0),
-        motivationMode: row.motivation_mode ?? 'v1',
-        updatedAt: row.updated_at ?? null,
-      }
+      data: {
+        preset,
+        range: { from: null, to: null },
+        totals: { revenue, cash, card },
+      },
+      meta: { warnings: [] },
     });
   } catch (e) {
-    console.error('OWNER settings put error', e);
-    return res.status(500).json({ error: 'OWNER_SETTINGS_PUT_FAILED' });
+    return res.status(500).json({ ok: false, error: e?.message || 'money summary failed' });
+  }
+});
+
+// =====================
+// GET /api/owner/money/pending-by-day?day=today|tomorrow|day2
+// pending is grouped by TRIP DAY (same trip day expression)
+// =====================
+router.get('/money/pending-by-day', (req, res) => {
+  try {
+    const day = String(req.query.day || 'today');
+    let targetExpr = "DATE('now','localtime')";
+    if (day === 'tomorrow' || day === 'next') targetExpr = "DATE('now','localtime','+1 day')";
+    if (day === 'day2' || day === 'day_after' || day === 'after_tomorrow' || day === 'dayAfter' || day === 'afterTomorrow') targetExpr = "DATE('now','localtime','+2 day')";
+
+    const tripDayExpr = getTripDayExpr();
+
+    const seatsCol = pickFirstExisting('presales', ['number_of_seats', 'qty', 'seats'], null);
+    const ticketsAgg = seatsCol ? `COALESCE(SUM(p.${seatsCol}),0)` : `COUNT(*)`;
+
+    const row = db
+      .prepare(
+        `WITH paid AS (
+           SELECT presale_id, COALESCE(SUM(amount),0) AS paid_sum
+           FROM money_ledger ml
+           WHERE ml.status='POSTED'
+             AND ${salesLedgerWhere()}
+           GROUP BY presale_id
+         )
+         SELECT
+           COALESCE(SUM(CASE
+             WHEN (p.total_price - COALESCE(paid.paid_sum,0)) > 0 THEN (p.total_price - COALESCE(paid.paid_sum,0))
+             ELSE 0
+           END),0) AS sum_pending,
+           ${ticketsAgg} AS tickets,
+           COUNT(DISTINCT COALESCE(p.slot_uid, p.boat_slot_id)) AS trips
+         FROM presales p
+         LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+         LEFT JOIN paid ON paid.presale_id = p.id
+         WHERE p.status='ACTIVE'
+           AND ${tripDayExpr} = ${targetExpr}
+           AND (p.total_price - COALESCE(paid.paid_sum,0)) > 0`
+      )
+      .get();
+
+    return res.json({
+      ok: true,
+      data: {
+        day,
+        // Keep multiple aliases for frontend compatibility.
+        // Different UI revisions may read different keys (sum / sum_pending / amount / total).
+        sum: Number(row?.sum_pending || 0),
+        sum_pending: Number(row?.sum_pending || 0),
+        amount: Number(row?.sum_pending || 0),
+        total: Number(row?.sum_pending || 0),
+        tickets: Number(row?.tickets || 0),
+        trips: Number(row?.trips || 0),
+      },
+      meta: { warnings: [] },
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || 'pending-by-day failed' });
+  }
+});
+
+// =====================
+// GET /api/owner/money/compare-days?preset=7d|30d|90d
+// Rows are by trip day.
+// =====================
+router.get('/money/compare-days', (req, res) => {
+  try {
+    const preset = String(req.query.preset || '7d');
+    const r = presetRange(preset);
+    const tripDayExpr = getTripDayExpr();
+
+    const rows = db
+      .prepare(
+        `WITH paid AS (
+           SELECT business_day AS day,
+             COALESCE(SUM(CASE WHEN method='CASH' THEN amount ELSE 0 END),0) AS cash,
+             COALESCE(SUM(CASE WHEN method='CARD' THEN amount ELSE 0 END),0) AS card
+           FROM money_ledger ml
+           WHERE ml.status='POSTED'
+             AND ml.business_day BETWEEN ${r.from} AND ${r.to}
+             AND ${salesLedgerWhere()}
+           GROUP BY business_day
+         ),
+         rev AS (
+           SELECT ${tripDayExpr} AS day, COALESCE(SUM(total_price),0) AS revenue
+           FROM presales p
+           LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+           WHERE p.status='ACTIVE'
+             AND ${tripDayExpr} BETWEEN ${r.from} AND ${r.to}
+           GROUP BY ${tripDayExpr}
+         )
+         SELECT
+           rev.day AS day,
+           rev.revenue AS revenue,
+           COALESCE(paid.cash,0) AS cash,
+           COALESCE(paid.card,0) AS card
+         FROM rev
+         LEFT JOIN paid ON paid.day = rev.day
+         ORDER BY rev.day ASC`
+      )
+      .all();
+
+    return res.json({ ok: true, data: { preset, range: null, rows }, meta: { warnings: [] } });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || 'compare-days failed' });
+  }
+});
+
+// =====================
+// GET /api/owner/boats?preset=today|yesterday|d7|month|all
+// Aggregated by boat. Uses trip day expression (matches Money screens).
+// =====================
+router.get('/boats', (req, res) => {
+  try {
+    const preset = String(req.query.preset || 'today');
+    const warnings = [];
+
+    const tripDayExpr = getTripDayExpr();
+
+    // Range
+    let fromExpr = null;
+    let toExpr = null;
+    if (preset !== 'all') {
+      const r = presetRange(preset);
+      fromExpr = r.from;
+      toExpr = r.to;
+    }
+
+    const seatsCol = pickFirstExisting('presales', ['number_of_seats', 'qty', 'seats'], null);
+    const ticketsAgg = seatsCol ? `COALESCE(SUM(p.${seatsCol}),0)` : `COUNT(*)`;
+
+    const boatTypeCol = pickFirstExisting('boats', ['boat_type', 'type', 'category'], null);
+
+    // Per-boat aggregates (revenue/tickets/trips)
+    const whereRange = fromExpr && toExpr ? `AND ${tripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}` : '';
+
+    const boatsRows = db
+      .prepare(
+        `SELECT
+           b.id AS boat_id,
+           b.name AS boat_name,
+           ${boatTypeCol ? `b.${boatTypeCol} AS boat_type,` : `NULL AS boat_type,`}
+           COALESCE(SUM(p.total_price),0) AS revenue,
+           ${ticketsAgg} AS tickets,
+           COUNT(DISTINCT COALESCE(p.slot_uid, p.boat_slot_id)) AS trips
+         FROM presales p
+         JOIN boat_slots bs ON bs.id = p.boat_slot_id
+         JOIN boats b ON b.id = bs.boat_id
+         WHERE p.status='ACTIVE'
+           ${whereRange}
+         GROUP BY b.id
+         ORDER BY revenue DESC, tickets DESC, trips DESC, b.id ASC`
+      )
+      .all();
+
+    const boats = (boatsRows || []).map((r) => ({
+      boat_id: Number(r.boat_id),
+      boat_name: r.boat_name,
+      boat_type: r.boat_type,
+      revenue: Number(r.revenue || 0),
+      tickets: Number(r.tickets || 0),
+      trips: Number(r.trips || 0),
+      source: 'presales',
+    }));
+
+    const totals = boats.reduce(
+      (acc, x) => {
+        acc.revenue += Number(x.revenue || 0);
+        acc.tickets += Number(x.tickets || 0);
+        acc.trips += Number(x.trips || 0);
+        return acc;
+      },
+      { revenue: 0, tickets: 0, trips: 0 }
+    );
+
+    // Fill percent (best-effort): if generated_slots has seats_left and we can estimate capacity per slot.
+    // If not possible safely, return 0 (UI shows 0%).
+    let fillPercent = 0;
+    try {
+      const gsSeatsLeftCol = pickFirstExisting('generated_slots', ['seats_left', 'seatsLeft', 'left'], null);
+      if (gsSeatsLeftCol) {
+        // estimate capacity per slot as sold + max(seats_left,0)
+        const row = db
+          .prepare(
+            `WITH sold AS (
+               SELECT p.slot_uid AS slot_uid,
+                      ${seatsCol ? `COALESCE(SUM(p.${seatsCol}),0)` : `COUNT(*)`} AS sold
+               FROM presales p
+               LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+               WHERE p.status='ACTIVE'
+                 AND p.slot_uid LIKE 'generated:%'
+                 ${whereRange}
+               GROUP BY p.slot_uid
+             ),
+             cap AS (
+               SELECT sold.slot_uid AS slot_uid,
+                      sold.sold AS sold,
+                      (SELECT MAX(COALESCE(gs.${gsSeatsLeftCol},0),0)
+                       FROM generated_slots gs
+                       WHERE gs.id = CAST(substr(sold.slot_uid, 11) AS INTEGER)
+                      ) AS seats_left
+               FROM sold
+             )
+             SELECT
+               COALESCE(SUM(sold),0) AS sold_sum,
+               COALESCE(SUM(sold + seats_left),0) AS cap_sum
+             FROM cap`
+          )
+          .get();
+
+        const soldSum = Number(row?.sold_sum || 0);
+        const capSum = Number(row?.cap_sum || 0);
+        if (capSum > 0) {
+          fillPercent = Math.max(0, Math.min(100, Math.round((soldSum / capSum) * 100)));
+        }
+      }
+    } catch {
+      // ignore, keep 0
+    }
+
+    return res.json({
+      ok: true,
+      data: {
+        preset,
+        range: preset === 'all' ? null : { from: null, to: null },
+        totals: { ...totals, fillPercent },
+        boats,
+      },
+      meta: { warnings },
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e?.message || 'owner boats failed' });
   }
 });
 

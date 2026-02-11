@@ -2,14 +2,20 @@ import { useState, useEffect } from 'react';
 import { formatRUB } from '../../utils/currency';
 import { getSlotAvailable } from '../../utils/slotAvailability';
 
-const PresaleForm = ({ trip, onConfirm, onCancel, onBack }) => {
+const PresaleForm = ({ trip, onConfirm, onCancel, onBack, ticketBreakdown }) => {
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [numberOfSeats, setNumberOfSeats] = useState(1);
   const [prepaymentAmount, setPrepaymentAmount] = useState(0);
   const [errors, setErrors] = useState({});
 
-  const totalPrice = trip ? (trip.price_adult || trip.price) * numberOfSeats : 0;
+  const totalPrice = trip ? (
+    ticketBreakdown && typeof ticketBreakdown === 'object' ?
+      (Number(ticketBreakdown.adult || 0) * (trip.price_adult || trip.price)) +
+      (Number(ticketBreakdown.teen || 0)  * (trip.price_teen  || trip.price)) +
+      (Number(ticketBreakdown.child || 0) * (trip.price_child || trip.price))
+    : (trip.price_adult || trip.price) * numberOfSeats
+  ) : 0;
   const remainingAmount = totalPrice - prepaymentAmount;
 
   // Update remaining amount when prepayment or total price changes
@@ -55,13 +61,23 @@ const PresaleForm = ({ trip, onConfirm, onCancel, onBack }) => {
 
   const handleConfirm = () => {
     if (validateForm()) {
-      onConfirm({
+      const payload = {
         slotUid: trip.slot_uid,
         customerName: customerName.trim(),
         customerPhone: customerPhone.trim(),
         numberOfSeats,
         prepaymentAmount
-      });
+      };
+
+      if (ticketBreakdown && typeof ticketBreakdown === 'object') {
+        payload.tickets = {
+          adult: Number(ticketBreakdown.adult || 0),
+          teen: Number(ticketBreakdown.teen || 0),
+          child: Number(ticketBreakdown.child || 0)
+        };
+      }
+
+      onConfirm(payload);
     }
   };
 

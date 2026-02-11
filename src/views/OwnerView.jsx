@@ -1,11 +1,12 @@
 import { useAuth } from "../contexts/AuthContext";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import apiClient from "../utils/apiClient.js";
 import OwnerMoneyView from "./OwnerMoneyView";
 import OwnerBoatsView from "./OwnerBoatsView";
 import OwnerSellersView from "./OwnerSellersView";
 import OwnerMotivationView from "./OwnerMotivationView";
 import OwnerSettingsView from "./OwnerSettingsView";
-import OwnerLoadView from "./OwnerLoadView";
+import OwnerLoadView from "../components/owner/OwnerLoadView.jsx";
 import OwnerExportView from "./OwnerExportView";
 
 /**
@@ -23,102 +24,123 @@ import OwnerExportView from "./OwnerExportView";
  * - Show metrics with A, B, delta
  */
 function OwnerComparePeriodsView() {
-  const [preset, setPreset] = useState("week"); // week | month | season | custom
+  const [preset, setPreset] = useState("7d");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [rows, setRows] = useState([]);
+  const [range, setRange] = useState(null);
+  const [warnings, setWarnings] = useState([]);
 
-  const periodLabels = useMemo(() => {
-    switch (preset) {
-      case "week":
-        return { a: "Эта неделя", b: "Прошлая неделя" };
-      case "month":
-        return { a: "Этот месяц", b: "Прошлый месяц" };
-      case "season":
-        return { a: "Текущий сезон", b: "Прошлый сезон" };
-      default:
-        return { a: "Период A", b: "Период B" };
+  const load = async () => {
+    setErr("");
+    setBusy(true);
+    try {
+      const json = await apiClient.request(
+        `/owner/money/compare-days?preset=${encodeURIComponent(preset)}`,
+        { method: "GET" }
+      );
+      setRows(json?.data?.rows || []);
+      setRange(json?.data?.range || null);
+      setWarnings(json?.meta?.warnings || []);
+    } catch (e) {
+      setErr(e?.message || "Ошибка загрузки");
+      setRows([]);
+      setRange(null);
+      setWarnings([]);
+    } finally {
+      setBusy(false);
     }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset]);
 
-  const metrics = [
-    { title: "Выручка", a: "2 480 000 ₽", b: "2 120 000 ₽", delta: "+17%" },
-    { title: "Средний чек", a: "3 950 ₽", b: "3 700 ₽", delta: "+6.8%" },
-    { title: "Загрузка лодок", a: "76%", b: "71%", delta: "+5%" },
-    { title: "Активные продавцы", a: "12", b: "11", delta: "+1" },
-  ];
+  const manualOn = useMemo(() => (warnings || []).join("\n").toLowerCase().includes("manual override"), [warnings]);
+
+  const maxRev = useMemo(() => {
+    let m = 0;
+    for (const r of rows || []) m = Math.max(m, Number(r.revenue || 0));
+    return m;
+  }, [rows]);
 
   return (
-    <div className="p-4 space-y-4">
-      <div className="text-xl font-semibold">Owner · Сравнение периодов</div>
-
-      {/* Presets */}
-      <div className="flex flex-wrap gap-2 pb-1 overflow-x-hidden">
-        <PresetChip
-          active={preset === "week"}
-          onClick={() => setPreset("week")}
-          label="Эта неделя ↔ прошлая"
-        />
-        <PresetChip
-          active={preset === "month"}
-          onClick={() => setPreset("month")}
-          label="Этот месяц ↔ прошлый"
-        />
-        <PresetChip
-          active={preset === "season"}
-          onClick={() => setPreset("season")}
-          label="Сезон ↔ прошлый"
-        />
-        <PresetChip
-          active={preset === "custom"}
-          onClick={() => setPreset("custom")}
-          label="Произвольный ↔ произвольный"
-        />
+    <div className="p-4 pb-24 space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-xl font-semibold">Сравнение</div>
+        {manualOn && (
+          <div className="text-[11px] px-2 py-1 rounded-full border border-amber-500/50 text-amber-300 bg-amber-900/20">
+            manual
+          </div>
+        )}
       </div>
 
-      {/* Period A / B pickers (UI buttons) */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="rounded-2xl border border-neutral-800 p-2 flex items-center justify-between gap-2">
+        <div className="flex gap-2 overflow-x-auto">
+          <PresetChip active={preset === "7d"} onClick={() => setPreset("7d")} label="7 дней" />
+          <PresetChip active={preset === "30d"} onClick={() => setPreset("30d")} label="30 дней" />
+          <PresetChip active={preset === "90d"} onClick={() => setPreset("90d")} label="90 дней" />
+        </div>
         <button
           type="button"
-          className="rounded-2xl border border-neutral-800 p-3 text-left"
+          onClick={load}
+          className="rounded-xl border border-neutral-800 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-900/40"
+          disabled={busy}
         >
-          <div className="text-xs text-neutral-500">Период A</div>
-          <div className="font-semibold mt-1">{periodLabels.a}</div>
-          <div className="text-xs text-neutral-600 mt-1">выбор позже</div>
-        </button>
-        <button
-          type="button"
-          className="rounded-2xl border border-neutral-800 p-3 text-left"
-        >
-          <div className="text-xs text-neutral-500">Период B</div>
-          <div className="font-semibold mt-1">{periodLabels.b}</div>
-          <div className="text-xs text-neutral-600 mt-1">выбор позже</div>
+          {busy ? "..." : "Обновить"}
         </button>
       </div>
 
-      {/* Metrics comparison */}
-      <div className="space-y-3">
-        {metrics.map((m) => (
-          <div
-            key={m.title}
-            className="rounded-2xl border border-neutral-800 p-4"
-          >
-            <div className="text-sm text-neutral-400 mb-2">{m.title}</div>
-            <div className="grid grid-cols-3 gap-3 items-end">
-              <div className="min-w-0">
-                <div className="text-xs text-neutral-500">A</div>
-                <div className="font-semibold truncate">{m.a}</div>
+      {err && (
+        <div className="rounded-2xl border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-200">
+          {err}
+        </div>
+      )}
+
+      <div className="rounded-2xl border border-neutral-800 p-3 text-xs text-neutral-500">
+        Диапазон: {range?.from && range?.to ? `${range.from} → ${range.to}` : "—"}
+      </div>
+
+      <div className="space-y-2">
+        {(rows || []).slice().reverse().map((r) => {
+          const revenue = Number(r.revenue || 0);
+          const pct = maxRev > 0 ? Math.round((revenue / maxRev) * 100) : 0;
+          return (
+            <div key={r.day} className="rounded-2xl border border-neutral-800 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold">{r.day}</div>
+                <div className="text-sm text-neutral-200">{formatRUB(revenue)}</div>
               </div>
-              <div className="min-w-0">
-                <div className="text-xs text-neutral-500">B</div>
-                <div className="font-semibold truncate">{m.b}</div>
+              <div className="mt-2 h-2 rounded-full bg-neutral-900 overflow-hidden">
+                <div className="h-full bg-amber-900/70" style={{ width: `${Math.max(2, pct)}%` }} />
               </div>
-              <div className="font-semibold text-amber-400 whitespace-nowrap text-right">
-                {m.delta}
+              <div className="mt-2 text-xs text-neutral-500 flex gap-3">
+                <div>cash: {formatRUB(r.cash || 0)}</div>
+                <div>card: {formatRUB(r.card || 0)}</div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
+        {(rows || []).length === 0 && !err && (
+          <div className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-500">Нет данных</div>
+        )}
       </div>
     </div>
   );
+}
+
+function formatRUB(v) {
+  const n = Number(v || 0);
+  try {
+    return new Intl.NumberFormat("ru-RU", {
+      style: "currency",
+      currency: "RUB",
+      maximumFractionDigits: 0,
+    }).format(n);
+  } catch {
+    return `${Math.round(n)} ₽`;
+  }
 }
 
 function PresetChip({ active, onClick, label }) {

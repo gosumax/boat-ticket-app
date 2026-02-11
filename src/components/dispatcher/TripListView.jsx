@@ -46,6 +46,28 @@ function typePill(type) {
   return 'bg-neutral-700/20 border-neutral-700/40 text-neutral-200';
 }
 
+function parseTripDateTime(trip) {
+  const d = trip?.trip_date ? String(trip.trip_date) : '';
+  const t = trip?.time ? String(trip.time) : '';
+  if (!d || !t) return null;
+  // local time (no timezone suffix)
+  const dt = new Date(`${d}T${t}:00`);
+  if (!Number.isFinite(dt.getTime())) return null;
+  return dt;
+}
+
+function isFinishedTrip(trip) {
+  const dt = parseTripDateTime(trip);
+  if (!dt) return false;
+  return dt.getTime() < Date.now();
+}
+
+function isActiveFlag(trip) {
+  const v = trip?.is_active ?? trip?.active ?? trip?.isActive;
+  if (v == null) return true;
+  return Boolean(Number(v));
+}
+
 const TripListView = ({
   dateFrom,
   dateTo,
@@ -99,8 +121,16 @@ if (dateFrom && dateTo) {
 
         if (statusFilter && statusFilter !== 'all') {
           const st = String(s.status || s.slot_status || '').toLowerCase();
+          const doneByStatus = st.includes('completed') || st.includes('done') || st.includes('finished');
+          const doneByTime = isFinishedTrip(s);
+
           if (statusFilter === 'active') {
-            if (st.includes('completed') || st.includes('done') || st.includes('finished')) return false;
+            // "Активные" = продаются сейчас: не ушёл по времени + активен (не отменён)
+            if (doneByStatus || doneByTime) return false;
+            if (!isActiveFlag(s)) return false;
+          } else if (statusFilter === 'completed') {
+            // "Завершённые" = уже ушёл (по времени) или явно помечен как completed
+            if (!(doneByStatus || doneByTime)) return false;
           }
         }
 
@@ -175,11 +205,6 @@ if (dateFrom && dateTo) {
               <div
                 key={key}
                 className={`relative text-left rounded-2xl border border-neutral-800 bg-neutral-900 p-3 pointer-events-none ${filled <= 4 ? "ring-2 ring-red-500/40 shadow-[0_0_18px_rgba(239,68,68,0.25)]" : filled <= 9 ? "ring-2 ring-amber-400/40 shadow-[0_0_18px_rgba(251,191,36,0.25)]" : "ring-2 ring-emerald-500/40 shadow-[0_0_18px_rgba(16,185,129,0.28)]"}`}>
-                {false && (
-                  <div className="absolute top-16 right-6 w-10 h-10 rounded-2xl border border-emerald-600/50 bg-emerald-600/15 flex items-center justify-center">
-                    
-                  </div>
-                )}
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 min-w-0">

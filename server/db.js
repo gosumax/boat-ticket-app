@@ -961,4 +961,308 @@ if (presalesSlotUidCheck.count === 0) {
   process.exit(1);
 }
 
+
+
+// =========================
+// MANUAL (Owner offline input) schema (Task 10)
+// IMPORTANT: additive-only. Does not affect seller/dispatcher/admin flows.
+// Tables:
+// - manual_batches: stores draft payload for a date range
+// - manual_days: per-day flag for manual override (analytics priority manual > online)
+// - manual_boat_stats: per-day aggregates per boat
+// - manual_seller_stats: per-day aggregates per seller
+// =========================
+try {
+  const manualSchemaCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'manual_owner_schema_v1'").get();
+  if (manualSchemaCheck.count === 0) {
+    console.log('[MANUAL_SCHEMA] Creating manual owner tables...');
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS manual_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date_from TEXT NOT NULL,
+        date_to TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        locked INTEGER NOT NULL DEFAULT 0,
+        locked_at TEXT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS manual_days (
+        period TEXT PRIMARY KEY,
+        locked INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS manual_boat_stats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        period TEXT NOT NULL,
+        boat_id INTEGER NULL,
+        revenue REAL NOT NULL DEFAULT 0,
+        trips_completed INTEGER NOT NULL DEFAULT 0,
+        seats_sold INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_manual_boat_stats_period ON manual_boat_stats(period);
+      CREATE INDEX IF NOT EXISTS idx_manual_boat_stats_boat ON manual_boat_stats(boat_id);
+
+      CREATE TABLE IF NOT EXISTS manual_seller_stats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        period TEXT NOT NULL,
+        seller_id INTEGER NULL,
+        revenue REAL NOT NULL DEFAULT 0,
+        seats_sold INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_manual_seller_stats_period ON manual_seller_stats(period);
+      CREATE INDEX IF NOT EXISTS idx_manual_seller_stats_seller ON manual_seller_stats(seller_id);
+    `);
+
+    // Mark as done
+    db.prepare("INSERT INTO settings (key, value) VALUES ('manual_owner_schema_v1', 'true')").run();
+    console.log('[MANUAL_SCHEMA] Manual owner tables created and marked as done');
+  } else {
+    console.log('[MANUAL_SCHEMA] Manual owner tables already exist, skipping...');
+  }
+} catch (e) {
+  console.log('[MANUAL_SCHEMA] Warning: could not create manual owner tables:', e?.message || e);
+}
+
 export default db;
+
+
+/* =========================
+   SALES TRANSACTIONS (CANONICAL MONEY LAYER)
+   Additive-only. Does NOT affect seller/dispatcher flows yet.
+========================= */
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sales_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      business_day TEXT NOT NULL,
+      presale_id INTEGER NULL,
+      slot_id INTEGER NULL,
+      slot_uid TEXT NULL,
+      slot_source TEXT NULL, -- generated_slots | manual
+      amount INTEGER NOT NULL DEFAULT 0,
+      qty INTEGER NOT NULL DEFAULT 0,
+      method TEXT NULL, -- CASH | CARD
+      status TEXT NOT NULL DEFAULT 'VALID',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+} catch (e) {
+  console.log('[SALES_TRANSACTIONS] create skipped:', e?.message || e);
+}
+
+
+/* =========================
+   STEP 5: Append-only sales_transactions auto-fill (future-only)
+   Goal: start populating canonical money layer WITHOUT touching seller/dispatcher/admin code.
+   Approach: SQLite trigger on tickets INSERT -> sales_transactions INSERT OR IGNORE.
+   Notes:
+   - Uses presales.slot_uid when available to infer slot_source/slot_id.
+   - Safe-by-default: if required columns are missing, trigger is not created.
+========================= */
+try {
+  // Ensure sales_transactions has ticket_id column + unique index (idempotent)
+  try {
+    const stCols = db.prepare("PRAGMA table_info(sales_transactions)").all().map(r => r.name);
+    if (!stCols.includes("ticket_id")) {
+      db.exec("ALTER TABLE sales_transactions ADD COLUMN ticket_id INTEGER NULL");
+      console.log("[SALES_TRANSACTIONS] Added ticket_id column");
+    }
+  } catch {}
+
+  try {
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_transactions_ticket_id ON sales_transactions(ticket_id) WHERE ticket_id IS NOT NULL");
+  } catch {}
+
+  const hasTickets = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tickets'").get();
+  if (!hasTickets) {
+    console.log("[TRIGGER] tickets table missing, skipping trigger setup");
+  } else {
+    const tCols = db.prepare("PRAGMA table_info(tickets)").all().map(r => r.name);
+    const hasPresales = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='presales'").get();
+    const pCols = hasPresales ? db.prepare("PRAGMA table_info(presales)").all().map(r => r.name) : [];
+
+    const hasTicketCreatedAt = tCols.includes("created_at");
+    const hasTicketBusinessDay = tCols.includes("business_day");
+    const hasTicketMethod = tCols.includes("payment_method");
+    const hasTicketStatus = tCols.includes("status");
+    const hasPresaleId = tCols.includes("presale_id");
+    const hasSlotId = tCols.includes("boat_slot_id");
+
+    const hasPresalesSlotUid = hasPresales && pCols.includes("slot_uid");
+
+    // Minimum required: price + (business_day or created_at) + boat_slot_id
+    if (tCols.includes("price") && (hasTicketBusinessDay || hasTicketCreatedAt) && hasSlotId) {
+      const businessDayExpr = hasTicketBusinessDay ? "NEW.business_day" : "DATE(NEW.created_at)";
+      const methodExpr = hasTicketMethod ? "NEW.payment_method" : "NULL";
+      const statusExpr = hasTicketStatus
+        ? "CASE WHEN NEW.status IN ('ACTIVE','USED') THEN 'VALID' ELSE 'INVALID' END"
+        : "'VALID'";
+
+      const presaleExpr = hasPresaleId ? "NEW.presale_id" : "NULL";
+
+      const slotUidExpr = (hasPresaleId && hasPresalesSlotUid)
+        ? "(SELECT slot_uid FROM presales WHERE id = NEW.presale_id)"
+        : "NULL";
+
+      const slotSourceExpr = (hasPresaleId && hasPresalesSlotUid)
+        ? "CASE WHEN (SELECT slot_uid FROM presales WHERE id = NEW.presale_id) LIKE 'generated:%' THEN 'generated_slots' " +
+          "WHEN (SELECT slot_uid FROM presales WHERE id = NEW.presale_id) LIKE 'manual:%' THEN 'manual' ELSE NULL END"
+        : "NULL";
+
+      const slotIdExpr = (hasPresaleId && hasPresalesSlotUid)
+        ? "CASE WHEN instr((SELECT slot_uid FROM presales WHERE id = NEW.presale_id), ':') > 0 " +
+          "THEN CAST(substr((SELECT slot_uid FROM presales WHERE id = NEW.presale_id), instr((SELECT slot_uid FROM presales WHERE id = NEW.presale_id), ':') + 1) AS INTEGER) " +
+          "ELSE NULL END"
+        : "NULL";
+
+      try { db.exec("DROP TRIGGER IF EXISTS trg_TICKETS_TO_SALES_TRANSACTIONS"); } catch {}
+
+      db.exec(`
+        CREATE TRIGGER trg_TICKETS_TO_SALES_TRANSACTIONS
+        AFTER INSERT ON tickets
+        BEGIN
+          INSERT OR IGNORE INTO sales_transactions (
+            business_day,
+            presale_id,
+            slot_id,
+            slot_uid,
+            slot_source,
+            amount,
+            qty,
+            method,
+            status,
+            ticket_id
+          ) VALUES (
+            ${businessDayExpr},
+            ${presaleExpr},
+            ${slotIdExpr},
+            ${slotUidExpr},
+            ${slotSourceExpr},
+            COALESCE(NEW.price,0),
+            1,
+            ${methodExpr},
+            ${statusExpr},
+            NEW.id
+          );
+        END;
+      `);
+
+      console.log("[TRIGGER] trg_TICKETS_TO_SALES_TRANSACTIONS created");
+    } else {
+      console.log("[TRIGGER] trg_TICKETS_TO_SALES_TRANSACTIONS skipped (missing required tickets columns)");
+    }
+  }
+} catch (e) {
+  console.log("[TRIGGER] tickets->sales_transactions setup failed:", e?.message || e);
+}
+
+
+/* =========================
+   STEP 8: Keep sales_transactions in sync on ticket UPDATE/DELETE
+   - UPDATE: adjust amount/business_day/method, set VALID/INVALID by ticket status
+   - DELETE: mark as INVALID
+   Safe-by-default: only created when required columns exist.
+========================= */
+try {
+  const hasTickets = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tickets'").get();
+  const hasST = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions'").get();
+  if (hasTickets && hasST) {
+    const tCols = db.prepare("PRAGMA table_info(tickets)").all().map(r => r.name);
+    const hasBusinessDay = tCols.includes("business_day");
+    const hasCreatedAt = tCols.includes("created_at");
+    const hasStatus = tCols.includes("status");
+    const hasPrice = tCols.includes("price");
+    const hasMethod = tCols.includes("payment_method");
+
+    const businessDayExpr = hasBusinessDay ? "NEW.business_day" : (hasCreatedAt ? "DATE(NEW.created_at)" : "NULL");
+    const statusExpr = hasStatus
+      ? "CASE WHEN NEW.status IN ('ACTIVE','USED') THEN 'VALID' ELSE 'INVALID' END"
+      : "'VALID'";
+    const methodExpr = hasMethod ? "NEW.payment_method" : "method";
+
+    if (businessDayExpr !== "NULL" && hasPrice) {
+      try { db.exec("DROP TRIGGER IF EXISTS trg_TICKETS_TO_SALES_TRANSACTIONS_UPDATE"); } catch {}
+      db.exec(`
+        CREATE TRIGGER trg_TICKETS_TO_SALES_TRANSACTIONS_UPDATE
+        AFTER UPDATE ON tickets
+        BEGIN
+          UPDATE sales_transactions
+          SET business_day = ${businessDayExpr},
+              amount = COALESCE(NEW.price,0),
+              method = ${methodExpr},
+              status = ${statusExpr}
+          WHERE ticket_id = NEW.id;
+        END;
+      `);
+      console.log("[TRIGGER] trg_TICKETS_TO_SALES_TRANSACTIONS_UPDATE created");
+    } else {
+      console.log("[TRIGGER] trg_TICKETS_TO_SALES_TRANSACTIONS_UPDATE skipped (missing required tickets columns)");
+    }
+
+    try { db.exec("DROP TRIGGER IF EXISTS trg_TICKETS_TO_SALES_TRANSACTIONS_DELETE"); } catch {}
+    db.exec(`
+      CREATE TRIGGER trg_TICKETS_TO_SALES_TRANSACTIONS_DELETE
+      AFTER DELETE ON tickets
+      BEGIN
+        UPDATE sales_transactions
+        SET status = 'INVALID'
+        WHERE ticket_id = OLD.id;
+      END;
+    `);
+    console.log("[TRIGGER] trg_TICKETS_TO_SALES_TRANSACTIONS_DELETE created");
+  }
+} catch (e) {
+  console.log("[TRIGGER] update/delete sync setup failed:", e?.message || e);
+}
+
+
+/* =========================
+   STEP 13: Performance indexes (additive-only)
+========================= */
+try {
+  // sales_transactions indexes
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_sales_tx_day ON sales_transactions(business_day)"); } catch {}
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_sales_tx_status ON sales_transactions(status)"); } catch {}
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_sales_tx_ticket_id ON sales_transactions(ticket_id)"); } catch {}
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_sales_tx_day_status ON sales_transactions(business_day, status)"); } catch {}
+
+  // tickets indexes (only if columns exist)
+  try {
+    const tCols = db.prepare("PRAGMA table_info(tickets)").all().map(r => r.name);
+    if (tCols.includes('business_day')) {
+      db.exec("CREATE INDEX IF NOT EXISTS idx_tickets_business_day ON tickets(business_day)");
+    }
+    if (tCols.includes('created_at')) {
+      db.exec("CREATE INDEX IF NOT EXISTS idx_tickets_created_at ON tickets(created_at)");
+    }
+    if (tCols.includes('status')) {
+      db.exec("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status)");
+    }
+  } catch {}
+} catch (e) {
+  console.log('[INDEXES] setup failed:', e?.message || e);
+}
+
+
+/* =========================
+   STEP 17: Owner audit log (additive-only)
+========================= */
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS owner_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      action TEXT NOT NULL,
+      request_id TEXT,
+      meta_json TEXT,
+      ip TEXT
+    );
+  `);
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_owner_audit_created_at ON owner_audit_log(created_at)"); } catch {}
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_owner_audit_action ON owner_audit_log(action)"); } catch {}
+} catch (e) {
+  console.log('[OWNER_AUDIT_LOG] init failed:', e?.message || e);
+}

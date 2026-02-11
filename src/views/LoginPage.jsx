@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 
 const STORAGE_KEY = "last_logins";
+const REMEMBER_KEY = "remember_login_v1";
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -10,6 +11,7 @@ export default function LoginPage() {
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberPassword, setRememberPassword] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [savedLogins, setSavedLogins] = useState([]);
@@ -18,9 +20,19 @@ export default function LoginPage() {
   useEffect(() => {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
     setSavedLogins(stored);
-    if (stored.length > 0) {
-      setUsername(stored[0]); // последний использованный
-    }
+    // 1) если есть сохранённые учётные данные (логин+пароль) — подставляем их
+    try {
+      const remembered = JSON.parse(localStorage.getItem(REMEMBER_KEY) || "null");
+      if (remembered && typeof remembered === 'object') {
+        if (remembered.username) setUsername(String(remembered.username));
+        if (remembered.password) setPassword(String(remembered.password));
+        setRememberPassword(true);
+        return;
+      }
+    } catch {}
+
+    // 2) иначе — подставляем последний логин из истории
+    if (stored.length > 0) setUsername(stored[0]);
   }, []);
 
   // если уже залогинен — уходим
@@ -49,6 +61,16 @@ export default function LoginPage() {
     try {
       await login(username, password);
       saveLogin(username);
+
+      // remember password (optional)
+      if (rememberPassword) {
+        localStorage.setItem(
+          REMEMBER_KEY,
+          JSON.stringify({ username: String(username || ''), password: String(password || '') })
+        );
+      } else {
+        localStorage.removeItem(REMEMBER_KEY);
+      }
     } catch (e) {
       setError(e?.message || "Ошибка входа");
     } finally {
@@ -106,6 +128,22 @@ export default function LoginPage() {
             required
           />
         </div>
+
+        {/* REMEMBER */}
+        <label className="flex items-center gap-2 mb-4 text-sm select-none">
+          <input
+            type="checkbox"
+            checked={rememberPassword}
+            onChange={(e) => {
+              const checked = !!e.target.checked;
+              setRememberPassword(checked);
+              if (!checked) {
+                try { localStorage.removeItem(REMEMBER_KEY); } catch {}
+              }
+            }}
+          />
+          Запомнить пароль
+        </label>
 
         <button
           type="submit"

@@ -106,6 +106,34 @@ function buildPassengerLabel(ticket) {
   return ageLabel ? `${base} (${ageLabel})` : base;
 }
 
+function getAgeCategoryLabel(ageCategory) {
+  const age = String(ageCategory || '').toLowerCase();
+  if (age === 'adult') return 'Взрослый';
+  if (age === 'teen') return 'Подростковый';
+  if (age === 'child') return 'Детский';
+  return '—';
+}
+
+function getTicketPrice(ticket, trip) {
+  const direct = ticket?.price ?? ticket?.amount ?? ticket?.ticket_price;
+  const n = Number(direct);
+  if (Number.isFinite(n) && n > 0) return Math.round(n);
+
+  const age = String(ticket?.age_category || '').toLowerCase();
+  const pAdult = Number(trip?.price_adult ?? trip?.price ?? 0);
+  const pTeen = Number(trip?.price_teen ?? trip?.price ?? 0);
+  const pChild = Number(trip?.price_child ?? trip?.price ?? 0);
+
+  if (age === 'teen' && Number.isFinite(pTeen) && pTeen > 0) return Math.round(pTeen);
+  if (age === 'child' && Number.isFinite(pChild) && pChild > 0) return Math.round(pChild);
+  if (age === 'adult' && Number.isFinite(pAdult) && pAdult > 0) return Math.round(pAdult);
+
+  // last resort: try common fields from backend
+  const fallback = Number(ticket?.total_price || 0);
+  if (Number.isFinite(fallback) && fallback > 0) return Math.round(fallback);
+  return 0;
+}
+
 function getPresaleTicketsArray(presaleId, ticketsMap) {
   const entry = ticketsMap?.[presaleId];
   if (!entry) return [];
@@ -523,6 +551,28 @@ const loadTransferOptions = async (ctx) => {
       return;
     }
 
+    // If deleting the LAST ACTIVE ticket of a presale that has prepayment,
+    // require dispatcher decision: refund prepay vs send to seasonal fund.
+    // NOTE: for partial deletion (2 -> 1), modal must NOT appear and prepay stays on order.
+    if (action === 'delete' && presaleForTicket && presaleIdForTicket != null) {
+      const prepay = safeToInt(presaleForTicket?.prepayment_amount, 0);
+      if (prepay > 0) {
+        const presaleTickets = getPresaleTicketsArray(presaleIdForTicket, tickets);
+        const activeCnt = presaleTickets.filter(t => getTicketStatus(t) === 'ACTIVE').length;
+
+        if (activeCnt <= 1) {
+          // close generic confirm modal and open prepay decision modal
+          setConfirmBoardingOpen(false);
+          setPendingTicketOperation(null);
+          setConfirmLoading(false);
+          setPrepayDecisionError(null);
+          setPrepayDecisionCtx({ presaleId: presaleIdForTicket, ticketId, prepayAmount: prepay });
+          setPrepayDecisionOpen(true);
+          return;
+        }
+      }
+    }
+
     try {
       let updatedTicket;
       if (action === 'use') {
@@ -632,7 +682,7 @@ const loadTransferOptions = async (ctx) => {
     setConfirmError(null);
   };
 
-  const handleConfirmBoarding = async () => {
+  const handleConfirmBoarding = async (decision) => {
     if (pendingTicketOperation) {
       // Handle ticket operation
       const { ticketId, action } = pendingTicketOperation;
@@ -663,15 +713,36 @@ const loadTransferOptions = async (ctx) => {
             return next;
           });
         } else if (pendingPresaleOperation === 'delete') {
-          const updatedPresale = await apiClient.deletePresale(idToUse);
-          setPresales(prevPresales =>
-            prevPresales.filter(presale => presale.id !== updatedPresale.id)
-          );
-          setTickets(prev => {
-            const next = { ...prev };
-            delete next[updatedPresale.id];
-            return next;
-          });
+          const prepay = safeToInt(presaleToOperate?.prepayment_amount, 0);
+
+          // If presale has prepayment, dispatcher must choose what to do (refund vs fund)
+          if (prepay > 0) {
+            const d = String(decision || '').toUpperCase();
+            if (d !== 'REFUND' && d !== 'FUND') {
+              setConfirmError('Выбери: вернуть предоплату или отправить в сезонный фонд');
+              setConfirmLoading(false);
+              return;
+            }
+            const updatedPresale = await apiClient.deletePresale(idToUse, { decision: d });
+            setPresales(prevPresales =>
+              prevPresales.filter(presale => presale.id !== updatedPresale.id)
+            );
+            setTickets(prev => {
+              const next = { ...prev };
+              delete next[updatedPresale.id];
+              return next;
+            });
+          } else {
+            const updatedPresale = await apiClient.deletePresale(idToUse);
+            setPresales(prevPresales =>
+              prevPresales.filter(presale => presale.id !== updatedPresale.id)
+            );
+            setTickets(prev => {
+              const next = { ...prev };
+              delete next[updatedPresale.id];
+              return next;
+            });
+          }
         } else if (pendingPresaleOperation === 'accept_payment') {
           if (!paymentMethodSelected) {
             setConfirmError('Выбери способ оплаты: наличка / карта / комбо');
@@ -923,6 +994,10 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                     <span>№ {ticket?.ticket_number || ticket?.number || (ticket?.id ?? idx)}</span>
                     <span className="text-neutral-700">•</span>
                     <span>{tStatus}</span>
+                    <span className="text-neutral-700">•</span>
+                    <span>{getAgeCategoryLabel(ticket?.age_category)}</span>
+                    <span className="text-neutral-700">•</span>
+                    <span className="font-semibold">{formatCurrencyRub(getTicketPrice(ticket, trip))} ₽</span>
                   </div>
                 </div>
               </div>
@@ -1260,7 +1335,16 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
         </div>
       )}
 
-      <ConfirmBoardingModal
+      {(() => {
+        const idToUse = pendingPassengerId || pendingPresaleGroup?.id;
+        const presaleToOperate = idToUse ? presales.find(p => p.id == idToUse) : null;
+        const prepay = safeToInt(presaleToOperate?.prepayment_amount, 0);
+        const mode = (!pendingTicketOperation && pendingPresaleOperation === 'delete' && prepay > 0)
+          ? 'prepay_decision'
+          : 'boarding';
+
+        return (
+          <ConfirmBoardingModal
         open={confirmBoardingOpen}
         onConfirm={handleConfirmBoarding}
         onClose={() => {
@@ -1271,7 +1355,11 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
         }}
         loading={confirmLoading}
         error={confirmError}
-      />
+        mode={mode}
+        prepayAmount={prepay}
+          />
+        );
+      })()}
     </div>
   );
 }

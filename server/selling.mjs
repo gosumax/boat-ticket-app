@@ -27,6 +27,20 @@ const stmtGetBoatSlotCapacity = db.prepare(`
   WHERE id = ?
 `);
 
+// For generated slots: count occupied seats from presales by slot_uid.
+// We do NOT trust generated_slots.seats_left as source of truth because it is a cache that
+// can drift if older code paths updated the wrong table.
+const stmtCountOccupiedBySlotUidFromPresales = db.prepare(`
+  SELECT COALESCE(SUM(number_of_seats),0) AS cnt
+  FROM presales
+  WHERE slot_uid = ?
+    AND status IN (${seatStatusSql})
+`);
+
+function countOccupiedSeatsForSlotUid(slotUid) {
+  return Number(stmtCountOccupiedBySlotUidFromPresales.get(String(slotUid || ''), ...SEAT_STATUS_LIST)?.cnt || 0);
+}
+
 function countOccupiedSeatsForBoatSlot(boatSlotId) {
   return Number(stmtCountOccupiedByBoatSlot.get(boatSlotId, ...SEAT_STATUS_LIST)?.cnt || 0);
 }
@@ -43,6 +57,40 @@ function assertCapacityOrThrow(boatSlotId, requestedSeats) {
     err.details = { capacity: cap, occupied: occ, requested: requestedSeats, free: cap - occ, boatSlotId };
     throw err;
   }
+}
+
+// Capacity check that respects generated slots.
+// IMPORTANT: For generated slots, boat_slots does NOT contain trip date (often time-only).
+// Therefore, counting tickets by boat_slot_id can incorrectly aggregate seats across different dates.
+// Source of truth for generated slots is generated_slots.seats_left/capacity.
+function assertCapacityForSlotUidOrThrow(slotUid, boatSlotIdForFK, requestedSeats) {
+  const seats = Number(requestedSeats || 0);
+  if (!Number.isFinite(seats) || seats < 1) return;
+
+  const s = String(slotUid || '');
+  if (s.startsWith('generated:')) {
+    const genId = Number(s.split(':')[1]);
+    const row = db.prepare(`SELECT capacity, seats_left FROM generated_slots WHERE id = ?`).get(genId);
+    const cap = Number(row?.capacity || 0);
+
+    // Compute free seats from presales (source of truth), then sync cache in generated_slots.
+    const occ = Math.max(0, countOccupiedSeatsForSlotUid(s));
+    const left = Math.max(0, cap - occ);
+    try {
+      // keep cache consistent for UI and future checks
+      db.prepare(`UPDATE generated_slots SET seats_left = ? WHERE id = ?`).run(left, genId);
+    } catch {}
+
+    if (seats > left) {
+      const err = new Error('CAPACITY_EXCEEDED');
+      err.details = { capacity: cap, occupied: occ, requested: seats, free: Math.max(0, left), boatSlotId: boatSlotIdForFK };
+      throw err;
+    }
+    return;
+  }
+
+  // manual slot
+  assertCapacityOrThrow(boatSlotIdForFK, seats);
 }
 
 function syncSeatsLeftCache(boatSlotId, capacityOverride = null) {
@@ -281,6 +329,11 @@ const resolveSlotByUid = (slotUid, tripDate = null) => {
     time: slotInfo.time,
     trip_date: slotInfo.trip_date, // May be null for manual slots
     price: slotInfo.price,
+    // IMPORTANT: needed for correct ticket category pricing (adult/teen/child)
+    // If the slot has per-category prices, we must expose them to callers.
+    price_adult: slotInfo.price_adult ?? null,
+    price_teen: slotInfo.price_teen ?? null,
+    price_child: slotInfo.price_child ?? null,
     capacity: slotInfo.capacity,
     seats_left: slotInfo.seats_left,
     duration_minutes: slotInfo.duration_minutes,
@@ -660,6 +713,58 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
         message: 'Invalid prepayment amount' 
       });
     }
+
+    // Payment method for the prepayment part (needed for correct owner cash/card analytics)
+    // Accept: CASH / CARD / MIXED
+    const rawPaymentMethod = req.body?.payment_method ?? req.body?.paymentMethod ?? req.body?.method ?? null;
+    let paymentMethodUpper = rawPaymentMethod ? String(rawPaymentMethod).trim().toUpperCase() : null;
+    if (paymentMethodUpper === 'CASH' || paymentMethodUpper === 'CARD' || paymentMethodUpper === 'MIXED') {
+      // ok
+    } else if (paymentMethodUpper === 'CASHLESS') {
+      paymentMethodUpper = 'CARD';
+    } else if (paymentMethodUpper) {
+      // allow lowercase 'cash'/'card' too
+      if (paymentMethodUpper === 'CASH' || paymentMethodUpper === 'CARD') {
+        // ok
+      } else {
+        return res.status(400).json({ ok: false, code: 'INVALID_PAYMENT_METHOD', message: 'Некорректный способ оплаты' });
+      }
+    }
+
+    let paymentCashAmount = 0;
+    let paymentCardAmount = 0;
+
+    if (prepayment > 0) {
+      // Backward compatibility: some dispatcher/seller UIs send only prepaymentAmount.
+      // In that case, default to CASH so Owner cash/card/pending stay consistent.
+      if (!paymentMethodUpper) {
+        paymentMethodUpper = 'CASH';
+      }
+
+      if (paymentMethodUpper === 'CASH') {
+        paymentCashAmount = prepayment;
+      } else if (paymentMethodUpper === 'CARD') {
+        paymentCardAmount = prepayment;
+      } else {
+        // MIXED
+        const ca = Number(req.body?.cash_amount ?? req.body?.cashAmount ?? 0);
+        const cr = Number(req.body?.card_amount ?? req.body?.cardAmount ?? 0);
+        if (!Number.isFinite(ca) || !Number.isFinite(cr) || ca < 0 || cr < 0) {
+          return res.status(400).json({ ok: false, code: 'INVALID_PAYMENT_SPLIT', message: 'Некорректные суммы для комбо' });
+        }
+        if (Math.round(ca + cr) !== Math.round(prepayment)) {
+          return res.status(400).json({ ok: false, code: 'INVALID_PAYMENT_SPLIT', message: 'Сумма НАЛ + КАРТА должна быть равна предоплате' });
+        }
+        if (ca === 0 || cr === 0) {
+          return res.status(400).json({ ok: false, code: 'INVALID_PAYMENT_SPLIT', message: 'Для комбо укажи суммы и для налички, и для карты' });
+        }
+        paymentCashAmount = Math.round(ca);
+        paymentCardAmount = Math.round(cr);
+      }
+    } else {
+      // no prepayment => don't persist payment method
+      paymentMethodUpper = null;
+    }
     
     // Extract trip date from request body (accept both trip_date and tripDate)
     const tripDate = req.body.trip_date || req.body.tripDate || null;
@@ -973,8 +1078,9 @@ if (breakdown) {
       });
     }
     
-    // Use transaction to ensure atomicity: decrement seats_left AND create presale
-const transaction = db.transaction((slotId, slotType, seats, customerName, customerPhone, prepayment, prepaymentComment, ticketsJson, slotUidInput) => {
+	// Use transaction to ensure atomicity: decrement seats_left AND create presale
+	// sellerId is passed explicitly so we can write money_ledger rows during presale creation
+	const transaction = db.transaction((slotId, slotType, seats, customerName, customerPhone, prepayment, prepaymentComment, ticketsJson, slotUidInput, paymentMethodUpper, paymentCashAmount, paymentCardAmount, sellerId) => {
   // 1) Decrement seats_left in the correct table
   let updateResult;
   if (slotType === 'generated') {
@@ -1060,17 +1166,20 @@ const transaction = db.transaction((slotId, slotType, seats, customerName, custo
   }
 
   // 3) Create presale
-  assertCapacityOrThrow(boatSlotIdForFK, seats);
+  // For generated slots, do NOT count occupied seats via boat_slots (it aggregates by time-only).
+  // Use generated_slots.seats_left/capacity as source of truth.
+  assertCapacityForSlotUidOrThrow(presaleSlotUid, boatSlotIdForFK, seats);
 
   const presaleStmt = db.prepare(`
 INSERT INTO presales (
       boat_slot_id, slot_uid,
       customer_name, customer_phone, number_of_seats,
-      total_price, prepayment_amount, prepayment_comment, status, tickets_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      total_price, prepayment_amount, prepayment_comment, status, tickets_json,
+      payment_method, payment_cash_amount, payment_card_amount
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const presaleResult = presaleStmt.run(
+	  const presaleResult = presaleStmt.run(
     boatSlotIdForFK,
     presaleSlotUid,
     customerName.trim(),
@@ -1080,8 +1189,57 @@ INSERT INTO presales (
     prepayment,
     prepaymentComment?.trim() || null,
     'ACTIVE',
-    ticketsJson || null
+    ticketsJson || null,
+    paymentMethodUpper,
+    Math.round(Number(paymentCashAmount || 0)),
+    Math.round(Number(paymentCardAmount || 0))
   );
+
+	  // 3.1) If payment/prepayment is provided at creation time, write SELLER_SHIFT ledger row immediately.
+	  // This keeps Dispatcher "Закрытие смены" (money_ledger based) consistent with presales that are already paid.
+	  try {
+	    const paidNow = Math.round((Number(paymentCashAmount || 0) + Number(paymentCardAmount || 0)) || 0);
+	    if (paidNow > 0 && paymentMethodUpper) {
+	      // idempotency: avoid duplicates for same presale
+	      const already = db.prepare(`
+	        SELECT 1
+	        FROM money_ledger
+	        WHERE presale_id = ?
+	          AND kind = 'SELLER_SHIFT'
+	          AND type LIKE 'SALE_%'
+	        LIMIT 1
+	      `).get(presaleResult.lastInsertRowid);
+
+	      if (!already) {
+	        let ledgerType = 'SALE_PREPAYMENT';
+	        if (Number(paymentCashAmount) > 0 && Number(paymentCardAmount) > 0) ledgerType = 'SALE_PREPAYMENT_MIXED';
+	        else if (Number(paymentCashAmount) > 0) ledgerType = 'SALE_PREPAYMENT_CASH';
+	        else if (Number(paymentCardAmount) > 0) ledgerType = 'SALE_PREPAYMENT_CARD';
+
+	        const bd = (() => {
+	          try { return db.prepare(`SELECT DATE('now','localtime') AS d`).get()?.d; } catch { return null; }
+	        })();
+
+	        db.prepare(`
+	          INSERT INTO money_ledger (
+	            presale_id, slot_id, event_time, kind, type, method, amount, status, seller_id, business_day
+	          ) VALUES (
+	            @presale_id, @slot_id, datetime('now','localtime'), 'SELLER_SHIFT', @type, @method, @amount, 'POSTED', @seller_id, @business_day
+	          )
+	        `).run({
+	          presale_id: presaleResult.lastInsertRowid,
+	          slot_id: boatSlotIdForFK ?? null,
+	          type: ledgerType,
+	          method: paymentMethodUpper || null,
+	          amount: paidNow,
+	          seller_id: sellerId ?? null,
+	          business_day: bd
+	        });
+	      }
+	    }
+	  } catch (e) {
+	    console.warn('[PRESALE_CREATE] ledger prepayment write skipped:', e?.message || e);
+	  }
 
   // 4) Create tickets (always create "seats" count; pricing can be refined later)
   const ticketStmt = db.prepare(`
@@ -1126,22 +1284,177 @@ INSERT INTO presales (
     ticketPrices = Array(seats).fill(pricePerSeat);
   }
 
+  const insertedTicketIds = [];
   for (let i = 0; i < ticketPrices.length; i++) {
     const ticketCode = `TKT-${presaleResult.lastInsertRowid}-${i + 1}`;
-    ticketStmt.run(
+    const r = ticketStmt.run(
       presaleResult.lastInsertRowid,
       boatSlotIdForFK,
       ticketCode,
       ticketPrices[i]
     );
+    try {
+      if (r && typeof r.lastInsertRowid !== 'undefined') {
+        insertedTicketIds.push(Number(r.lastInsertRowid));
+      }
+    } catch {}
+  }
+
+  // Robustness: In some SQLite setups, lastInsertRowid may be unavailable.
+  // If we failed to collect all ticket ids, fallback to selecting by presale_id.
+  // This prevents missing canonical rows and incorrect Owner cash/card/pending.
+  let canonTicketRows = null;
+  if (insertedTicketIds.length === ticketPrices.length) {
+    canonTicketRows = insertedTicketIds.map((id, idx) => ({
+      ticket_id: id,
+      amount: Math.round(Number(ticketPrices[idx] || 0)),
+    }));
+  } else {
+    try {
+      const rows = db.prepare(`SELECT id, price FROM tickets WHERE presale_id = ? ORDER BY id ASC`).all(presaleResult.lastInsertRowid);
+      if (Array.isArray(rows) && rows.length > 0) {
+        canonTicketRows = rows.map((r) => ({
+          ticket_id: Number(r.id),
+          amount: Math.round(Number(r.price || 0)),
+        }));
+      }
+    } catch (e) {
+      console.warn('[PRESALE_CREATE] fallback ticket select failed:', e?.message || e);
+    }
+  }
+
+  // 5) Create canonical money rows (one per ticket) so Owner cash/card/pending are correct immediately.
+  //    This is required for prepayment: cash/card must grow by the paid amount, and pending must be reduced.
+  try {
+    const canonExists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`).get();
+    if (canonExists && Array.isArray(canonTicketRows) && canonTicketRows.length > 0) {
+      const cols = db.prepare(`PRAGMA table_info(sales_transactions_canonical)`).all().map(r => r.name);
+      const has = (c) => cols.includes(c);
+
+      // Build insert columns dynamically (safe across schema versions)
+      const insertCols = [];
+      if (has('ticket_id')) insertCols.push('ticket_id');
+      if (has('presale_id')) insertCols.push('presale_id');
+      if (has('slot_id')) insertCols.push('slot_id');
+      if (has('boat_id')) insertCols.push('boat_id');
+      if (has('slot_uid')) insertCols.push('slot_uid');
+      if (has('slot_source')) insertCols.push('slot_source');
+      if (has('amount')) insertCols.push('amount');
+      if (has('cash_amount')) insertCols.push('cash_amount');
+      if (has('card_amount')) insertCols.push('card_amount');
+      if (has('method')) insertCols.push('method');
+      if (has('status')) insertCols.push('status');
+      if (has('business_day')) insertCols.push('business_day');
+
+      const ph = insertCols.map(() => '?').join(',');
+      // IMPORTANT: sales_transactions_canonical often already has rows (from backfill/migrations).
+      // ticket_id is usually UNIQUE.
+      // If we do plain INSERT and it conflicts, we lose prepayment sync (Owner pending becomes too big).
+      // So we do INSERT OR IGNORE + UPDATE fallback.
+      const insCanon = db.prepare(`INSERT OR IGNORE INTO sales_transactions_canonical (${insertCols.join(',')}) VALUES (${ph})`);
+
+      // Build an UPDATE statement for the same dynamic columns (safe across schema versions)
+      const canUpdateByTicketId = has('ticket_id');
+      const updCols = insertCols.filter((c) => c !== 'ticket_id');
+      const updSet = updCols.map((c) => `${c} = ?`).join(', ');
+      const updCanon = (canUpdateByTicketId && updCols.length > 0)
+        ? db.prepare(`UPDATE sales_transactions_canonical SET ${updSet} WHERE ticket_id = ?`)
+        : null;
+
+      const totalTicketsAmount = canonTicketRows.reduce((s, r) => s + Math.round(Number(r.amount || 0)), 0);
+      const cashTotal = Math.round(Number(paymentCashAmount || 0));
+      const cardTotal = Math.round(Number(paymentCardAmount || 0));
+
+      // Distribute cash/card across tickets proportionally to ticket amount
+      const denom = Math.max(1, totalTicketsAmount);
+      const cashRatio = cashTotal / denom;
+      const cardRatio = cardTotal / denom;
+
+      let cashRemaining = cashTotal;
+      let cardRemaining = cardTotal;
+
+      for (let i = 0; i < canonTicketRows.length; i++) {
+        const ticketId = canonTicketRows[i].ticket_id;
+        const amt = Math.round(Number(canonTicketRows[i].amount || 0));
+
+        let cashPart = 0;
+        let cardPart = 0;
+
+        if (i === canonTicketRows.length - 1) {
+          // Last ticket gets остаток (ensures sums match exactly)
+          cashPart = Math.max(0, Math.min(amt, cashRemaining));
+          cardPart = Math.max(0, Math.min(amt - cashPart, cardRemaining));
+        } else {
+          cashPart = Math.round(amt * cashRatio);
+          cardPart = Math.round(amt * cardRatio);
+
+          // Clamp to available remaining and to ticket amount
+          cashPart = Math.max(0, Math.min(cashPart, cashRemaining, amt));
+          cardPart = Math.max(0, Math.min(cardPart, cardRemaining, amt - cashPart));
+        }
+
+        cashRemaining -= cashPart;
+        cardRemaining -= cardPart;
+
+        const row = [];
+        for (const c of insertCols) {
+          if (c === 'ticket_id') row.push(ticketId);
+          else if (c === 'presale_id') row.push(presaleResult.lastInsertRowid);
+          else if (c === 'slot_id') row.push(boatSlotIdForFK);
+          else if (c === 'boat_id') row.push(resolvedSlot.boat_id);
+          else if (c === 'slot_uid') row.push(presaleSlotUid);
+          else if (c === 'slot_source') row.push(resolvedSlot.source_type);
+          else if (c === 'amount') row.push(amt);
+          else if (c === 'cash_amount') row.push(cashPart);
+          else if (c === 'card_amount') row.push(cardPart);
+          else if (c === 'method') row.push(paymentMethodUpper || null);
+          else if (c === 'status') row.push('VALID');
+          // business_day for canonical money MUST be the TRIP DATE (date of the ride), not the sale date.
+          // Priority:
+          //  1) tripDate from request body (dispatcher chooses the trip date)
+          //  2) resolvedSlot.trip_date (for generated slots and schedule slots)
+          //  3) fallback: today (localtime) for manual/offline slots that have no trip_date
+          else if (c === 'business_day') row.push(
+            tripDate || resolvedSlot?.trip_date || db.prepare(`SELECT DATE('now','localtime') as d`).get().d
+          );
+          else row.push(null);
+        }
+        const insRes = insCanon.run(...row);
+        // If row already existed (changes===0), update it to reflect current paid split (prepayment).
+        if (updCanon && insRes && insRes.changes === 0) {
+          const updRow = [];
+          for (const c of updCols) {
+            // Same order as updCols
+            const idx = insertCols.indexOf(c);
+            updRow.push(row[idx]);
+          }
+          updRow.push(ticketId);
+          updCanon.run(...updRow);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[PRESALE_CREATE] canonical insert skipped:', e?.message || e);
+  }
+
+  // Persist payment method on tickets (some flows read it from tickets)
+  // Use lowercase to match existing /paid endpoint behaviour.
+  if (paymentMethodUpper) {
+    const pmLower = String(paymentMethodUpper).toLowerCase();
+    try {
+      db.prepare(`UPDATE tickets SET payment_method = ? WHERE presale_id = ?`).run(pmLower, presaleResult.lastInsertRowid);
+    } catch (e) {
+      // Non-fatal: DB may not have column in older schemas
+      console.warn('[PRESALE_CREATE] tickets.payment_method update skipped:', e?.message || e);
+    }
   }
 
   
   // Keep seats_left cache in sync (prevents negative UI values)
-  const sync = syncSeatsLeftCache(boatSlotIdForFK, resolvedCapacityForSlot || undefined);
-  if (typeof slotUidInput === 'string' && slotUidInput.startsWith('generated:')) {
-    const genId2 = Number(slotUidInput.split(':')[1]);
-    db.prepare(`UPDATE generated_slots SET seats_left = ? WHERE id = ?`).run(sync.seats_left, genId2);
+  // IMPORTANT: for generated slots, seats_left is already updated in generated_slots (step 1)
+  // and must NOT be overwritten from boat_slots (boat_slots is time-only and aggregates seats).
+  if (!(typeof slotUidInput === 'string' && slotUidInput.startsWith('generated:'))) {
+    syncSeatsLeftCache(boatSlotIdForFK, resolvedCapacityForSlot || undefined);
   }
 
 return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedTotalPrice };
@@ -1151,7 +1464,7 @@ return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedT
 
     let newPresaleId;
     try {
-      const result = transaction(
+	      const result = transaction(
         resolvedSlot.slot_id,
         resolvedSlot.source_type,
         seats,
@@ -1160,7 +1473,11 @@ return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedT
         prepayment,
         prepaymentComment,
         ticketsJson,
-        slotUid
+        slotUid,
+        paymentMethodUpper,
+        paymentCashAmount,
+	        paymentCardAmount,
+	        req.user?.id ?? null
       );
 
       newPresaleId = result.lastInsertRowid;
@@ -2036,6 +2353,29 @@ router.patch('/selling/presales/:id/paid', authenticateToken, (req, res) => {
 
   try {
     const result = markPresaleAsPaid(presaleId);
+    // FIX (owner analytics): also persist payment split into presales columns (source for cash/card)
+    try {
+      if (paymentMethod) {
+        const pmUpper = String(paymentMethod).toUpperCase(); // 'CASH' | 'CARD'
+        const pres = db.prepare(`SELECT total_price FROM presales WHERE id = ?`).get(presaleId);
+        const total = Math.round(Number(pres?.total_price || 0));
+        const cashAmt = pmUpper === 'CASH' ? total : 0;
+        const cardAmt = pmUpper === 'CARD' ? total : 0;
+
+        db.prepare(`
+          UPDATE presales
+          SET payment_method = ?,
+              payment_cash_amount = ?,
+              payment_card_amount = ?,
+              prepayment_amount = total_price,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(pmUpper, cashAmt, cardAmt, presaleId);
+      }
+    } catch (e) {
+      console.error('[PAID_PRESALES_UPDATE] failed', e);
+    }
+
 
     if (paymentMethod) {
       db.prepare(`
@@ -2128,6 +2468,146 @@ const stmt = db.prepare(`
 `);
 
 stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
+
+
+    // Write seller money movement to money_ledger (so shift-close / seller balances can be computed)
+    try {
+      // idempotency: avoid duplicate ledger rows for the same presale accept
+      const already = db.prepare(`
+        SELECT 1
+        FROM money_ledger
+        WHERE presale_id = ?
+          AND kind = 'SELLER_SHIFT'
+          AND type LIKE 'SALE_ACCEPTED%'
+        LIMIT 1
+      `).get(presaleId);
+
+      if (!already) {
+        const bdRow = (() => {
+          try { return db.prepare(`SELECT business_day FROM presales WHERE id = ?`).get(presaleId); }
+          catch { return null; }
+        })();
+
+        // business_day fallback: presales.business_day may be NULL in older data; use today local date
+        const bd = (bdRow?.business_day ?? (() => {
+          try { return db.prepare(`SELECT DATE('now','localtime') AS d`).get()?.d; } catch { return null; }
+        })()) ?? null;
+
+        // persist business_day back to presales if missing (keeps future analytics consistent)
+        try {
+          if (!bdRow?.business_day && bd) {
+            db.prepare(`UPDATE presales SET business_day = ? WHERE id = ? AND (business_day IS NULL OR business_day = '')`).run(bd, presaleId);
+          }
+        } catch (e) {
+          console.warn('[ACCEPT_PAYMENT] presales.business_day backfill skipped:', e?.message || e);
+        }
+
+        const totalAccepted = Math.round((Number(cashAmount || 0) + Number(cardAmount || 0)) || 0);
+
+        let ledgerType = 'SALE_ACCEPTED';
+        if (Number(cashAmount) > 0 && Number(cardAmount) > 0) ledgerType = 'SALE_ACCEPTED_MIXED';
+        else if (Number(cashAmount) > 0) ledgerType = 'SALE_ACCEPTED_CASH';
+        else if (Number(cardAmount) > 0) ledgerType = 'SALE_ACCEPTED_CARD';
+
+        db.prepare(`
+          INSERT INTO money_ledger (
+            presale_id, slot_id, event_time, kind, type, method, amount, status, seller_id, business_day
+          ) VALUES (
+            @presale_id, @slot_id, datetime('now','localtime'), 'SELLER_SHIFT', @type, @method, @amount, 'POSTED', @seller_id, @business_day
+          )
+        `).run({
+          presale_id: presaleId,
+          slot_id: presale.boat_slot_id ?? null,
+          type: ledgerType,
+          method: method || null,
+          amount: totalAccepted,
+          seller_id: req.user?.id ?? null,
+          business_day: bd
+        });
+      }
+    } catch (e) {
+      console.warn('[LEDGER_ACCEPT_PAYMENT_WRITE_FAIL]', e?.message || e);
+    }
+
+    // Persist payment method on tickets + canonical money layer.
+    // IMPORTANT: Owner "Нал/Карта" аналитика читается из sales_transactions_canonical,
+    // поэтому после принятия оплаты нужно синхронизировать деньги в каноне.
+    try {
+      const pmLower = String(method).toLowerCase();
+      // tickets may not have payment_method in older schemas
+      try {
+        db.prepare(`UPDATE tickets SET payment_method = ? WHERE presale_id = ?`).run(pmLower, presaleId);
+      } catch (e) {
+        console.warn('[ACCEPT_PAYMENT] tickets.payment_method update skipped:', e?.message || e);
+      }
+
+      // Sync sales_transactions_canonical if it exists.
+      const canonExists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`).get();
+      if (canonExists) {
+        // Load ticket amounts from canon (source of truth for amount per ticket)
+        const canonRows = db.prepare(`
+          SELECT ticket_id, amount
+          FROM sales_transactions_canonical
+          WHERE presale_id = ? AND status = 'VALID'
+          ORDER BY ticket_id ASC
+        `).all(presaleId);
+
+        if (canonRows && canonRows.length > 0) {
+          const total = canonRows.reduce((s, r) => s + Number(r.amount || 0), 0);
+
+          if (method === 'CASH') {
+            const upd = db.prepare(`
+              UPDATE sales_transactions_canonical
+              SET method = 'CASH', cash_amount = amount, card_amount = 0
+              WHERE presale_id = ? AND status = 'VALID'
+            `);
+            upd.run(presaleId);
+          } else if (method === 'CARD') {
+            const upd = db.prepare(`
+              UPDATE sales_transactions_canonical
+              SET method = 'CARD', cash_amount = 0, card_amount = amount
+              WHERE presale_id = ? AND status = 'VALID'
+            `);
+            upd.run(presaleId);
+          } else {
+            // MIXED: split cash/card across tickets proportionally, keep per-ticket sum == amount
+            const cashTotal = Math.round(Number(cashAmount || 0));
+            const cardTotal = Math.round(Number(cardAmount || 0));
+            const denom = Math.max(1, total);
+            const cashRatio = cashTotal / denom;
+
+            let cashRemaining = cashTotal;
+            const updOne = db.prepare(`
+              UPDATE sales_transactions_canonical
+              SET method = 'MIXED', cash_amount = ?, card_amount = ?
+              WHERE ticket_id = ?
+            `);
+
+            for (let i = 0; i < canonRows.length; i++) {
+              const row = canonRows[i];
+              const amt = Math.round(Number(row.amount || 0));
+              if (i === canonRows.length - 1) {
+                // last ticket gets the остаток
+                const cashPart = Math.max(0, Math.min(amt, cashRemaining));
+                const cardPart = amt - cashPart;
+                updOne.run(cashPart, cardPart, row.ticket_id);
+              } else {
+                const ideal = amt * cashRatio;
+                let cashPart = Math.round(ideal);
+                cashPart = Math.max(0, Math.min(cashPart, amt, cashRemaining));
+                const cardPart = amt - cashPart;
+                updOne.run(cashPart, cardPart, row.ticket_id);
+                cashRemaining -= cashPart;
+              }
+            }
+          }
+        } else {
+          console.warn('[ACCEPT_PAYMENT] sales_transactions_canonical has no rows for presale_id=', presaleId);
+        }
+      }
+    } catch (syncErr) {
+      console.error('[ACCEPT_PAYMENT] sync to canonical failed:', syncErr?.message || syncErr);
+    }
     
     // Get the updated presale
     const updatedPresale = db.prepare(`
@@ -2177,6 +2657,45 @@ router.patch('/presales/:id/cancel', authenticateToken, canSell, (req, res) => {
         SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `).run(presaleId);
+
+      // If there were money movements already POSTED for this presale, reverse them on cancel.
+      // We do NOT delete rows (audit). We insert compensating negative rows so totals go down.
+      try {
+        const ledgerExists = db
+          .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='money_ledger'`)
+          .get();
+        if (ledgerExists) {
+          const nets = db.prepare(`
+            SELECT business_day, kind, method, seller_id, slot_id, SUM(amount) AS net_amount
+            FROM money_ledger
+            WHERE presale_id = ? AND status = 'POSTED'
+            GROUP BY business_day, kind, method, seller_id, slot_id
+            HAVING net_amount <> 0
+          `).all(presaleId);
+
+          const insReverse = db.prepare(`
+            INSERT INTO money_ledger
+              (business_day, kind, method, amount, status, seller_id, presale_id, slot_id, event_time, type, decision_final)
+            VALUES
+              (?, ?, ?, ?, 'POSTED', ?, ?, ?, CURRENT_TIMESTAMP, 'SALE_CANCEL_REVERSE', 'CANCELLED')
+          `);
+
+          for (const r of nets) {
+            const bd = r.business_day || db.prepare(`SELECT DATE('now','localtime') AS d`).get().d;
+            insReverse.run(
+              bd,
+              r.kind,
+              r.method,
+              -Number(r.net_amount || 0),
+              r.seller_id ?? null,
+              presaleId,
+              r.slot_id ?? presale.boat_slot_id ?? null
+            );
+          }
+        }
+      } catch (e) {
+        console.warn('[CANCEL_PRESALE] money_ledger reverse skipped:', e?.message || e);
+      }
 
       const refunded = db.prepare(`
         UPDATE tickets
@@ -2644,7 +3163,7 @@ router.patch('/presales/:id/refund', authenticateToken, canDispatchManageSlots, 
     const transaction = db.transaction((presaleId) => {
       // Get the presale to check its current state and boat slot
       const presale = db.prepare(`
-        SELECT id, boat_slot_id, status
+        SELECT id, boat_slot_id, slot_uid, number_of_seats, status
         FROM presales
         WHERE id = ?
       `).get(presaleId);
@@ -2657,10 +3176,11 @@ router.patch('/presales/:id/refund', authenticateToken, canDispatchManageSlots, 
         throw new Error('Presale must be in CANCELLED_TRIP_PENDING status');
       }
       
-      // Determine if this is a manual or generated slot
-      const isManualSlot = db.prepare(`
-        SELECT 1 FROM boat_slots WHERE id = ?
-      `).get(presale.boat_slot_id);
+      // Determine if this is a manual or generated slot.
+      // IMPORTANT: presale.boat_slot_id is a FK to boat_slots even for generated slots.
+      // Source of truth for generated is presale.slot_uid like 'generated:<id>' -> generated_slots.id
+      const slotUid = String(presale.slot_uid || '');
+      const isGeneratedSlot = slotUid.startsWith('generated:');
       
       // Update the presale status to REFUNDED
       const updatePresaleStmt = db.prepare(`
@@ -2683,26 +3203,27 @@ router.patch('/presales/:id/refund', authenticateToken, canDispatchManageSlots, 
       `);
       
       const ticketsResult = updateTicketsStmt.run(presaleId);
-      
-      // Restore the seats by adding back the number of seats based on refunded tickets
-      if (isManualSlot) {
-        // Update boat_slots table
-        const updateSeatsStmt = db.prepare(`
-          UPDATE boat_slots
-          SET seats_left = seats_left + ?
-          WHERE id = ?
-        `);
-        
-        updateSeatsStmt.run(ticketsResult.changes, presale.boat_slot_id);
-      } else {
-        // Update generated_slots table
-        const updateGeneratedSeatsStmt = db.prepare(`
-          UPDATE generated_slots
-          SET seats_left = seats_left + ?
-          WHERE id = ?
-        `);
-        
-        updateGeneratedSeatsStmt.run(ticketsResult.changes, presale.boat_slot_id);
+
+      // Restore the seats.
+      // Prefer presales.number_of_seats (source of truth), fallback to refunded tickets count.
+      const seatsToRestore = Number(presale.number_of_seats || 0) || Number(ticketsResult.changes || 0);
+      if (seatsToRestore > 0) {
+        if (isGeneratedSlot) {
+          const genId = Number(slotUid.split(':')[1]);
+          const updateGeneratedSeatsStmt = db.prepare(`
+            UPDATE generated_slots
+            SET seats_left = seats_left + ?
+            WHERE id = ?
+          `);
+          updateGeneratedSeatsStmt.run(seatsToRestore, genId);
+        } else {
+          const updateSeatsStmt = db.prepare(`
+            UPDATE boat_slots
+            SET seats_left = seats_left + ?
+            WHERE id = ?
+          `);
+          updateSeatsStmt.run(seatsToRestore, presale.boat_slot_id);
+        }
       }
       
       // Get the updated presale
@@ -2763,6 +3284,46 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
       // 1) помечаем пресейл как CANCELLED (это “сжечь билет”)
       db.prepare(`UPDATE presales SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(presaleId);
 
+	  // 1.1) если по этому presale уже были POSTED движения денег, их нужно реверснуть,
+	  // иначе “наличка/предоплата” не уменьшится после удаления билета.
+	  // Ряды не удаляем (audit), добавляем компенсирующие отрицательные строки.
+	  try {
+	    const ledgerExists = db
+	      .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='money_ledger'`)
+	      .get();
+	    if (ledgerExists) {
+	      const nets = db.prepare(`
+	        SELECT business_day, kind, method, seller_id, slot_id, SUM(amount) AS net_amount
+	        FROM money_ledger
+	        WHERE presale_id = ? AND status = 'POSTED'
+	        GROUP BY business_day, kind, method, seller_id, slot_id
+	        HAVING net_amount <> 0
+	      `).all(presaleId);
+
+	      const insReverse = db.prepare(`
+	        INSERT INTO money_ledger
+	          (business_day, kind, method, amount, status, seller_id, presale_id, slot_id, event_time, type, decision_final)
+	        VALUES
+	          (?, ?, ?, ?, 'POSTED', ?, ?, ?, CURRENT_TIMESTAMP, 'SALE_CANCEL_REVERSE', 'CANCELLED')
+	      `);
+
+	      for (const r of nets) {
+	        const bd = r.business_day || db.prepare(`SELECT DATE('now','localtime') AS d`).get().d;
+	        insReverse.run(
+	          bd,
+	          r.kind,
+	          r.method,
+	          -Number(r.net_amount || 0),
+	          r.seller_id ?? null,
+	          presaleId,
+	          r.slot_id ?? presale.boat_slot_id ?? null
+	        );
+	      }
+	    }
+	  } catch (e) {
+	    console.warn('[DELETE_PRESALE] money_ledger reverse skipped:', e?.message || e);
+	  }
+
       // 2) помечаем все НЕ-REFUNDED тикеты в этом пресейле как REFUNDED
       // (чтобы они не учитывались как занятые места и не мешали пересчёту seats_left)
       const refundTicketsStmt = db.prepare(`
@@ -2771,6 +3332,23 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
         WHERE presale_id = ? AND status != 'REFUNDED'
       `);
       const refunded = refundTicketsStmt.run(presaleId).changes;
+
+      // 2.1) ВАЖНО: если пресейл удалили/отменили, в money-каноне не должно оставаться VALID-строк,
+      // иначе Owner будет видеть «ожидает оплаты» по уже удалённым билетам.
+      try {
+        const canonExists = db
+          .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`)
+          .get();
+        if (canonExists) {
+          db.prepare(`
+            UPDATE sales_transactions_canonical
+            SET status = 'VOID'
+            WHERE presale_id = ? AND status = 'VALID'
+          `).run(presaleId);
+        }
+      } catch (e) {
+        console.warn('[DELETE_PRESALE] canonical VOID skipped:', e?.message || e);
+      }
 
       // 3) определяем слот (manual/generated) и возвращаем места (clamp 0..capacity)
       const slotUid = presale.slot_uid ? String(presale.slot_uid) : null;
@@ -2966,6 +3544,23 @@ router.patch('/tickets/:ticketId/refund', authenticateToken, canDispatchManageSl
 
       db.prepare("UPDATE tickets SET status = 'REFUNDED' WHERE id = ?").run(ticketId);
 
+      // If ticket is refunded/deleted, it must not remain VALID in money canonical
+      try {
+        const canonExists = db
+          .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`)
+          .get();
+        if (canonExists) {
+          db.prepare(`
+            UPDATE sales_transactions_canonical
+            SET status = 'VOID'
+            WHERE ticket_id = ? AND status = 'VALID'
+          `).run(ticketId);
+        }
+      } catch (e) {
+        console.warn('[TICKET_REFUND] canonical VOID skipped:', e?.message || e);
+      }
+
+
       // Free 1 seat back to slot inventory
       const slotUid = ticket.presale_slot_uid || '';
       if (slotUid.startsWith('generated:')) {
@@ -3027,6 +3622,23 @@ router.patch('/tickets/:ticketId/delete', authenticateToken, canDispatchManageSl
       }
 
       db.prepare("UPDATE tickets SET status = 'REFUNDED' WHERE id = ?").run(ticketId);
+
+      // If ticket is refunded/deleted, it must not remain VALID in money canonical
+      try {
+        const canonExists = db
+          .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`)
+          .get();
+        if (canonExists) {
+          db.prepare(`
+            UPDATE sales_transactions_canonical
+            SET status = 'VOID'
+            WHERE ticket_id = ? AND status = 'VALID'
+          `).run(ticketId);
+        }
+      } catch (e) {
+        console.warn('[TICKET_REFUND] canonical VOID skipped:', e?.message || e);
+      }
+
 
       // Free 1 seat back to slot inventory
       const slotUid = ticket.presale_slot_uid || '';
@@ -3125,84 +3737,65 @@ function transferTicketToAnotherSlot(req, res) {
       else if (pTeen > 0 && tPrice === pTeen) ticketType = 'teen';
 
       
-      const transferMarker = 'TRANSFER_PARTIAL';
+      // IMPORTANT: do NOT merge transfers into a single "aggregate" presale.
+      // Merging caused confusing pending/owner analytics when old transferred tickets were deleted/cancelled.
+      // Always create a fresh presale per transferred ticket.
+      const transferMarker = 'TRANSFER_SINGLE';
 
-      // Try to merge into an existing "transfer-created" presale on target slot for the same customer
-      const existing = db.prepare(`
-        SELECT id, number_of_seats, total_price, prepayment_amount, tickets_json
-        FROM presales
-        WHERE slot_uid = ?
-          AND status = 'ACTIVE'
-          AND customer_phone = ?
-          AND customer_name = ?
-          AND prepayment_comment = ?
-        LIMIT 1
-      `).get(String(toSlotUid), row.customer_phone || '', row.customer_name || '', transferMarker);
+      const newTicketsJson = JSON.stringify({
+        adult: ticketType === 'adult' ? 1 : 0,
+        teen:  ticketType === 'teen'  ? 1 : 0,
+        child: ticketType === 'child' ? 1 : 0
+      });
 
-      let newPresaleId = null;
+      // IMPORTANT: business_day for transferred presales must follow the рейс date (trip_date),
+      // not the timestamp of the transfer operation. Otherwise Owner "revenue by day" keeps
+      // the amount in the old day after moving the ticket to tomorrow.
+      let targetBusinessDay = null;
+      try {
+        if (toParsed.source === 'generated') {
+          // Schema-safe: some DBs may have trip_day/date column instead of trip_date.
+          const cols = db
+            .prepare(`PRAGMA table_info(generated_slots)`)
+            .all()
+            .map((r) => String(r.name || '').toLowerCase());
 
-      if (existing && existing.id) {
-        // Merge: increase aggregates on the existing presale
-        let exCounts = null;
-        try { exCounts = existing.tickets_json ? JSON.parse(existing.tickets_json) : null; } catch { exCounts = null; }
-        const mergedCounts = {
-          adult: Math.max(0, Number(exCounts?.adult ?? 0)),
-          teen:  Math.max(0, Number(exCounts?.teen ?? 0)),
-          child: Math.max(0, Number(exCounts?.child ?? 0))
-        };
-        if (ticketType === 'adult') mergedCounts.adult += 1;
-        if (ticketType === 'teen')  mergedCounts.teen  += 1;
-        if (ticketType === 'child') mergedCounts.child += 1;
-
-        const exSeats = Number(existing.number_of_seats ?? 0);
-        const exTotal = Number(existing.total_price ?? 0);
-        const exPrepay = Number(existing.prepayment_amount ?? 0);
-
-        const mergedSeats = exSeats + 1;
-        const mergedTotal = exTotal + tPrice;
-        const mergedPrepay = Math.min(exPrepay, mergedTotal);
-
-        db.prepare(`
-          UPDATE presales
-          SET number_of_seats = ?,
-              total_price = ?,
-              prepayment_amount = ?,
-              tickets_json = ?,
-              updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(mergedSeats, mergedTotal, mergedPrepay, JSON.stringify(mergedCounts), Number(existing.id));
-
-        newPresaleId = Number(existing.id);
-      } else {
-        // Create a NEW presale on target slot (1 seat)
-        const newTicketsJson = JSON.stringify({
-          adult: ticketType === 'adult' ? 1 : 0,
-          teen:  ticketType === 'teen'  ? 1 : 0,
-          child: ticketType === 'child' ? 1 : 0
-        });
-
-        const ins = db.prepare(`
-          INSERT INTO presales (
-            boat_slot_id, slot_uid, customer_name, customer_phone,
-            number_of_seats, total_price, prepayment_amount, prepayment_comment, status,
-            tickets_json, created_at, updated_at
-          ) VALUES (
-            ?, ?, ?, ?,
-            1, ?, 0, ?, 'ACTIVE',
-            ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-          )
-        `).run(
-          targetBaseBoatSlotId,
-          String(toSlotUid),
-          row.customer_name || '',
-          row.customer_phone || '',
-          tPrice,
-          transferMarker,
-          newTicketsJson
-        );
-
-        newPresaleId = Number(ins.lastInsertRowid);
+          const candidates = ['trip_date', 'trip_day', 'day', 'date'];
+          const col = candidates.find((c) => cols.includes(c)) || null;
+          if (col) {
+            const d = db.prepare(`SELECT ${col} AS d FROM generated_slots WHERE id = ?`).get(toParsed.id);
+            targetBusinessDay = String(d?.d || '') || null;
+          }
+        }
+      } catch {
+        targetBusinessDay = null;
       }
+      if (!targetBusinessDay) {
+        targetBusinessDay = db.prepare(`SELECT date('now','localtime') AS d`).get()?.d || null;
+      }
+
+      const ins = db.prepare(`
+        INSERT INTO presales (
+          boat_slot_id, slot_uid, customer_name, customer_phone,
+          number_of_seats, total_price, prepayment_amount, prepayment_comment, status,
+          tickets_json, business_day, created_at, updated_at
+        ) VALUES (
+          ?, ?, ?, ?,
+          1, ?, 0, ?, 'ACTIVE',
+          ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+      `).run(
+        targetBaseBoatSlotId,
+        String(toSlotUid),
+        row.customer_name || '',
+        row.customer_phone || '',
+        tPrice,
+        transferMarker,
+        newTicketsJson,
+        targetBusinessDay
+      );
+
+      const newPresaleId = Number(ins.lastInsertRowid);
 
       // Move the ticket to new presale & update its base boat_slot_id
       db.prepare(`
@@ -3457,7 +4050,7 @@ function doTransferPresaleToSlot(presaleId, toSlotUid) {
   if (!toParsed) throw new Error('Invalid to_slot_uid');
 
   const presale = db.prepare(`
-    SELECT id, boat_slot_id, slot_uid, number_of_seats, status
+    SELECT id, boat_slot_id, slot_uid, number_of_seats, status, tickets_json, total_price, prepayment_amount
     FROM presales
     WHERE id = ?
   `).get(presaleId);
@@ -3509,9 +4102,169 @@ function doTransferPresaleToSlot(presaleId, toSlotUid) {
     WHERE presale_id = ?
   `).run(targetBaseBoatSlotId, presaleId);
 
+
+  // === FIX: recalc prices when transferring a whole presale between рейсы ===
+  // If you move 2h(3000) -> 1h(2000), totals and per-ticket prices must change.
+  try {
+    const getSlotPrices = (slotUid) => {
+      const p = parseSlotUid(slotUid);
+      if (!p) return { adult: 0, teen: 0, child: 0 };
+      if (p.source === 'generated') {
+        const r = db.prepare(`SELECT price_adult, price_teen, price_child FROM generated_slots WHERE id = ?`).get(p.id);
+        return { adult: Number(r?.price_adult ?? 0), teen: Number(r?.price_teen ?? 0), child: Number(r?.price_child ?? 0) };
+      }
+      const r = db.prepare(`SELECT price_adult, price_teen, price_child FROM boat_slots WHERE id = ?`).get(p.id);
+      return { adult: Number(r?.price_adult ?? 0), teen: Number(r?.price_teen ?? 0), child: Number(r?.price_child ?? 0) };
+    };
+
+    const fromPrices = getSlotPrices(fromSlotUid);
+    const toPrices   = getSlotPrices(toSlotUid);
+
+    let counts = null;
+    try { counts = presale.tickets_json ? JSON.parse(presale.tickets_json) : null; } catch { counts = null; }
+    const cAdult = Math.max(0, Number(counts?.adult ?? 0));
+    const cTeen  = Math.max(0, Number(counts?.teen  ?? 0));
+    const cChild = Math.max(0, Number(counts?.child ?? 0));
+
+    const computedTotal =
+      (cAdult * (toPrices.adult || fromPrices.adult || 0)) +
+      (cTeen  * (toPrices.teen  || fromPrices.teen  || 0)) +
+      (cChild * (toPrices.child || fromPrices.child || 0));
+
+    if (computedTotal > 0) {
+      const oldPrepay = Number(presale.prepayment_amount ?? 0);
+      const newPrepay = Math.min(oldPrepay, computedTotal);
+
+      db.prepare(`
+        UPDATE presales
+        SET total_price = ?,
+            prepayment_amount = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(computedTotal, newPrepay, presaleId);
+
+      // Update each ticket.price by matching its old price to old slot prices (fallback adult)
+      const tickets = db.prepare(`
+        SELECT id, price
+        FROM tickets
+        WHERE presale_id = ? AND status = 'ACTIVE'
+      `).all(presaleId);
+
+      const updTicket = db.prepare(`UPDATE tickets SET price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
+      const findCanon = db.prepare(`
+        SELECT rowid AS rid, cash_amount, card_amount
+        FROM sales_transactions_canonical
+        WHERE ticket_id = ? AND status = 'VALID'
+        ORDER BY created_at DESC
+        LIMIT 1
+      `);
+      const updCanon = db.prepare(`
+        UPDATE sales_transactions_canonical
+        SET amount = ?, cash_amount = ?, card_amount = ?
+        WHERE rowid = ?
+      `);
+
+      for (const t of tickets) {
+        const cur = Number(t.price ?? 0);
+        let type = 'adult';
+        if (fromPrices.child > 0 && cur == fromPrices.child) type = 'child';
+        else if (fromPrices.teen > 0 && cur == fromPrices.teen) type = 'teen';
+
+        let newPrice = (type === 'child') ? (toPrices.child || cur) : (type === 'teen') ? (toPrices.teen || cur) : (toPrices.adult || cur);
+        if (!newPrice || newPrice <= 0) newPrice = cur;
+
+        updTicket.run(newPrice, t.id);
+
+        try {
+          const canon = findCanon.get(t.id);
+          if (canon && canon.rid) {
+            const cash = Number(canon.cash_amount ?? 0);
+            const card = Number(canon.card_amount ?? 0);
+            const paid = cash + card;
+            let newCash = cash, newCard = card;
+
+            if (paid > newPrice) {
+              if (cash > 0 && card > 0) {
+                newCash = Math.round(newPrice * (cash / paid));
+                newCard = Math.max(0, Math.round(newPrice - newCash));
+              } else if (cash > 0) {
+                newCash = Math.round(newPrice);
+                newCard = 0;
+              } else {
+                newCash = 0;
+                newCard = Math.round(newPrice);
+              }
+            }
+            updCanon.run(newPrice, newCash, newCard, canon.rid);
+          }
+        } catch (e) {
+          console.log('[PRESALE_TRANSFER_SYNC_CANON] skipped', e?.message || e);
+        }
+      }
+    }
+  } catch (e) {
+    console.log('[PRESALE_TRANSFER_REPRICE] skipped', e?.message || e);
+  }
+
   // Seats: free in old, take in new
   applySeatsDelta(fromSlotUid, +movedSeats);
   applySeatsDelta(toSlotUid, -movedSeats);
+
+  // === PENDING CANONICAL: keep "ожидает оплаты" tied to trip_date after transfer ===
+  // Owner pending-by-trip-date relies on canonical rows with status='PENDING'.
+  // When a presale moves to another slot, its unpaid remainder must follow the new slot.
+  try {
+    const cur = db.prepare(`
+      SELECT id, boat_slot_id, slot_uid, number_of_seats, total_price, prepayment_amount
+      FROM presales
+      WHERE id = ?
+    `).get(presaleId);
+
+    const total = Number(cur?.total_price ?? 0);
+    const prepay = Number(cur?.prepayment_amount ?? 0);
+    const remainder = Math.max(0, total - prepay);
+
+    // Remove old PENDING (it belonged to the previous slot/date)
+    db.prepare("DELETE FROM sales_transactions_canonical WHERE presale_id = ? AND status = 'PENDING'")
+      .run(presaleId);
+
+    if (remainder > 0) {
+      db.prepare(`
+        INSERT INTO sales_transactions_canonical
+        (
+          business_day,
+          status,
+          amount,
+          qty,
+          ticket_id,
+          presale_id,
+          slot_uid,
+          slot_id,
+          created_at
+        )
+        VALUES
+        (
+          NULL,
+          'PENDING',
+          ?,
+          ?,
+          NULL,
+          ?,
+          ?,
+          ?,
+          CURRENT_TIMESTAMP
+        )
+      `).run(
+        remainder,
+        Number(cur?.number_of_seats ?? movedSeats) || movedSeats || 1,
+        presaleId,
+        String(cur?.slot_uid ?? toSlotUid),
+        Number(cur?.boat_slot_id ?? 0) || getBaseBoatSlotIdForSlot(toSlotUid) || null
+      );
+    }
+  } catch (e) {
+    console.log('[PRESALE_TRANSFER_PENDING_CANON] skipped', e?.message || e);
+  }
 
   return { ok: true, movedSeats };
 }
@@ -3565,7 +4318,9 @@ router.patch('/presales/:id/cancel-trip-pending', authenticateToken, canSellOrDi
     const presaleId = req.params.id;
 
     const cancelTransaction = db.transaction(() => {
-      const presale = db.prepare('SELECT id, boat_slot_id, slot_uid, number_of_seats, status FROM presales WHERE id = ?').get(presaleId);
+      const presale = db.prepare(
+        'SELECT id, boat_slot_id, slot_uid, number_of_seats, total_price, prepayment_amount, status FROM presales WHERE id = ?'
+      ).get(presaleId);
       if (!presale) {
         res.status(404).json({ error: 'Presale not found' });
         return null;
@@ -3585,6 +4340,80 @@ router.patch('/presales/:id/cancel-trip-pending', authenticateToken, canSellOrDi
 
     const result = cancelTransaction();
     if (!result) return;
+
+    // IMPORTANT:
+    // Owner analytics "Ожидает оплаты (по дате рейса)" is based on money_ledger rows (not sales_transactions_canonical).
+    // When a presale is moved into "CANCELLED_TRIP_PENDING" (transfer without payment), we must record an expected payment.
+    // Do this OUTSIDE of the transaction so seat-restore edge cases do not rollback the money_ledger write.
+    try {
+      const getTripDay = (slotUid, slotId) => {
+        try {
+          if (slotUid && typeof slotUid === 'string' && slotUid.startsWith('generated:')) {
+            const genId = Number(String(slotUid).slice('generated:'.length));
+            if (Number.isFinite(genId)) {
+              const row = db.prepare('SELECT trip_date FROM generated_slots WHERE id = ?').get(genId);
+              if (row?.trip_date) return row.trip_date;
+            }
+          }
+        } catch (_) {
+          // ignore
+        }
+        try {
+          if (slotId != null) {
+            const row = db.prepare('SELECT trip_date FROM boat_slots WHERE id = ?').get(slotId);
+            if (row?.trip_date) return row.trip_date;
+          }
+        } catch (_) {
+          // ignore
+        }
+        return null;
+      };
+
+      const tripDay = getTripDay(result.slot_uid, result.boat_slot_id);
+      const expectedAmount = Math.max(
+        0,
+        Number(result.total_price || 0) - Number(result.prepayment_amount || 0)
+      );
+
+      const existsLedger = db.prepare(
+        "SELECT 1 FROM money_ledger WHERE presale_id = ? AND kind = 'EXPECT_PAYMENT' AND status = 'POSTED' LIMIT 1"
+      ).get(result.id);
+
+      if (!existsLedger && expectedAmount > 0) {
+        db.prepare(`
+          INSERT INTO money_ledger
+          (
+            presale_id,
+            slot_id,
+            trip_day,
+            kind,
+            method,
+            amount,
+            status,
+            type
+          )
+          VALUES
+          (
+            ?,
+            ?,
+            ?,
+            'EXPECT_PAYMENT',
+            NULL,
+            ?,
+            'POSTED',
+            'PENDING'
+          )
+        `).run(
+          result.id,
+          result.boat_slot_id ?? null,
+          tripDay,
+          expectedAmount
+        );
+      }
+    } catch (e) {
+      console.error('[cancel-trip-pending] Failed to write money_ledger EXPECT_PAYMENT row:', e);
+      // Do not fail the API call: presale status update already succeeded.
+    }
 
     res.json({ success: true, message: 'Presale marked as cancelled trip pending' });
   } catch (error) {

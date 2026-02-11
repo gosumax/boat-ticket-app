@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import TripListView from '../components/dispatcher/TripListView';
 import SlotManagement from '../components/dispatcher/SlotManagement';
@@ -15,9 +15,9 @@ const TYPE_OPTIONS = [
 ];
 
 const STATUS_OPTIONS = [
-  { value: 'all', label: 'Все статусы' },
   { value: 'active', label: 'Активные' },
   { value: 'completed', label: 'Завершённые' },
+  { value: 'all', label: 'Все рейсы' },
 ];
 
 const DispatcherView = () => {
@@ -76,28 +76,7 @@ const DispatcherView = () => {
     setSearchTerm('');
   };
 
-  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
-  const statusWrapRef = useRef(null);
-
-  const statusLabel = useMemo(() => {
-    return STATUS_OPTIONS.find(o => o.value === statusFilter)?.label ?? 'Активные';
-  }, [statusFilter]);
-
-  useEffect(() => {
-    const onDown = (e) => {
-      const sWrap = statusWrapRef.current;
-      if (statusMenuOpen && sWrap && !sWrap.contains(e.target)) setStatusMenuOpen(false);
-    };
-    const onKey = (e) => {
-      if (e.key === 'Escape') setStatusMenuOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [statusMenuOpen]);
+  // statusFilter is controlled by segmented buttons in the UI (Active / Completed / All).
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
@@ -106,12 +85,14 @@ const DispatcherView = () => {
           <div className="flex items-center gap-2 text-2xl font-bold">🧭 Диспетчер</div>
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={() => window.dispatchEvent(new CustomEvent('dispatcher:refresh'))}
               className="px-3 py-1 rounded bg-neutral-800 hover:bg-neutral-700"
             >
               Обновить
             </button>
             <button
+              type="button"
               onClick={logout}
               className="px-3 py-1 rounded bg-red-600 hover:bg-red-700 text-white"
             >
@@ -130,6 +111,7 @@ const DispatcherView = () => {
           ].map(([key, label]) => (
             <button
               key={key}
+              type="button"
               onClick={() => setActiveTab(key)}
               className={`px-4 py-2 rounded-xl text-sm font-semibold border ${
                 activeTab === key
@@ -145,6 +127,7 @@ const DispatcherView = () => {
         <div className="px-4 pb-3">
           <div className="flex items-center gap-2 flex-wrap">
             <button
+              type="button"
               onClick={() => {
                 const t = getTodayDate();
                 setDateRange({ from: t, to: t });
@@ -159,6 +142,7 @@ const DispatcherView = () => {
             </button>
 
             <button
+              type="button"
               onClick={() => {
                 const t = getTomorrowDate();
                 setDateRange({ from: t, to: t });
@@ -171,6 +155,35 @@ const DispatcherView = () => {
             >
               Завтра
             </button>
+
+            {/* Status filter: Active / Completed / All */}
+            <div className="flex items-center rounded-xl border border-neutral-800 bg-neutral-900 overflow-hidden">
+              {STATUS_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setStatusFilter(opt.value)}
+                  className={`px-3 py-2 text-sm font-semibold border-r border-neutral-800 last:border-r-0 ${
+                    statusFilter === opt.value
+                      ? 'bg-blue-600 text-white'
+                      : 'text-neutral-300 hover:bg-neutral-800'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Boat type filter */}
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-sm"
+            >
+              {TYPE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
 
             <input
               type="date"
@@ -201,6 +214,7 @@ const DispatcherView = () => {
             />
 
             <button
+              type="button"
               onClick={resetFilters}
               className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 hover:bg-neutral-800 text-sm font-semibold"
             >

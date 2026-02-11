@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import apiClient from "../utils/apiClient.js";
 
 /**
  * OwnerSettingsView.jsx
@@ -14,6 +15,10 @@ import { useMemo, useState } from "react";
  */
 
 export default function OwnerSettingsView() {
+  const [busy, setBusy] = useState(false);
+  const [saveOk, setSaveOk] = useState(false);
+  const [err, setErr] = useState("");
+
   const [businessName, setBusinessName] = useState("Морские прогулки");
   const [timezone, setTimezone] = useState("Europe/Moscow (UTC+3)");
   const [currency, setCurrency] = useState("RUB");
@@ -56,9 +61,135 @@ export default function OwnerSettingsView() {
     return `${seasonStart} → ${seasonEnd}`;
   }, [seasonStart, seasonEnd]);
 
+  const load = async () => {
+    setErr("");
+    setSaveOk(false);
+    setBusy(true);
+    try {
+      const json = await apiClient.request(`/owner/settings/full`, { method: "GET" });
+      const s = json?.settings || {};
+
+      if (typeof s.businessName === "string") setBusinessName(s.businessName);
+      if (typeof s.timezone === "string") setTimezone(s.timezone);
+      if (typeof s.currency === "string") setCurrency(s.currency);
+
+      if (typeof s.seasonStart === "string") setSeasonStart(s.seasonStart);
+      if (typeof s.seasonEnd === "string") setSeasonEnd(s.seasonEnd);
+
+      if (typeof s.badDay === "number") setBadDay(s.badDay);
+      if (typeof s.normalDay === "number") setNormalDay(s.normalDay);
+      if (typeof s.goodDay === "number") setGoodDay(s.goodDay);
+      if (typeof s.baseCompareDays === "number") setBaseCompareDays(s.baseCompareDays);
+
+      if (typeof s.motivationType === "string") setMotivationType(s.motivationType);
+      if (typeof s.motivationPercent === "number") setMotivationPercent(s.motivationPercent);
+      if (typeof s.teamIncludeSellers === "boolean") setTeamIncludeSellers(s.teamIncludeSellers);
+      if (typeof s.teamIncludeDispatchers === "boolean") setTeamIncludeDispatchers(s.teamIncludeDispatchers);
+      if (typeof s.toWeeklyFund === "number") setToWeeklyFund(s.toWeeklyFund);
+      if (typeof s.toSeasonFund === "number") setToSeasonFund(s.toSeasonFund);
+
+      if (typeof s.coefSpeed === "number") setCoefSpeed(s.coefSpeed);
+      if (typeof s.coefWalk === "number") setCoefWalk(s.coefWalk);
+      if (typeof s.coefBanana === "number") setCoefBanana(s.coefBanana);
+      if (typeof s.coefFishing === "number") setCoefFishing(s.coefFishing);
+
+      if (typeof s.zoneSanatorka === "number") setZoneSanatorka(s.zoneSanatorka);
+      if (typeof s.zoneCenter === "number") setZoneCenter(s.zoneCenter);
+      if (typeof s.zoneYozhik === "number") setZoneYozhik(s.zoneYozhik);
+
+      if (typeof s.lowLoad === "number") setLowLoad(s.lowLoad);
+      if (typeof s.highLoad === "number") setHighLoad(s.highLoad);
+      if (typeof s.minSellerRevenue === "number") setMinSellerRevenue(s.minSellerRevenue);
+
+      if (typeof s.notifyBadRevenue === "boolean") setNotifyBadRevenue(s.notifyBadRevenue);
+      if (typeof s.notifyLowLoad === "boolean") setNotifyLowLoad(s.notifyLowLoad);
+      if (typeof s.notifyLowSeller === "boolean") setNotifyLowSeller(s.notifyLowSeller);
+      if (typeof s.notifyChannel === "string") setNotifyChannel(s.notifyChannel);
+    } catch (e) {
+      setErr(e?.message || "Ошибка загрузки настроек");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const save = async () => {
+    setErr("");
+    setSaveOk(false);
+    setBusy(true);
+    try {
+      const payload = {
+        businessName,
+        timezone,
+        currency,
+        seasonStart,
+        seasonEnd,
+        badDay,
+        normalDay,
+        goodDay,
+        baseCompareDays,
+        motivationType,
+        motivationPercent,
+        teamIncludeSellers,
+        teamIncludeDispatchers,
+        toWeeklyFund,
+        toSeasonFund,
+        coefSpeed,
+        coefWalk,
+        coefBanana,
+        coefFishing,
+        zoneSanatorka,
+        zoneCenter,
+        zoneYozhik,
+        lowLoad,
+        highLoad,
+        minSellerRevenue,
+        notifyBadRevenue,
+        notifyLowLoad,
+        notifyLowSeller,
+        notifyChannel,
+      };
+      await apiClient.request(`/owner/settings/full`, { method: "PUT", body: payload });
+      setSaveOk(true);
+    } catch (e) {
+      setErr(e?.message || "Ошибка сохранения");
+    } finally {
+      setBusy(false);
+      setTimeout(() => setSaveOk(false), 1500);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div className="p-4 pb-24 space-y-4">
       <Header title="Настройки" subtitle="Параметры аналитики и мотивации (не влияет на текущие продажи)" />
+
+      <div className="rounded-2xl border border-neutral-800 p-3 flex items-center justify-between gap-2">
+        <div className="text-xs text-neutral-500">
+          {err ? <span className="text-red-300">{err}</span> : saveOk ? <span className="text-emerald-300">Сохранено</span> : busy ? "..." : ""}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={load}
+            className="rounded-xl border border-neutral-800 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-900/40"
+            disabled={busy}
+          >
+            Обновить
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            className="rounded-xl border border-amber-600/60 bg-amber-900/20 px-3 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-900/30"
+            disabled={busy}
+          >
+            Сохранить
+          </button>
+        </div>
+      </div>
 
       {/* 4.1 Общие настройки бизнеса */}
       <Section title="Общие настройки бизнеса">

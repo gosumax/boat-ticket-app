@@ -28,6 +28,11 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
   const [prepaymentStr, setPrepaymentStr] = useState('');
   const [errors, setErrors] = useState({});
   const [prepaymentError, setPrepaymentError] = useState('');
+  // Prepayment payment method (backend requires it when prepaymentAmount > 0)
+  const [prepaymentMethod, setPrepaymentMethod] = useState(null); // 'cash' | 'card' | 'mixed'
+  const [prepaymentCashStr, setPrepaymentCashStr] = useState('');
+  const [prepaymentCardStr, setPrepaymentCardStr] = useState('');
+  const [prepaymentMethodError, setPrepaymentMethodError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
 
@@ -89,6 +94,19 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       setPrepaymentError('');
     }
   }, [prepaymentAmount, totalPrice]);
+
+  // Reset/validate prepayment payment method when amount changes
+  useEffect(() => {
+    if (!prepaymentAmount || prepaymentAmount <= 0) {
+      setPrepaymentMethod(null);
+      setPrepaymentCashStr('');
+      setPrepaymentCardStr('');
+      setPrepaymentMethodError('');
+      return;
+    }
+    // If user already picked a method, keep it; just clear error on any positive amount
+    setPrepaymentMethodError('');
+  }, [prepaymentAmount]);
   
 
 
@@ -109,6 +127,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
     const value = e.target.value;
     setPrepaymentStr(value);
     setPrepaymentError('');
+    setPrepaymentMethodError('');
   };
 
   const handleNameChange = (e) => {
@@ -126,6 +145,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
   const handleQuickPrepayment = (amount) => {
     setPrepaymentStr(Math.max(0, amount).toString());
     setPrepaymentError('');
+    setPrepaymentMethodError('');
   };
 
   const handleSubmit = async () => {
@@ -134,6 +154,35 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       // Show appropriate error instead of "Рейс закрыт" for local blocks
       setErrors({ submit: phoneError || prepaymentError || "Форма не заполнена" });
       return;
+    }
+
+    // Prepayment payment method validation (backend requires it)
+    const prepay = Math.max(0, Number(prepaymentStr || 0));
+    if (prepay > 0) {
+      if (!prepaymentMethod) {
+        setPrepaymentMethodError('Выбери способ оплаты предоплаты (нал/карта/комбо)');
+        setErrors({ submit: 'Не указан способ оплаты предоплаты' });
+        return;
+      }
+      if (prepaymentMethod === 'mixed') {
+        const ca = Math.round(Number(prepaymentCashStr || 0));
+        const cr = Math.round(Number(prepaymentCardStr || 0));
+        if (!Number.isFinite(ca) || !Number.isFinite(cr) || ca < 0 || cr < 0) {
+          setPrepaymentMethodError('Некорректные суммы для комбо');
+          setErrors({ submit: 'Некорректные суммы для комбо' });
+          return;
+        }
+        if (Math.round(ca + cr) !== Math.round(prepay)) {
+          setPrepaymentMethodError('Сумма НАЛ + КАРТА должна быть равна предоплате');
+          setErrors({ submit: 'Сумма НАЛ + КАРТА должна быть равна предоплате' });
+          return;
+        }
+        if (ca === 0 || cr === 0) {
+          setPrepaymentMethodError('Для комбо укажи суммы и для налички, и для карты');
+          setErrors({ submit: 'Для комбо укажи суммы и для налички, и для карты' });
+          return;
+        }
+      }
     }
 
     setIsSubmitting(true);
@@ -170,8 +219,20 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       tickets: filteredTicketCategories,  // Include ticket breakdown
       customerName: customerName.trim(),
       customerPhone: normalizedPhone,
-      prepaymentAmount: Math.max(0, Number(prepaymentStr || 0))
+      prepaymentAmount: prepay
     };
+
+    if (prepay > 0) {
+      if (prepaymentMethod === 'cash') {
+        presaleData.payment_method = 'CASH';
+      } else if (prepaymentMethod === 'card') {
+        presaleData.payment_method = 'CARD';
+      } else {
+        presaleData.payment_method = 'MIXED';
+        presaleData.cash_amount = Math.round(Number(prepaymentCashStr || 0));
+        presaleData.card_amount = Math.round(Number(prepaymentCardStr || 0));
+      }
+    }
         
     try {
       
@@ -184,6 +245,10 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       setCustomerName('');
       setCustomerPhone('');
       setPrepaymentStr('');
+      setPrepaymentMethod(null);
+      setPrepaymentCashStr('');
+      setPrepaymentCardStr('');
+      setPrepaymentMethodError('');
       // Reset ticket categories based on boat type
       setTicketCategories(isBanana ? { adult: 1, child: 0 } : { adult: 1, teen: 0, child: 0 });
       
@@ -449,6 +514,80 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
           />
           {prepaymentError && (
             <p className="text-red-500 text-xs italic mt-2">{prepaymentError}</p>
+          )}
+
+          {/* Payment method picker for prepayment (нал/карта/комбо) */}
+          {prepaymentAmount > 0 && (
+            <div className="mt-3 p-2 rounded-lg border border-neutral-700 bg-neutral-900">
+              <div className="text-neutral-200 text-sm font-bold mb-2">Оплата предоплаты</div>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setPrepaymentMethod('cash'); setPrepaymentCashStr(''); setPrepaymentCardStr(''); setPrepaymentMethodError(''); }}
+                  className={`py-1 rounded-lg font-medium transition-colors ${prepaymentMethod === 'cash' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
+                >
+                  Нал
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setPrepaymentMethod('card'); setPrepaymentCashStr(''); setPrepaymentCardStr(''); setPrepaymentMethodError(''); }}
+                  className={`py-1 rounded-lg font-medium transition-colors ${prepaymentMethod === 'card' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
+                >
+                  Карта
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPrepaymentMethod('mixed');
+                    // by default split 50/50 (both > 0)
+                    if (!prepaymentCashStr && !prepaymentCardStr) {
+                      const p = Math.round(Number(prepaymentAmount || 0));
+                      const cash = Math.max(1, Math.floor(p / 2));
+                      const card = Math.max(1, p - cash);
+                      setPrepaymentCashStr(String(cash));
+                      setPrepaymentCardStr(String(card));
+                    }
+                    setPrepaymentMethodError('');
+                  }}
+                  className={`py-1 rounded-lg font-medium transition-colors ${prepaymentMethod === 'mixed' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
+                >
+                  Комбо
+                </button>
+              </div>
+
+              {prepaymentMethod === 'mixed' && (
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-neutral-200 text-xs font-bold mb-1">Нал (₽)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      inputMode="numeric"
+                      value={prepaymentCashStr}
+                      onChange={(e) => { setPrepaymentCashStr(e.target.value); setPrepaymentMethodError(''); }}
+                      className="shadow appearance-none border rounded w-full py-1 px-2 text-black font-bold leading-tight focus:outline-none focus:shadow-outline"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-neutral-200 text-xs font-bold mb-1">Карта (₽)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      inputMode="numeric"
+                      value={prepaymentCardStr}
+                      onChange={(e) => { setPrepaymentCardStr(e.target.value); setPrepaymentMethodError(''); }}
+                      className="shadow appearance-none border rounded w-full py-1 px-2 text-black font-bold leading-tight focus:outline-none focus:shadow-outline"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {prepaymentMethodError && (
+                <div className="text-red-500 text-xs italic mt-2">{prepaymentMethodError}</div>
+              )}
+            </div>
           )}
         </div>
       </div>

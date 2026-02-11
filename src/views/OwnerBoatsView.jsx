@@ -1,113 +1,184 @@
 /**
- * OwnerBoatsView.jsx — экран "Лодки"
- * Стилизация под референс: iOS‑карточки, мягкие тени, компактные строки, нейтральные поверхности.
- * Логика/данные не трогаем — только UI.
+ * src/views/OwnerBoatsView.jsx
+ * OWNER — Лодки (backend wired)
+ *
+ * API:
+ *  - GET /api/owner/boats?preset=
+ * Polling: 20s
  */
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+function formatRUB(v) {
+  const n = Number(v || 0);
+  try {
+    return new Intl.NumberFormat("ru-RU", {
+      style: "currency",
+      currency: "RUB",
+      maximumFractionDigits: 0,
+    }).format(n);
+  } catch {
+    return `${Math.round(n)} ₽`;
+  }
+}
+
+function formatInt(v) {
+  const n = Number(v || 0);
+  try {
+    return new Intl.NumberFormat("ru-RU").format(Math.round(n));
+  } catch {
+    return String(Math.round(n));
+  }
+}
+
+async function ownerGet(url) {
+  try {
+    const res = await fetch(url, { credentials: "include" });
+    const json = await res.json().catch(() => null);
+    if (!json || typeof json !== "object") {
+      return { ok: false, data: null, meta: { warnings: ["invalid json"] } };
+    }
+    const warnings = Array.isArray(json?.meta?.warnings) ? json.meta.warnings : [];
+    return { ok: !!json.ok, data: json.data || null, meta: { ...(json.meta || {}), warnings } };
+  } catch (e) {
+    return { ok: false, data: null, meta: { warnings: [e?.message || String(e)] } };
+  }
+}
 
 export default function OwnerBoatsView() {
   const [preset, setPreset] = useState("today");
+  const [loading, setLoading] = useState(true);
+  const [payload, setPayload] = useState({
+    totals: { revenue: 0, tickets: 0, trips: 0, fillPercent: 0 },
+    boats: [],
+    range: null,
+  });
+  const [warnings, setWarnings] = useState([]);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function load() {
+      const q = encodeURIComponent(preset);
+      const r = await ownerGet(`/api/owner/boats?preset=${q}`);
+
+      if (!alive) return;
+      setLoading(false);
+      setWarnings(r?.meta?.warnings || []);
+
+      if (r.ok && r.data) {
+        setPayload({
+          totals: r.data.totals || { revenue: 0, tickets: 0, trips: 0, fillPercent: 0 },
+          boats: Array.isArray(r.data.boats) ? r.data.boats : [],
+          range: r.data.range || null,
+        });
+      } else {
+        setPayload({
+          totals: { revenue: 0, tickets: 0, trips: 0, fillPercent: 0 },
+          boats: [],
+          range: null,
+        });
+      }
+    }
+
+    load();
+    const t = setInterval(load, 20000);
+
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [preset]);
+
+  const grouped = useMemo(() => {
+    const byType = new Map();
+    for (const b of payload.boats || []) {
+      const t = (b.boat_type || "").trim() || "Без типа";
+      if (!byType.has(t)) byType.set(t, []);
+      byType.get(t).push(b);
+    }
+    return Array.from(byType.entries()).map(([type, boats]) => ({
+      type,
+      boats,
+      totals: boats.reduce(
+        (acc, x) => {
+          acc.revenue += Number(x.revenue || 0);
+          acc.tickets += Number(x.tickets || 0);
+          acc.trips += Number(x.trips || 0);
+          return acc;
+        },
+        { revenue: 0, tickets: 0, trips: 0 }
+      ),
+    }));
+  }, [payload.boats]);
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 px-3 pt-3 pb-24">
-      {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <div className="text-xl font-extrabold tracking-tight">Лодки</div>
         <div className="text-[11px] text-neutral-500">owner</div>
       </div>
 
-      {/* Верхняя сводка */}
-      <div className="grid grid-cols-2 gap-2">
-        <StatCard title="Выручка общая" value="2 480 000 ₽" />
-        <StatCard title="Заполненность общая" value="76%" accent="amber" />
+      <div className="mt-2">
+        <SegmentedChips
+          value={preset}
+          onChange={setPreset}
+          options={[
+            { k: "today", t: "Сегодня" },
+            { k: "yesterday", t: "Вчера" },
+            { k: "d7", t: "7 дней" },
+            { k: "month", t: "Месяц" },
+            { k: "all", t: "Всё" },
+          ]}
+        />
       </div>
 
-      {/* Сравнение лодок */}
-      <Surface className="mt-2">
-        <div className="flex items-end justify-between gap-2">
-          <div className="text-sm font-semibold">Сравнение лодок</div>
-          <div className="text-[11px] text-neutral-500">период</div>
+      {warnings.length > 0 && (
+        <div className="mt-2 rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3 text-xs text-amber-200">
+          <div className="font-semibold">Предупреждения</div>
+          <ul className="mt-2 list-disc pl-5 space-y-1 text-amber-100/90">
+            {warnings.slice(0, 5).map((w, i) => (
+              <li key={i}>{String(w)}</li>
+            ))}
+          </ul>
         </div>
+      )}
 
-        <div className="mt-3">
-          <SegmentedChips
-            value={preset}
-            onChange={setPreset}
-            options={[
-              { k: "today", t: "Сегодня" },
-              { k: "yesterday", t: "Вчера" },
-              { k: "d7", t: "7 дней" },
-              { k: "month", t: "Месяц" },
-              { k: "all", t: "Всё" },
-            ]}
-          />
-        </div>
-
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          <Picker title="Дата с" value="Сегодня" />
-          <Picker title="Дата по" value="Сегодня" />
-        </div>
-
-        <div className="mt-3 h-[220px] rounded-2xl border border-neutral-800 bg-neutral-900/30 flex items-center justify-center text-neutral-500">
-          LINE / SCATTER GRAPH (UI MOCK)
-        </div>
-
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <MiniInfo label="X" value="Пассажиры" />
-          <MiniInfo label="Y" value="Выручка" />
-        </div>
-      </Surface>
-
-      {/* По типам лодок */}
-      <div className="mt-2 space-y-2">
-        <div className="text-sm font-semibold px-1">По типам лодок</div>
-
-        <AggRow label="Скоростные" value="820 000 ₽" sub="72%" />
-        <AggRow label="Прогулочные" value="1 120 000 ₽" sub="78%" />
-        <AggRow label="Банан" value="420 000 ₽" sub="81%" />
-        <AggRow label="Рыбалка" value="120 000 ₽" sub="65%" />
+      <div className="grid grid-cols-2 gap-2 mt-2">
+        <StatCard title="Выручка" value={formatRUB(payload.totals.revenue)} />
+        <StatCard title="Билетов" value={formatInt(payload.totals.tickets)} />
+        <StatCard title="Рейсов" value={formatInt(payload.totals.trips)} />
+        <StatCard title="Загрузка" value={`${Number(payload.totals.fillPercent || 0)}%`} accent="amber" />
       </div>
 
-      {/* Детализация по лодкам */}
-      <div className="mt-2 space-y-2">
-        <div className="text-sm font-semibold px-1">Детализация по лодкам</div>
+      <div className="mt-3 space-y-2">
+        <div className="text-sm font-semibold px-1">Детализация</div>
 
-        <Group title="Скоростные">
-          <DetailRow name="Sea Fox" value="420 000 ₽" sub="70%" />
-          <DetailRow name="Wave Rider" value="400 000 ₽" sub="74%" />
-        </Group>
+        {loading && (
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3 text-sm text-neutral-400">
+            Загрузка...
+          </div>
+        )}
 
-        <Group title="Прогулочные">
-          <DetailRow name="Poseidon" value="520 000 ₽" sub="79%" />
-          <DetailRow name="Lagoon" value="600 000 ₽" sub="77%" />
-        </Group>
+        {!loading && grouped.length === 0 && (
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3 text-sm text-neutral-400">
+            Нет данных
+          </div>
+        )}
 
-        <Group title="Банан">
-          <DetailRow name="Banana #1" value="210 000 ₽" sub="82%" />
-          <DetailRow name="Banana #2" value="210 000 ₽" sub="80%" />
-        </Group>
-
-        <Group title="Рыбалка">
-          <DetailRow name="Fisher Pro" value="120 000 ₽" sub="65%" />
-        </Group>
+        {grouped.map((g) => (
+          <Group key={g.type} title={g.type} subtitle={`${formatRUB(g.totals.revenue)} · билетов ${formatInt(g.totals.tickets)} · рейсов ${formatInt(g.totals.trips)}`}>
+            {g.boats.map((b) => (
+              <DetailRow
+                key={b.boat_id}
+                name={b.boat_name || `boat#${b.boat_id}`}
+                value={formatRUB(b.revenue)}
+                sub={`Билетов: ${formatInt(b.tickets)} · Рейсов: ${formatInt(b.trips)} · ${b.source || "none"}`}
+              />
+            ))}
+          </Group>
+        ))}
       </div>
-    </div>
-  );
-}
-
-/* ---------- UI atoms ---------- */
-
-function Surface({ children, className = "" }) {
-  return (
-    <div
-      className={[
-        "rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3",
-        "shadow-[0_10px_30px_rgba(0,0,0,0.35)]",
-        className,
-      ].join(" ")}
-    >
-      {children}
     </div>
   );
 }
@@ -123,22 +194,8 @@ function StatCard({ title, value, accent }) {
   return (
     <div className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
       <div className="text-[11px] text-neutral-500">{title}</div>
-      <div className={["mt-1 text-lg font-extrabold tracking-tight", vCls].join(" ")}>
-        {value}
-      </div>
+      <div className={["mt-1 text-lg font-extrabold tracking-tight", vCls].join(" ")}>{value}</div>
     </div>
-  );
-}
-
-function Picker({ title, value }) {
-  return (
-    <button
-      type="button"
-      className="rounded-2xl border border-neutral-800 bg-neutral-950/30 px-3 py-3 text-left hover:bg-neutral-900/30"
-    >
-      <div className="text-[11px] text-neutral-500">{title}</div>
-      <div className="mt-1 font-semibold">{value}</div>
-    </button>
   );
 }
 
@@ -166,32 +223,12 @@ function SegmentedChips({ options, value, onChange }) {
   );
 }
 
-function MiniInfo({ label, value }) {
-  return (
-    <div className="rounded-2xl border border-neutral-800 bg-neutral-950/30 px-3 py-3">
-      <div className="text-[11px] text-neutral-500">{label}</div>
-      <div className="mt-1 text-sm font-semibold">{value}</div>
-    </div>
-  );
-}
-
-function AggRow({ label, value, sub }) {
-  return (
-    <div className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.25)] flex items-center justify-between gap-3">
-      <div>
-        <div className="text-sm font-semibold text-neutral-200">{label}</div>
-        <div className="text-[11px] text-neutral-500">Загрузка: {sub}</div>
-      </div>
-      <div className="text-sm font-extrabold tracking-tight">{value}</div>
-    </div>
-  );
-}
-
-function Group({ title, children }) {
+function Group({ title, subtitle, children }) {
   return (
     <div className="rounded-2xl border border-neutral-800 bg-neutral-950/40 shadow-[0_10px_30px_rgba(0,0,0,0.25)] overflow-hidden">
-      <div className="px-3 py-3 border-b border-neutral-800 text-sm font-semibold text-neutral-200">
-        {title}
+      <div className="px-3 py-3 border-b border-neutral-800">
+        <div className="text-sm font-semibold text-neutral-200">{title}</div>
+        {subtitle && <div className="text-[11px] text-neutral-500 mt-1">{subtitle}</div>}
       </div>
       <div className="p-3 space-y-2">{children}</div>
     </div>
@@ -200,10 +237,10 @@ function Group({ title, children }) {
 
 function DetailRow({ name, value, sub }) {
   return (
-    <div className="rounded-xl border border-neutral-800 bg-neutral-950/30 px-3 py-3 flex items-center justify-between gap-3">
+    <div className="rounded-2xl border border-neutral-800 bg-neutral-950/30 p-3 flex items-center justify-between gap-3">
       <div className="min-w-0">
         <div className="text-sm font-semibold text-neutral-200 truncate">{name}</div>
-        <div className="text-[11px] text-neutral-500">Загрузка: {sub}</div>
+        {sub && <div className="text-[11px] text-neutral-500 mt-1">{sub}</div>}
       </div>
       <div className="text-sm font-extrabold tracking-tight whitespace-nowrap">{value}</div>
     </div>

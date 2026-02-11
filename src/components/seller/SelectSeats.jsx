@@ -183,7 +183,20 @@ const SelectSeats = ({
       }
 
       // If no errors, proceed to confirmation
-      onConfirm(seats, ticketBreakdown, totalPrice);
+      // Backward-compatible: some parents expect positional args, some expect a single payload object.
+      if (typeof onConfirm === 'function') {
+        if (onConfirm.length >= 3) {
+          onConfirm(seats, ticketBreakdown, totalPrice);
+        } else {
+          onConfirm({
+            seats,
+            ticketBreakdown,
+            totalPrice,
+            numberOfSeats: seats,
+            tickets: ticketBreakdown
+          });
+        }
+      }
     } catch (error) {
       // If exception occurs before request, log it
       if (window.__debugPushAction) {
