@@ -1,4 +1,14 @@
 /**
+ * Helper: format Date object as local YYYY-MM-DD (no UTC shift)
+ * @param {Date} d - Date object
+ * @returns {string} Date string in YYYY-MM-DD format
+ */
+const formatLocalYmd = (d) => {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+/**
  * Normalize date to local date string (YYYY-MM-DD) for consistent comparison
  * @param {string|Date} dateValue - Date string or Date object
  * @returns {string|null} Date string in YYYY-MM-DD format or null if invalid
@@ -6,14 +16,15 @@
 export const normalizeDate = (dateValue) => {
   if (!dateValue) return null;
   
+  // If it's already a YYYY-MM-DD string, return as-is (no Date parsing needed)
+  if (typeof dateValue === 'string' && dateValue.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    return dateValue;
+  }
+  
   let date;
   if (typeof dateValue === 'string') {
-    // Handle date strings (YYYY-MM-DD) and datetime strings (ISO)
+    // Handle datetime strings (ISO) - parse and convert to local
     if (dateValue.includes('T')) {
-      // It's an ISO datetime string, parse it as is
-      date = new Date(dateValue);
-    } else if (dateValue.match(/^\d{4}-\d{2}-\d{2}$/)) {
-      // It's a date string in YYYY-MM-DD format
       date = new Date(dateValue);
     } else {
       // Try to parse other formats
@@ -30,25 +41,34 @@ export const normalizeDate = (dateValue) => {
     return null;
   }
   
-  // Return as YYYY-MM-DD format to ensure local date consistency
-  return date.toISOString().split('T')[0];
+  // Return as local YYYY-MM-DD format (NOT UTC!)
+  return formatLocalYmd(date);
 };
 
 /**
- * Get today's date in YYYY-MM-DD format
+ * Get today's date in YYYY-MM-DD format (local timezone)
  * @returns {string} Today's date in YYYY-MM-DD format
  */
 export const getTodayDate = () => {
-  const today = new Date();
-  return today.toISOString().split('T')[0];
+  return formatLocalYmd(new Date());
 };
 
 /**
- * Get tomorrow's date in YYYY-MM-DD format
+ * Get tomorrow's date in YYYY-MM-DD format (local timezone)
  * @returns {string} Tomorrow's date in YYYY-MM-DD format
  */
 export const getTomorrowDate = () => {
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
-  return tomorrow.toISOString().split('T')[0];
+  return formatLocalYmd(tomorrow);
+};
+
+/**
+ * Get day+2's date in YYYY-MM-DD format (local timezone)
+ * @returns {string} Day after tomorrow's date in YYYY-MM-DD format
+ */
+export const getDay2Date = () => {
+  const day2 = new Date();
+  day2.setDate(day2.getDate() + 2);
+  return formatLocalYmd(day2);
 };

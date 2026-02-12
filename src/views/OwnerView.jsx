@@ -1,6 +1,7 @@
 import { useAuth } from "../contexts/AuthContext";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import apiClient from "../utils/apiClient.js";
+import { OwnerDataContext } from "../contexts/OwnerDataContext.jsx";
 import OwnerMoneyView from "./OwnerMoneyView";
 import OwnerBoatsView from "./OwnerBoatsView";
 import OwnerSellersView from "./OwnerSellersView";
@@ -164,31 +165,66 @@ export default function OwnerView() {
   const { logout } = useAuth();
   const [tab, setTab] = useState("money"); // money | compare | boats | sellers | motivation | settings | load | export
 
-  return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100">
-      
-      {/* Logout button (fixed, next to debug) */}
-      <button
-        type="button"
-        onClick={logout}
-        className="fixed top-3 right-3 z-50 rounded-2xl border border-neutral-800 bg-neutral-950/40 backdrop-blur px-3 py-2 text-xs font-semibold text-neutral-200 hover:bg-neutral-900/40 shadow-[0_10px_30px_rgba(0,0,0,0.25)]"
-        title="Выйти"
-      >
-        Выйти
-      </button>
-<main className="pb-24 pb-24">
-        {tab === "money" && <OwnerMoneyView />}
-        {tab === "compare" && <OwnerComparePeriodsView />}
-        {tab === "boats" && <OwnerBoatsView />}
-        {tab === "sellers" && <OwnerSellersView />}
-        {tab === "motivation" && <OwnerMotivationView />}
-        {tab === "settings" && <OwnerSettingsView />}
-        {tab === "load" && <OwnerLoadView />}
-        {tab === "export" && <OwnerExportView />}
-      </main>
+  // Ref for triggering refresh in OwnerMoneyView
+  const refreshMoneyRef = useCallback((fn) => {
+    if (fn && typeof fn === 'function') {
+      refreshMoneyRef.current = fn;
+    }
+  }, []);
 
-      <OwnerBottomTabs tab={tab} setTab={setTab} />
-    </div>
+  // Ref for triggering pending refresh in OwnerMoneyView
+  const refreshPendingRef = useCallback((fn) => {
+    if (fn && typeof fn === 'function') {
+      refreshPendingRef.current = fn;
+    }
+  }, []);
+
+  // Function to refresh owner data - called from context
+  const refreshOwnerData = useCallback(() => {
+    if (refreshMoneyRef.current && typeof refreshMoneyRef.current === 'function') {
+      refreshMoneyRef.current();
+    }
+  }, []);
+
+  // Function to refresh pending by day - called from context with affected days
+  const refreshPendingByDay = useCallback((days) => {
+    if (refreshPendingRef.current && typeof refreshPendingRef.current === 'function') {
+      refreshPendingRef.current(days);
+    }
+  }, []);
+
+  const contextValue = useMemo(() => ({
+    refreshOwnerData,
+    refreshPendingByDay,
+  }), [refreshOwnerData, refreshPendingByDay]);
+
+  return (
+    <OwnerDataContext.Provider value={contextValue}>
+      <div className="min-h-screen bg-neutral-950 text-neutral-100">
+        
+        {/* Logout button (fixed, next to debug) */}
+        <button
+          type="button"
+          onClick={logout}
+          className="fixed top-3 right-3 z-50 rounded-2xl border border-neutral-800 bg-neutral-950/40 backdrop-blur px-3 py-2 text-xs font-semibold text-neutral-200 hover:bg-neutral-900/40 shadow-[0_10px_30px_rgba(0,0,0,0.25)]"
+          title="Выйти"
+        >
+          Выйти
+        </button>
+<main className="pb-24 pb-24">
+          {tab === "money" && <OwnerMoneyView onRegisterRefresh={refreshMoneyRef} onRegisterPendingRefresh={refreshPendingRef} />}
+          {tab === "compare" && <OwnerComparePeriodsView />}
+          {tab === "boats" && <OwnerBoatsView />}
+          {tab === "sellers" && <OwnerSellersView />}
+          {tab === "motivation" && <OwnerMotivationView />}
+          {tab === "settings" && <OwnerSettingsView />}
+          {tab === "load" && <OwnerLoadView />}
+          {tab === "export" && <OwnerExportView />}
+        </main>
+
+        <OwnerBottomTabs tab={tab} setTab={setTab} />
+      </div>
+    </OwnerDataContext.Provider>
   );
 }
 

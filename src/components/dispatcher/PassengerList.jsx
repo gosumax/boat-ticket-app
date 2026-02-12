@@ -3,6 +3,7 @@ import apiClient from '../../utils/apiClient';
 import ConfirmBoardingModal from './ConfirmBoardingModal';
 import QuickSaleForm from './QuickSaleForm';
 import { getSlotAvailable } from '../../utils/slotAvailability';
+import { useOwnerData } from '../../contexts/OwnerDataContext';
 
 /**
  * Local helper to generate ticket numbers (fallback if utils/ticketUtils is missing)
@@ -164,6 +165,7 @@ function getTicketStatus(ticket) {
 const ALLOWED_PRESALE_STATUSES_FOR_TICKET_OPS = ['ACTIVE', 'PAID'];
 
 const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) => {
+  const { refreshOwnerData } = useOwnerData();
   const [presales, setPresales] = useState([]);
   const [tickets, setTickets] = useState({});
   const [loading, setLoading] = useState(false);
@@ -325,7 +327,9 @@ const loadTransferOptions = async (ctx) => {
       const slots = resp?.data || resp?.slots || resp || [];
 
       const now = new Date();
-      const todayStr = now.toISOString().slice(0, 10);
+      const pad = (n) => String(n).padStart(2, '0');
+      const formatLocalDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      const todayStr = formatLocalDate(now);
       const currentTimeHHMM = now.toTimeString().slice(0, 5);
 
       const requiredSeats = Number(ctx?.requiredSeats || 1);
@@ -333,7 +337,7 @@ const loadTransferOptions = async (ctx) => {
 
       const tomorrow = new Date(now);
       tomorrow.setDate(now.getDate() + 1);
-      const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+      const tomorrowStr = formatLocalDate(tomorrow);
 
       const options = (Array.isArray(slots) ? slots : [])
         .filter((s) => {
@@ -418,11 +422,12 @@ const loadTransferOptions = async (ctx) => {
 
     try {
       const ctx = transferCtx;
+      let response;
 
       if (ctx.mode === 'PRESALE') {
-        await apiClient.transferPresaleToSlot(ctx.presaleId, transferSelectedSlotUid);
+        response = await apiClient.transferPresaleToSlot(ctx.presaleId, transferSelectedSlotUid);
       } else if (ctx.mode === 'TICKET') {
-        await apiClient.transferTicketToSlot(ctx.ticketId, transferSelectedSlotUid);
+        response = await apiClient.transferTicketToSlot(ctx.ticketId, transferSelectedSlotUid);
       }
 
       setTransferModalOpen(false);
@@ -439,6 +444,63 @@ const loadTransferOptions = async (ctx) => {
         window.dispatchEvent(new CustomEvent('dispatcher:slots-changed'));
         window.dispatchEvent(new CustomEvent('dispatcher:refresh'));
       } catch (e) {}
+
+      // notify owner dashboard to refresh data
+      try {
+        refreshOwnerData();
+      } catch (e) {}
+
+      // Refresh pending-by-day for affected days if available in response
+      try {
+        const affectedDays = response?.affected_days;
+        console.log('[PassengerList] Transfer response affected_days:', affectedDays);
+        console.log('[PassengerList] Full transfer response:', response);
+        
+        if (affectedDays && (affectedDays.old_day || affectedDays.new_day)) {
+          // Normalize ISO dates to day keys (today/tomorrow/day2)
+          // IMPORTANT: Use local date formatting, NOT toISOString() which converts to UTC!
+          const now = new Date();
+          const pad = (n) => String(n).padStart(2, '0');
+          const formatLocalDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+          
+          const todayStr = formatLocalDate(now);
+          const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+          const tomorrowStr = formatLocalDate(tomorrow);
+          const day2 = new Date(now); day2.setDate(day2.getDate() + 2);
+          const day2Str = formatLocalDate(day2);
+          
+          console.log('[PassengerList] Date mapping:', { todayStr, tomorrowStr, day2Str, old_day: affectedDays.old_day, new_day: affectedDays.new_day });
+          
+          const dateToKeyMap = { [todayStr]: 'today', [tomorrowStr]: 'tomorrow', [day2Str]: 'day2' };
+          
+          const daysToRefresh = [];
+          if (affectedDays.old_day) {
+            const normalizedOld = dateToKeyMap[affectedDays.old_day] || affectedDays.old_day;
+            daysToRefresh.push(normalizedOld);
+          }
+          if (affectedDays.new_day) {
+            const normalizedNew = dateToKeyMap[affectedDays.new_day] || affectedDays.new_day;
+            daysToRefresh.push(normalizedNew);
+          }
+          
+          // Filter only valid day keys that pending-by-day endpoint accepts
+          const validDays = daysToRefresh.filter(d => ['today', 'tomorrow', 'day2'].includes(d));
+          
+          console.log('[PassengerList] Normalized days to refresh:', validDays, 'from:', daysToRefresh);
+          
+          if (validDays.length > 0) {
+            // Dispatch event with delay to ensure DB transaction is fully committed
+            setTimeout(() => {
+              console.log('[PassengerList] Dispatching owner:refresh-pending with valid days:', validDays);
+              window.dispatchEvent(new CustomEvent('owner:refresh-pending', { detail: { days: validDays } }));
+              // Also trigger general owner data refresh
+              window.dispatchEvent(new CustomEvent('owner:refresh-data'));
+            }, 100);
+          }
+        }
+      } catch (e) {
+        console.error('[PassengerList] Error dispatching refresh event:', e);
+      }
     } catch (e) {
       setTransferError(e?.message || 'Ошибка переноса');
     } finally {
@@ -645,6 +707,8 @@ const loadTransferOptions = async (ctx) => {
       try {
         window.dispatchEvent(new CustomEvent('dispatcher:slots-changed'));
         window.dispatchEvent(new CustomEvent('dispatcher:refresh'));
+        // notify owner dashboard to refresh data
+        refreshOwnerData();
       } catch (e) {}
     } catch (error) {
       console.error('Error performing ticket operation:', error);
@@ -800,6 +864,8 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
         try {
           window.dispatchEvent(new CustomEvent('dispatcher:slots-changed'));
           window.dispatchEvent(new CustomEvent('dispatcher:refresh'));
+          // notify owner dashboard to refresh data
+          refreshOwnerData();
         } catch (e) {}
       } catch (error) {
         console.error('Error performing presale operation:', error);
@@ -859,7 +925,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
             <div className="mt-3 grid grid-cols-2 gap-2">
               <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-3">
-                <div className="text-xs text-neutral-400">Предоплата</div>
+                <div className="text-xs text-neutral-400">{remaining > 0 ? 'Предоплата' : 'Оплачено'}</div>
                 <div className="text-sm font-semibold">{formatCurrencyRub(prepay)} ₽</div>
               </div>
               <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-3">

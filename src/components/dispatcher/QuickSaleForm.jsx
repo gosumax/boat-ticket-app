@@ -2,8 +2,10 @@ import { useState, useEffect } from 'react';
 import { formatRUB } from '../../utils/currency';
 import { getSlotAvailable } from '../../utils/slotAvailability';
 import apiClient from '../../utils/apiClient';
+import { useOwnerData } from '../../contexts/OwnerDataContext';
 
 const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots }) => {
+  const { refreshOwnerData } = useOwnerData();
   // Initialize ticket categories with default values
   const [ticketCategories, setTicketCategories] = useState({ adult: 1, teen: 0, child: 0 });
   
@@ -267,6 +269,8 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       try {
         window.dispatchEvent(new CustomEvent('dispatcher:slots-changed'));
         window.dispatchEvent(new CustomEvent('dispatcher:refresh'));
+        // notify owner dashboard to refresh data
+        refreshOwnerData();
       } catch (e) {}
     } catch (error) {
       console.error('Error creating presale:', error);

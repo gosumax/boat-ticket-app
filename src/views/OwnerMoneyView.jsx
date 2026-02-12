@@ -9,8 +9,9 @@
  *    GET /api/owner/money/pending-by-day?day=today|tomorrow|day2
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import apiClient from "../utils/apiClient.js";
+import { useOwnerData } from "../contexts/OwnerDataContext.jsx";
 
 function formatRUB(v) {
   const n = Number(v || 0);
@@ -57,7 +58,8 @@ function maxOf(arr, pick) {
   return m;
 }
 
-export default function OwnerMoneyView() {
+export default function OwnerMoneyView({ onRegisterRefresh, onRegisterPendingRefresh }) {
+  const { refreshOwnerData, refreshPendingByDay } = useOwnerData();
   const [preset, setPreset] = useState("today");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -84,8 +86,17 @@ export default function OwnerMoneyView() {
   // ===== Pending (future days) =====
   const [pendingDay, setPendingDay] = useState("tomorrow");
 
-  const [pendingData, setPendingData] = useState(null);
+  // pendingData is now an object with keys: today, tomorrow, day2
+  // Each key contains the data for that day
+  const [pendingData, setPendingData] = useState({
+    today: null,
+    tomorrow: null,
+    day2: null,
+  });
   const [pendingLoading, setPendingLoading] = useState(false);
+  
+  // Ref for tracking refresh requests to prevent race conditions
+  const refreshIdRef = useRef(0);
 
   const compareDaysPreset = useMemo(() => {
     if (preset === "30d") return "30d";
@@ -152,26 +163,131 @@ export default function OwnerMoneyView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset]);
 
+  // Register reload function with parent for context-based refresh
+  useEffect(() => {
+    if (onRegisterRefresh) {
+      onRegisterRefresh(() => reload({ silent: false }));
+    }
+  }, [onRegisterRefresh]);
+
+  // Register pending reload function with parent for context-based refresh
+  useEffect(() => {
+    if (onRegisterPendingRefresh) {
+      onRegisterPendingRefresh(async (affectedDays) => {
+        console.log('[onRegisterPendingRefresh] called with:', affectedDays);
+        refreshIdRef.current += 1;
+        const batchRid = refreshIdRef.current;
+        
+        if (affectedDays && Array.isArray(affectedDays)) {
+          const validDays = ['today', 'tomorrow', 'day2'];
+          const days = Array.from(new Set(affectedDays.filter(d => validDays.includes(d))));
+          console.log('[onRegisterPendingRefresh] rid=', batchRid, 'days=', days);
+          await Promise.all(days.map(day => loadPendingForDay(day, batchRid)));
+        } else {
+          // Reload current day if no specific days provided
+          await loadPendingForDay(pendingDay, batchRid);
+        }
+      });
+    }
+  }, [onRegisterPendingRefresh, pendingDay]);
+
+  // Listen for owner:refresh-pending events from other components
+  useEffect(() => {
+    const handleRefreshPending = async (event) => {
+      const affectedDays = event?.detail?.days;
+      console.log('[handleRefreshPending] EVENT received raw:', affectedDays);
+      
+      if (affectedDays && Array.isArray(affectedDays)) {
+        // affectedDays now contains normalized day keys: 'today', 'tomorrow', 'day2'
+        // Filter to only valid days and deduplicate
+        const validDays = ['today', 'tomorrow', 'day2'];
+        const normalizedDays = Array.from(new Set(affectedDays.filter(d => validDays.includes(d))));
+        
+        console.log('[handleRefreshPending] normalized:', normalizedDays);
+        
+        // Increment batch RID once for this refresh operation
+        refreshIdRef.current += 1;
+        const batchRid = refreshIdRef.current;
+        console.log('[handleRefreshPending] batch rid=', batchRid, 'days=', normalizedDays);
+        
+        // Load ALL affected days in parallel using Promise.all
+        // This ensures both old and new day data are updated
+        await Promise.all(normalizedDays.map(day => loadPendingForDay(day, batchRid)));
+        
+        console.log('[handleRefreshPending] COMPLETE rid=', batchRid);
+        
+        // Also reload current view if it's not in affected days (safety)
+        if (!normalizedDays.includes(pendingDay)) {
+          console.log('[handleRefreshPending] Also reloading current view:', pendingDay);
+          await loadPendingForDay(pendingDay, batchRid);
+        }
+      } else {
+        // No specific days provided, just reload current view
+        console.log('[handleRefreshPending] No days provided, reloading current:', pendingDay);
+        refreshIdRef.current += 1;
+        await loadPendingForDay(pendingDay, refreshIdRef.current);
+      }
+    };
+    
+    // Also listen for general owner data refresh events
+    const handleRefreshData = async () => {
+      console.log('[handleRefreshData] EVENT received');
+      refreshIdRef.current += 1;
+      const batchRid = refreshIdRef.current;
+      console.log('[handleRefreshData] batch rid=', batchRid);
+      // Reload all days in parallel
+      await Promise.all(['today', 'tomorrow', 'day2'].map(day => loadPendingForDay(day, batchRid)));
+      console.log('[handleRefreshData] COMPLETE rid=', batchRid);
+    };
+    
+    window.addEventListener('owner:refresh-pending', handleRefreshPending);
+    window.addEventListener('owner:refresh-data', handleRefreshData);
+    return () => {
+      window.removeEventListener('owner:refresh-pending', handleRefreshPending);
+      window.removeEventListener('owner:refresh-data', handleRefreshData);
+    };
+  }, [pendingDay]);
+
+  // Helper function to load pending for a specific day
+  // rid is passed from batch refresh to prevent race conditions
+  const loadPendingForDay = async (day, rid) => {
+    console.log('[loadPendingForDay] START day=', day, 'rid=', rid);
+    setPendingLoading(true);
+    
+    try {
+      const res = await ownerGet(
+        `/owner/money/pending-by-day?day=${encodeURIComponent(day)}`
+      );
+      
+      // Check if this request is still relevant (no newer batch started)
+      if (rid !== refreshIdRef.current) {
+        console.log('[loadPendingForDay] STALE rid=', rid, 'current=', refreshIdRef.current, 'ignoring');
+        return;
+      }
+      
+      const newData = res?.data ?? null;
+      console.log('[loadPendingForDay] RECEIVED day=', day, 'rid=', rid, 'data=', newData);
+      
+      // Write to state using functional update to avoid race conditions
+      setPendingData(prev => {
+        const next = { ...prev, [day]: newData };
+        console.log('[setPendingData] WRITE key=', day, 'rid=', rid, 'data=', newData);
+        return next;
+      });
+    } catch (e) {
+      console.error('[loadPendingForDay] ERROR day=', day, 'rid=', rid, 'error=', e);
+      setPendingData(prev => ({ ...prev, [day]: { _error: e?.message, _timestamp: Date.now() } }));
+    } finally {
+      setPendingLoading(false);
+      console.log('[loadPendingForDay] END day=', day, 'rid=', rid);
+    }
+  };
+
   // Load pending by business day (separate from revenue day)
   useEffect(() => {
-    let cancelled = false;
-    async function loadPending() {
-      setPendingLoading(true);
-      try {
-        const res = await ownerGet(
-          `/owner/money/pending-by-day?day=${encodeURIComponent(pendingDay)}`
-        );
-        if (!cancelled) setPendingData(res?.data ?? null);
-      } catch {
-        if (!cancelled) setPendingData(null);
-      } finally {
-        if (!cancelled) setPendingLoading(false);
-      }
-    }
-    loadPending();
-    return () => {
-      cancelled = true;
-    };
+    console.log('[OwnerMoneyView] Initial load for pendingDay:', pendingDay);
+    refreshIdRef.current += 1;
+    loadPendingForDay(pendingDay, refreshIdRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingDay]);
 
@@ -327,14 +443,14 @@ export default function OwnerMoneyView() {
 
         {pendingLoading ? (
           <div className="mt-3 text-sm text-neutral-500">Загрузка…</div>
-        ) : pendingData ? (
+        ) : pendingData[pendingDay] ? (
           <div className="mt-3 grid grid-cols-3 gap-2">
             <MiniCard
               label="Сумма"
-              value={formatRUB(pendingData.sum ?? pendingData.sum_pending ?? pendingData.amount ?? pendingData.total ?? 0)}
+              value={formatRUB(pendingData[pendingDay].sum ?? pendingData[pendingDay].sum_pending ?? pendingData[pendingDay].amount ?? pendingData[pendingDay].total ?? 0)}
             />
-            <MiniCard label="Билетов" value={formatInt(pendingData.tickets ?? pendingData.tickets_count ?? 0)} />
-            <MiniCard label="Рейсов" value={formatInt(pendingData.trips ?? pendingData.trips_count ?? 0)} />
+            <MiniCard label="Билетов" value={formatInt(pendingData[pendingDay].tickets ?? pendingData[pendingDay].tickets_count ?? 0)} />
+            <MiniCard label="Рейсов" value={formatInt(pendingData[pendingDay].trips ?? pendingData[pendingDay].trips_count ?? 0)} />
           </div>
         ) : (
           <div className="mt-3 text-sm text-red-200">Ошибка загрузки pending</div>

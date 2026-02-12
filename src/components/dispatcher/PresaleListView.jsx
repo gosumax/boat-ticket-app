@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import apiClient from '../../utils/apiClient';
 import { formatRUB } from '../../utils/currency';
+import { useOwnerData } from '../../contexts/OwnerDataContext';
 
 const PresaleListView = ({ dateFilter, typeFilter, statusFilter, searchTerm }) => {
+  const { refreshOwnerData } = useOwnerData();
   const [presales, setPresales] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedPresale, setSelectedPresale] = useState(null);
@@ -112,6 +114,11 @@ const PresaleListView = ({ dateFilter, typeFilter, statusFilter, searchTerm }) =
       setSelectedPresale(updatedPresale);
       setAdditionalPayment('');
       setPaymentError('');
+
+      // Notify owner dashboard to refresh data after payment
+      try {
+        refreshOwnerData();
+      } catch (e) {}
     } catch (error) {
       console.error('Error updating payment:', error);
       setPaymentError('Ошибка при обновлении платежа: ' + (error.message || 'Неизвестная ошибка'));
@@ -180,7 +187,7 @@ const PresaleListView = ({ dateFilter, typeFilter, statusFilter, searchTerm }) =
             </div>
             
             <div className="flex justify-between items-center mb-1">
-              <span className="text-neutral-300">Предоплата:</span>
+              <span className="text-neutral-300">{presale.remaining_amount > 0 ? 'Предоплата:' : 'Оплачено:'}</span>
               <span className="font-bold text-emerald-300">-{formatRUB(presale.prepayment_amount)}</span>
             </div>
             
@@ -269,7 +276,7 @@ const PresaleListView = ({ dateFilter, typeFilter, statusFilter, searchTerm }) =
                   <span className="font-bold">{formatRUB(selectedPresale.total_price)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-neutral-300">Предоплата:</span>
+                  <span className="text-neutral-300">{selectedPresale.remaining_amount > 0 ? 'Предоплата:' : 'Оплачено:'}</span>
                   <span className="font-bold text-emerald-300">-{formatRUB(selectedPresale.prepayment_amount)}</span>
                 </div>
                 <div className="flex justify-between pt-2 border-t border-neutral-800">

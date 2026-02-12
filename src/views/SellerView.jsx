@@ -7,6 +7,7 @@ import ConfirmationScreen from '../components/seller/ConfirmationScreen';
 import SalesHistory from '../components/seller/SalesHistory';
 import apiClient from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
+import { useOwnerData } from '../contexts/OwnerDataContext';
 import Toast from '../components/Toast';
 
 function todayISO() {
@@ -36,6 +37,7 @@ function isTripSellable(trip, cutoffMinutes = 10) {
 const SellerView = () => {
   const navigate = useNavigate();
   const { logout } = useAuth();
+  const { refreshOwnerData } = useOwnerData();
 
   const [currentStep, setCurrentStep] = useState(1);
 
@@ -152,6 +154,12 @@ const SellerView = () => {
       const presale = res?.presale || res;
       setTicketInfo(presale);
       setToast({ type: 'success', message: 'Предзаказ создан' });
+      
+      // Notify owner dashboard to refresh data after presale creation
+      try {
+        refreshOwnerData();
+      } catch (e) {}
+      
       // stay on confirmation screen (same step, UI is within step 4 component)
     } catch (err) {
       console.error('Create presale error:', err);

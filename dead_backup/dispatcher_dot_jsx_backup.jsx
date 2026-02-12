@@ -268,7 +268,9 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
       const slots = resp?.data || resp?.slots || resp || [];
 
       const now = new Date();
-      const todayStr = now.toISOString().slice(0, 10);
+      const pad = (n) => String(n).padStart(2, '0');
+      const formatLocalDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      const todayStr = formatLocalDate(now);
       const currentTimeHHMM = now.toTimeString().slice(0, 5);
 
       const requiredSeats = Number(ctx?.requiredSeats || 1);
@@ -276,7 +278,7 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
 
       const tomorrow = new Date(now);
       tomorrow.setDate(now.getDate() + 1);
-      const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+      const tomorrowStr = formatLocalDate(tomorrow);
 
       const options = (Array.isArray(slots) ? slots : [])
         .filter((s) => {
@@ -361,11 +363,12 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
 
     try {
       const ctx = transferCtx;
+      let response;
 
       if (ctx.mode === 'PRESALE') {
-        await apiClient.transferPresaleToSlot(ctx.presaleId, transferSelectedSlotUid);
+        response = await apiClient.transferPresaleToSlot(ctx.presaleId, transferSelectedSlotUid);
       } else if (ctx.mode === 'TICKET') {
-        await apiClient.transferTicketToSlot(ctx.ticketId, transferSelectedSlotUid);
+        response = await apiClient.transferTicketToSlot(ctx.ticketId, transferSelectedSlotUid);
       }
 
       setTransferModalOpen(false);
@@ -376,6 +379,57 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
         reloadPresalesAndTickets();
         refreshSeatsLeft();
       if (refreshAllSlots) refreshAllSlots();
+
+      // Refresh pending-by-day for affected days if available in response
+      try {
+        const affectedDays = response?.affected_days;
+        console.log('[.jsx] Transfer response affected_days:', affectedDays);
+        
+        if (affectedDays && (affectedDays.old_day || affectedDays.new_day)) {
+          // Normalize ISO dates to day keys (today/tomorrow/day2)
+          // IMPORTANT: Use local date formatting, NOT toISOString() which converts to UTC!
+          const now = new Date();
+          const pad = (n) => String(n).padStart(2, '0');
+          const formatLocalDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+          
+          const todayStr = formatLocalDate(now);
+          const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+          const tomorrowStr = formatLocalDate(tomorrow);
+          const day2 = new Date(now); day2.setDate(day2.getDate() + 2);
+          const day2Str = formatLocalDate(day2);
+          
+          console.log('[.jsx] Date mapping:', { todayStr, tomorrowStr, day2Str, old_day: affectedDays.old_day, new_day: affectedDays.new_day });
+          
+          const dateToKeyMap = { [todayStr]: 'today', [tomorrowStr]: 'tomorrow', [day2Str]: 'day2' };
+          
+          const daysToRefresh = [];
+          if (affectedDays.old_day) {
+            const normalizedOld = dateToKeyMap[affectedDays.old_day] || affectedDays.old_day;
+            daysToRefresh.push(normalizedOld);
+          }
+          if (affectedDays.new_day) {
+            const normalizedNew = dateToKeyMap[affectedDays.new_day] || affectedDays.new_day;
+            daysToRefresh.push(normalizedNew);
+          }
+          
+          // Filter only valid day keys that pending-by-day endpoint accepts
+          const validDays = daysToRefresh.filter(d => ['today', 'tomorrow', 'day2'].includes(d));
+          
+          console.log('[.jsx] Normalized days to refresh:', validDays, 'from:', daysToRefresh);
+          
+          if (validDays.length > 0) {
+            // Dispatch event with delay to ensure DB transaction is fully committed
+            setTimeout(() => {
+              console.log('[.jsx] Dispatching owner:refresh-pending with valid days:', validDays);
+              window.dispatchEvent(new CustomEvent('owner:refresh-pending', { detail: { days: validDays } }));
+              // Also trigger general owner data refresh
+              window.dispatchEvent(new CustomEvent('owner:refresh-data'));
+            }, 100);
+          }
+        }
+      } catch (e) {
+        console.error('[.jsx] Error dispatching refresh event:', e);
+      }
     } catch (e) {
       setTransferError(e?.message || 'Ошибка переноса');
     } finally {

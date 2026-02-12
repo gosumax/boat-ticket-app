@@ -100,6 +100,54 @@ function syncSeatsLeftCache(boatSlotId, capacityOverride = null) {
   db.prepare(`UPDATE boat_slots SET seats_left = ? WHERE id = ?`).run(left, boatSlotId);
   return { capacity: cap, occupied: occ, seats_left: left };
 }
+
+// Helper: recalc pending (EXPECT_PAYMENT) for a presale after transfer
+// This ensures unpaid tickets appear in correct day's "pending" block
+function recalcPendingForTransfer(presaleId, slotUid, boatSlotId, totalPrice, prepaymentAmount) {
+  try {
+    const expectedAmount = Math.max(0, Number(totalPrice || 0) - Number(prepaymentAmount || 0));
+    
+    // Get trip day for the slot
+    let tripDay = null;
+    try {
+      if (slotUid && typeof slotUid === 'string' && slotUid.startsWith('generated:')) {
+        const genId = Number(String(slotUid).slice('generated:'.length));
+        if (Number.isFinite(genId)) {
+          const row = db.prepare('SELECT trip_date FROM generated_slots WHERE id = ?').get(genId);
+          if (row?.trip_date) tripDay = row.trip_date;
+        }
+      }
+    } catch (_) {}
+    
+    if (!tripDay && boatSlotId != null) {
+      try {
+        const row = db.prepare('SELECT trip_date FROM boat_slots WHERE id = ?').get(boatSlotId);
+        if (row?.trip_date) tripDay = row.trip_date;
+      } catch (_) {}
+    }
+    
+    if (!tripDay) {
+      tripDay = db.prepare(`SELECT date('now','localtime') AS d`).get()?.d || null;
+    }
+    
+    // Delete old EXPECT_PAYMENT rows for this presale
+    db.prepare(`DELETE FROM money_ledger WHERE presale_id = ? AND kind = 'EXPECT_PAYMENT'`).run(presaleId);
+    
+    // Insert new EXPECT_PAYMENT row if there's unpaid amount
+    if (expectedAmount > 0) {
+      db.prepare(`
+        INSERT INTO money_ledger
+        (presale_id, slot_id, trip_day, kind, method, amount, status, type)
+        VALUES (?, ?, ?, 'EXPECT_PAYMENT', NULL, ?, 'POSTED', 'PENDING')
+      `).run(presaleId, boatSlotId ?? null, tripDay, expectedAmount);
+    }
+    
+    return { ok: true, tripDay, expectedAmount };
+  } catch (e) {
+    console.error('[recalcPendingForTransfer] Failed:', e);
+    return { ok: false, error: e?.message };
+  }
+}
 import { authenticateToken, canSell, canDispatchManageSlots } from './auth.js';
 import { getDatabaseFilePath } from './db.js';
 // ===== SLOT SEATS RECALC (TICKETS SOURCE OF TRUTH) =====
@@ -3839,8 +3887,48 @@ function transferTicketToAnotherSlot(req, res) {
       applySeatsDelta(fromSlotUid, +1);
       applySeatsDelta(toSlotUid, -1);
 
+      // Recalc pending for the new presale (transferred ticket)
+      recalcPendingForTransfer(newPresaleId, String(toSlotUid), targetBaseBoatSlotId, tPrice, 0);
+
+      // Recalc pending for the old presale (remaining balance may have changed)
+      // Need to get the old slot's trip_day for proper cleanup
+      let oldTripDay = null;
+      try {
+        if (fromSlotUid && typeof fromSlotUid === 'string' && fromSlotUid.startsWith('generated:')) {
+          const genId = Number(String(fromSlotUid).slice('generated:'.length));
+          if (Number.isFinite(genId)) {
+            const row = db.prepare('SELECT trip_date FROM generated_slots WHERE id = ?').get(genId);
+            if (row?.trip_date) oldTripDay = row.trip_date;
+          }
+        }
+      } catch (_) {}
+      if (!oldTripDay && row?.presale_boat_slot_id) {
+        try {
+          const row = db.prepare('SELECT trip_date FROM boat_slots WHERE id = ?').get(row.presale_boat_slot_id);
+          if (row?.trip_date) oldTripDay = row.trip_date;
+        } catch (_) {}
+      }
+      // Delete old EXPECT_PAYMENT for old presale and re-create if needed
+      db.prepare(`DELETE FROM money_ledger WHERE presale_id = ? AND kind = 'EXPECT_PAYMENT'`).run(oldPresaleId);
+      const oldRemaining = Math.max(0, newOldTotal - newOldPrepay);
+      if (oldRemaining > 0 && newStatus !== 'CANCELLED') {
+        db.prepare(`
+          INSERT INTO money_ledger
+          (presale_id, slot_id, trip_day, kind, method, amount, status, type)
+          VALUES (?, ?, ?, 'EXPECT_PAYMENT', NULL, ?, 'POSTED', 'PENDING')
+        `).run(oldPresaleId, row?.presale_boat_slot_id ?? null, oldTripDay, oldRemaining);
+      }
+
       const updatedTicket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
-      return { ok: true, ticket: updatedTicket, new_presale_id: newPresaleId };
+      return {
+        ok: true,
+        ticket: updatedTicket,
+        new_presale_id: newPresaleId,
+        affected_days: {
+          old_day: oldTripDay,
+          new_day: targetBusinessDay
+        }
+      };
     });
 
     const result = tx();
@@ -4065,6 +4153,24 @@ function doTransferPresaleToSlot(presaleId, toSlotUid) {
 
   if (String(fromSlotUid) === String(toSlotUid)) return { error: 'Cannot transfer to same рейс', code: 400 };
 
+  // Get old trip day before transfer
+  let oldTripDay = null;
+  try {
+    if (fromSlotUid && typeof fromSlotUid === 'string' && fromSlotUid.startsWith('generated:')) {
+      const genId = Number(String(fromSlotUid).slice('generated:'.length));
+      if (Number.isFinite(genId)) {
+        const row = db.prepare('SELECT trip_date FROM generated_slots WHERE id = ?').get(genId);
+        if (row?.trip_date) oldTripDay = row.trip_date;
+      }
+    }
+  } catch (_) {}
+  if (!oldTripDay && presale?.boat_slot_id) {
+    try {
+      const row = db.prepare('SELECT trip_date FROM boat_slots WHERE id = ?').get(presale.boat_slot_id);
+      if (row?.trip_date) oldTripDay = row.trip_date;
+    } catch (_) {}
+  }
+
   // Count active tickets inside presale
   const activeCountRow = db.prepare(`
     SELECT COUNT(*) as cnt
@@ -4266,7 +4372,42 @@ function doTransferPresaleToSlot(presaleId, toSlotUid) {
     console.log('[PRESALE_TRANSFER_PENDING_CANON] skipped', e?.message || e);
   }
 
-  return { ok: true, movedSeats };
+  // === Recalc EXPECT_PAYMENT in money_ledger for owner pending-by-day ===
+  let newTripDay = null;
+  try {
+    const cur = db.prepare(`
+      SELECT id, boat_slot_id, slot_uid, total_price, prepayment_amount
+      FROM presales
+      WHERE id = ?
+    `).get(presaleId);
+    
+    if (cur) {
+      recalcPendingForTransfer(
+        presaleId,
+        String(cur?.slot_uid ?? toSlotUid),
+        Number(cur?.boat_slot_id ?? 0) || getBaseBoatSlotIdForSlot(toSlotUid) || null,
+        cur?.total_price ?? 0,
+        cur?.prepayment_amount ?? 0
+      );
+      
+      // Get new trip day after transfer
+      if (cur?.slot_uid && typeof cur.slot_uid === 'string' && cur.slot_uid.startsWith('generated:')) {
+        const genId = Number(String(cur.slot_uid).slice('generated:'.length));
+        if (Number.isFinite(genId)) {
+          const row = db.prepare('SELECT trip_date FROM generated_slots WHERE id = ?').get(genId);
+          if (row?.trip_date) newTripDay = row.trip_date;
+        }
+      }
+      if (!newTripDay && cur?.boat_slot_id) {
+        const row = db.prepare('SELECT trip_date FROM boat_slots WHERE id = ?').get(cur.boat_slot_id);
+        if (row?.trip_date) newTripDay = row.trip_date;
+      }
+    }
+  } catch (e) {
+    console.log('[PRESALE_TRANSFER_PENDING_LEDGER] skipped', e?.message || e);
+  }
+
+  return { ok: true, movedSeats, affected_days: { old_day: oldTripDay, new_day: newTripDay } };
 }
 
 router.post('/presales/:id/transfer', authenticateToken, canSellOrDispatch, (req, res) => {
