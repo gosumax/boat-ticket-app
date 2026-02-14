@@ -32,7 +32,7 @@ function toExcelHtml(rows, sheetName) {
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
-      .replace(/\"/g, "&quot;");
+      .replace(/"/g, "&quot;");
 
   const thead = `<tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>`;
   const tbody = (rows || [])
@@ -59,14 +59,73 @@ function formatRUB(v) {
   }
 }
 
+function buildShareText({ dataset, preset, rows }) {
+  const periodLabel = periodLabelFromPreset(preset);
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  
+  const lines = [];
+  lines.push(`${dataset === "money" ? "ДЕНЬГИ" : "ФЛОТ"}`);
+  lines.push(`Период: ${periodLabel}`);
+  lines.push(`Дата: ${dateStr}`);
+  lines.push("");
+  
+  if (dataset === "money" && rows.length > 0) {
+    const r = rows[0];
+    if (r["Выручка"]) lines.push(`Выручка: ${r["Выручка"]}`);
+    if (r["Наличные"]) lines.push(`Наличные: ${r["Наличные"]}`);
+    if (r["Карта"]) lines.push(`Карта: ${r["Карта"]}`);
+    if (r["Билетов"]) lines.push(`Билетов: ${r["Билетов"]}`);
+    if (r["Рейсов"]) lines.push(`Рейсов: ${r["Рейсов"]}`);
+    if (r["Загрузка %"]) lines.push(`Загрузка: ${r["Загрузка %"]}%`);
+  } else if (dataset === "fleet" && rows.length > 0) {
+    const totalRev = rows.reduce((a, x) => {
+      const s = String(x["Выручка"] || "").replace(/[^\d]/g, "");
+      return a + Number(s || 0);
+    }, 0);
+    const totalTickets = rows.reduce((a, x) => a + Number(x["Продано билетов"] || 0), 0);
+    const totalTrips = rows.reduce((a, x) => a + Number(x["Рейсы"] || 0), 0);
+    const totalFill = rows.length > 0 ? Math.round(rows.reduce((a, x) => a + Number(x["Загрузка %"] || 0), 0) / rows.length) : 0;
+    
+    lines.push("Итого:");
+    lines.push(`Выручка: ${formatRUB(totalRev)}`);
+    lines.push(`Билетов: ${totalTickets}`);
+    lines.push(`Рейсов: ${totalTrips}`);
+    lines.push(`Загрузка: ${totalFill}%`);
+    lines.push("");
+    lines.push("Лодки:");
+    
+    const maxBoats = 10;
+    const boatsToShow = rows.slice(0, maxBoats);
+    boatsToShow.forEach((boat, idx) => {
+      const name = boat["Лодка"] || "?";
+      const type = boat["Тип"] || "?";
+      const rev = boat["Выручка"] || "0 ₽";
+      const tickets = boat["Продано билетов"] || 0;
+      const trips = boat["Рейсы"] || 0;
+      const share = boat["Доля %"] || 0;
+      lines.push(`${idx + 1}) ${name} (${type}) — ${rev}, бил. ${tickets}, рейс. ${trips}, доля ${share}%`);
+    });
+    
+    if (rows.length > maxBoats) {
+      lines.push(`...ещё ${rows.length - maxBoats} лодок`);
+    }
+  }
+  
+  return lines.join("\n");
+}
+
 async function ownerGet(path) {
+  const token = typeof localStorage !== 'undefined' ? (localStorage.getItem('token') || localStorage.getItem('authToken') || localStorage.getItem('jwt')) : null;
+  const headers = { Accept: 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(path, {
-    method: "GET",
-    credentials: "include",
-    headers: { Accept: "application/json" },
+    method: 'GET',
+    credentials: 'include',
+    headers,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error("OWNER_GET_FAILED"), { status: res.status, data });
+  if (!res.ok) throw Object.assign(new Error('OWNER_GET_FAILED'), { status: res.status, data });
   return data;
 }
 
@@ -95,6 +154,7 @@ export default function OwnerExportView() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [rows, setRows] = useState([]);
+  const [sendToast, setSendToast] = useState("");
 
   const label = useMemo(() => periodLabelFromPreset(preset), [preset]);
 
@@ -176,21 +236,93 @@ export default function OwnerExportView() {
     downloadText(`owner_${dataset}_${preset}.xls`, html, "application/vnd.ms-excel;charset=utf-8");
   };
 
+  const openAppOrWeb = (appUrl, webUrl) => {
+    let opened = false;
+    let fallbackTimer = null;
+    
+    const cleanup = () => {
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+    };
+    
+    const onBlur = () => {
+      opened = true;
+      cleanup();
+    };
+    
+    const onVisibility = () => {
+      if (document.hidden) {
+        opened = true;
+        cleanup();
+      }
+    };
+    
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onVisibility);
+    
+    window.location.href = appUrl;
+    
+    fallbackTimer = setTimeout(() => {
+      cleanup();
+      if (!opened) {
+        window.open(webUrl, '_blank', 'noopener,noreferrer');
+      }
+    }, 700);
+  };
+
+  const shareNow = async (target) => {
+    if (!canExport) return;
+    const shareText = buildShareText({ dataset, preset, rows });
+    const encodedText = encodeURIComponent(shareText);
+
+    // Telegram: use msg_url with non-empty url for reliable text delivery
+    if (target === "telegram") {
+      // Always copy to clipboard first
+      try {
+        await navigator.clipboard.writeText(shareText);
+        setSendToast("Текст скопирован");
+        setTimeout(() => setSendToast(""), 2000);
+      } catch {}
+      
+      const shareUrl = "https://t.me";
+      const encodedUrl = encodeURIComponent(shareUrl);
+      
+      openAppOrWeb(
+        `tg://msg_url?url=${encodedUrl}&text=${encodedText}`,
+        `https://t.me/share/url?url=${encodedUrl}&text=${encodedText}`
+      );
+      return;
+    }
+
+    // WhatsApp: app first, fallback to web
+    if (target === "whatsapp") {
+      openAppOrWeb(
+        `whatsapp://send?text=${encodedText}`,
+        `https://wa.me/?text=${encodedText}`
+      );
+      return;
+    }
+
+    // Max: clipboard fallback (no known app scheme)
+    if (target === "max") {
+      try {
+        await navigator.clipboard.writeText(shareText);
+        setSendToast("Max: скопировано в буфер");
+        setTimeout(() => setSendToast(""), 3000);
+      } catch {
+        setSendToast("Не удалось скопировать");
+        setTimeout(() => setSendToast(""), 3000);
+      }
+      return;
+    }
+  };
+
   return (
     <div className="p-4 pb-24 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="text-xl font-semibold">Экспорт</div>
-          <div className="text-sm text-neutral-500">Данные берутся из API (manual &gt; online)</div>
-        </div>
-        <button
-          type="button"
-          onClick={load}
-          className="rounded-2xl border border-neutral-800 bg-neutral-950/40 px-3 py-2 text-sm hover:bg-neutral-900/40"
-          disabled={busy}
-        >
-          {busy ? "..." : "Загрузить"}
-        </button>
+      <div>
+        <div className="text-xl font-semibold">Экспорт</div>
+        <div className="text-sm text-neutral-500">Данные берутся из API (manual &gt; online)</div>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
@@ -216,6 +348,16 @@ export default function OwnerExportView() {
         <div className="rounded-2xl border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-200">{err}</div>
       )}
 
+      {/* Load button - primary action */}
+      <button
+        type="button"
+        onClick={load}
+        className="rounded-2xl bg-amber-600 px-4 py-2 text-sm font-medium text-black hover:bg-amber-500 disabled:opacity-50"
+        disabled={busy}
+      >
+        {busy ? "Загрузка..." : "Загрузить данные"}
+      </button>
+
       <div className="grid grid-cols-2 gap-2">
         <button
           type="button"
@@ -235,10 +377,43 @@ export default function OwnerExportView() {
         </button>
       </div>
 
+      {/* Share buttons: Telegram / WhatsApp / Max */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={() => shareNow("telegram")}
+          disabled={!canExport}
+          className="rounded-2xl border border-blue-600/60 bg-blue-900/30 px-4 py-2 text-sm font-medium text-blue-200 hover:bg-blue-800/50 disabled:opacity-50"
+        >
+          Telegram
+        </button>
+        <button
+          type="button"
+          onClick={() => shareNow("whatsapp")}
+          disabled={!canExport}
+          className="rounded-2xl border border-green-600/60 bg-green-900/30 px-4 py-2 text-sm font-medium text-green-200 hover:bg-green-800/50 disabled:opacity-50"
+        >
+          WhatsApp
+        </button>
+        <button
+          type="button"
+          onClick={() => shareNow("max")}
+          disabled={!canExport}
+          className="rounded-2xl border border-purple-600/60 bg-purple-900/30 px-4 py-2 text-sm font-medium text-purple-200 hover:bg-purple-800/50 disabled:opacity-50"
+        >
+          Max
+        </button>
+        {sendToast && (
+          <div className="text-xs text-amber-300 bg-amber-900/30 rounded-lg px-3 py-1">
+            {sendToast}
+          </div>
+        )}
+      </div>
+
       <Card>
         <div className="text-sm text-neutral-400 mb-2">Предпросмотр</div>
         {rows.length === 0 ? (
-          <div className="text-sm text-neutral-500">Нажми “Загрузить”</div>
+          <div className="text-sm text-neutral-500">Нажми "Загрузить"</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

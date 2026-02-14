@@ -977,44 +977,65 @@ try {
   if (manualSchemaCheck.count === 0) {
     console.log('[MANUAL_SCHEMA] Creating manual owner tables...');
 
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS manual_batches (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date_from TEXT NOT NULL,
-        date_to TEXT NOT NULL,
-        payload_json TEXT NOT NULL,
-        locked INTEGER NOT NULL DEFAULT 0,
-        locked_at TEXT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
+    // Check if tables already exist (may have been migrated from a different schema)
+    const manualBatchesExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_batches'").get();
+    const manualDaysExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_days'").get();
+    const manualBoatStatsExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_boat_stats'").get();
+    const manualSellerStatsExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_seller_stats'").get();
 
-      CREATE TABLE IF NOT EXISTS manual_days (
-        period TEXT PRIMARY KEY,
-        locked INTEGER NOT NULL DEFAULT 0
-      );
+    // Only create tables if they don't exist
+    if (!manualBatchesExists) {
+      db.exec(`
+        CREATE TABLE manual_batches (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          date_from TEXT NOT NULL,
+          date_to TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          locked INTEGER NOT NULL DEFAULT 0,
+          locked_at TEXT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      `);
+    }
 
-      CREATE TABLE IF NOT EXISTS manual_boat_stats (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        period TEXT NOT NULL,
-        boat_id INTEGER NULL,
-        revenue REAL NOT NULL DEFAULT 0,
-        trips_completed INTEGER NOT NULL DEFAULT 0,
-        seats_sold INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE INDEX IF NOT EXISTS idx_manual_boat_stats_period ON manual_boat_stats(period);
-      CREATE INDEX IF NOT EXISTS idx_manual_boat_stats_boat ON manual_boat_stats(boat_id);
+    if (!manualDaysExists) {
+      db.exec(`
+        CREATE TABLE manual_days (
+          period TEXT PRIMARY KEY,
+          locked INTEGER NOT NULL DEFAULT 0
+        )
+      `);
+    }
 
-      CREATE TABLE IF NOT EXISTS manual_seller_stats (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        period TEXT NOT NULL,
-        seller_id INTEGER NULL,
-        revenue REAL NOT NULL DEFAULT 0,
-        seats_sold INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE INDEX IF NOT EXISTS idx_manual_seller_stats_period ON manual_seller_stats(period);
-      CREATE INDEX IF NOT EXISTS idx_manual_seller_stats_seller ON manual_seller_stats(seller_id);
-    `);
+    if (!manualBoatStatsExists) {
+      db.exec(`
+        CREATE TABLE manual_boat_stats (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          period TEXT NOT NULL,
+          boat_id INTEGER NULL,
+          revenue REAL NOT NULL DEFAULT 0,
+          trips_completed INTEGER NOT NULL DEFAULT 0,
+          seats_sold INTEGER NOT NULL DEFAULT 0
+        )
+      `);
+      try { db.exec("CREATE INDEX IF NOT EXISTS idx_manual_boat_stats_period ON manual_boat_stats(period)"); } catch {}
+      try { db.exec("CREATE INDEX IF NOT EXISTS idx_manual_boat_stats_boat ON manual_boat_stats(boat_id)"); } catch {}
+    }
+
+    if (!manualSellerStatsExists) {
+      db.exec(`
+        CREATE TABLE manual_seller_stats (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          period TEXT NOT NULL,
+          seller_id INTEGER NULL,
+          revenue REAL NOT NULL DEFAULT 0,
+          seats_sold INTEGER NOT NULL DEFAULT 0
+        )
+      `);
+      try { db.exec("CREATE INDEX IF NOT EXISTS idx_manual_seller_stats_period ON manual_seller_stats(period)"); } catch {}
+      try { db.exec("CREATE INDEX IF NOT EXISTS idx_manual_seller_stats_seller ON manual_seller_stats(seller_id)"); } catch {}
+    }
 
     // Mark as done
     db.prepare("INSERT INTO settings (key, value) VALUES ('manual_owner_schema_v1', 'true')").run();
@@ -1024,6 +1045,214 @@ try {
   }
 } catch (e) {
   console.log('[MANUAL_SCHEMA] Warning: could not create manual owner tables:', e?.message || e);
+}
+
+// =========================
+// MANUAL V2: audit fields + period index
+// =========================
+try {
+  const manualV2Check = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'manual_owner_schema_v2'").get();
+  if (manualV2Check.count === 0) {
+    console.log('[MANUAL_SCHEMA_V2] Adding audit fields to manual tables...');
+    
+    const mbCols = db.prepare("PRAGMA table_info(manual_batches)").all().map(r => r.name);
+    const mdCols = db.prepare("PRAGMA table_info(manual_days)").all().map(r => r.name);
+    
+    // Add locked column if missing (for pre-existing tables)
+    if (!mbCols.includes('locked')) {
+      db.exec("ALTER TABLE manual_batches ADD COLUMN locked INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!mbCols.includes('locked_at')) {
+      db.exec("ALTER TABLE manual_batches ADD COLUMN locked_at TEXT NULL");
+    }
+    if (!mbCols.includes('created_at')) {
+      db.exec("ALTER TABLE manual_batches ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now'))");
+    }
+    if (!mbCols.includes('updated_at')) {
+      db.exec("ALTER TABLE manual_batches ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))");
+    }
+    if (!mdCols.includes('locked')) {
+      db.exec("ALTER TABLE manual_days ADD COLUMN locked INTEGER NOT NULL DEFAULT 0");
+    }
+    
+    if (!mbCols.includes('period')) {
+      db.exec("ALTER TABLE manual_batches ADD COLUMN period TEXT NULL");
+    }
+    if (!mbCols.includes('created_by_user_id')) {
+      db.exec("ALTER TABLE manual_batches ADD COLUMN created_by_user_id INTEGER NULL");
+    }
+    if (!mbCols.includes('updated_by_user_id')) {
+      db.exec("ALTER TABLE manual_batches ADD COLUMN updated_by_user_id INTEGER NULL");
+    }
+    if (!mbCols.includes('locked_by_user_id')) {
+      db.exec("ALTER TABLE manual_batches ADD COLUMN locked_by_user_id INTEGER NULL");
+    }
+    
+    if (!mdCols.includes('locked_by_user_id')) {
+      db.exec("ALTER TABLE manual_days ADD COLUMN locked_by_user_id INTEGER NULL");
+    }
+    if (!mdCols.includes('locked_at')) {
+      db.exec("ALTER TABLE manual_days ADD COLUMN locked_at TEXT NULL");
+    }
+    
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_manual_batches_period ON manual_batches(period)"); } catch {}
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_manual_batches_period_locked ON manual_batches(period, locked)"); } catch {}
+    
+    db.prepare("INSERT INTO settings (key, value) VALUES ('manual_owner_schema_v2', 'true')").run();
+    console.log('[MANUAL_SCHEMA_V2] Audit fields added');
+  }
+} catch (e) {
+  console.log('[MANUAL_SCHEMA_V2] Warning:', e?.message || e);
+}
+
+// =========================
+// MANUAL V3: ensure locked column exists
+// =========================
+try {
+  const mbCols = db.prepare("PRAGMA table_info(manual_batches)").all().map(r => r.name);
+  const mdCols = db.prepare("PRAGMA table_info(manual_days)").all().map(r => r.name);
+  
+  if (!mbCols.includes('locked')) {
+    console.log('[MANUAL_SCHEMA_V3] Adding locked column to manual_batches');
+    db.exec("ALTER TABLE manual_batches ADD COLUMN locked INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!mbCols.includes('locked_at')) {
+    db.exec("ALTER TABLE manual_batches ADD COLUMN locked_at TEXT NULL");
+  }
+  if (!mbCols.includes('created_at')) {
+    db.exec("ALTER TABLE manual_batches ADD COLUMN created_at TEXT NOT NULL DEFAULT (datetime('now'))");
+  }
+  if (!mbCols.includes('updated_at')) {
+    db.exec("ALTER TABLE manual_batches ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))");
+  }
+  if (!mdCols.includes('locked')) {
+    console.log('[MANUAL_SCHEMA_V3] Adding locked column to manual_days');
+    db.exec("ALTER TABLE manual_days ADD COLUMN locked INTEGER NOT NULL DEFAULT 0");
+  }
+  console.log('[MANUAL_SCHEMA_V3] Columns verified');
+} catch (e) {
+  console.log('[MANUAL_SCHEMA_V3] Warning:', e?.message || e);
+}
+
+// =========================
+// MANUAL V4: migrate period -> business_day, add missing columns
+// =========================
+try {
+  const v4Check = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'manual_owner_schema_v4'").get();
+  if (v4Check.count === 0) {
+    console.log('[MANUAL_SCHEMA_V4] Migrating period -> business_day...');
+    
+    // manual_days: add business_day if missing, copy from period
+    const mdCols = db.prepare("PRAGMA table_info(manual_days)").all().map(r => r.name);
+    if (!mdCols.includes('business_day')) {
+      db.exec("ALTER TABLE manual_days ADD COLUMN business_day TEXT NULL");
+      // Copy from period if exists
+      if (mdCols.includes('period')) {
+        db.exec("UPDATE manual_days SET business_day = period WHERE business_day IS NULL");
+      }
+      console.log('[MANUAL_SCHEMA_V4] Added business_day to manual_days');
+    }
+    
+    // manual_boat_stats: add business_day + new columns
+    const mbCols = db.prepare("PRAGMA table_info(manual_boat_stats)").all().map(r => r.name);
+    if (!mbCols.includes('business_day')) {
+      db.exec("ALTER TABLE manual_boat_stats ADD COLUMN business_day TEXT NULL");
+      if (mbCols.includes('period')) {
+        db.exec("UPDATE manual_boat_stats SET business_day = period WHERE business_day IS NULL");
+      }
+      console.log('[MANUAL_SCHEMA_V4] Added business_day to manual_boat_stats');
+    }
+    if (!mbCols.includes('trips')) {
+      db.exec("ALTER TABLE manual_boat_stats ADD COLUMN trips INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!mbCols.includes('tickets')) {
+      db.exec("ALTER TABLE manual_boat_stats ADD COLUMN tickets INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!mbCols.includes('capacity')) {
+      db.exec("ALTER TABLE manual_boat_stats ADD COLUMN capacity INTEGER NOT NULL DEFAULT 0");
+    }
+    
+    // manual_seller_stats: add business_day + new columns
+    const msCols = db.prepare("PRAGMA table_info(manual_seller_stats)").all().map(r => r.name);
+    if (!msCols.includes('business_day')) {
+      db.exec("ALTER TABLE manual_seller_stats ADD COLUMN business_day TEXT NULL");
+      if (msCols.includes('period')) {
+        db.exec("UPDATE manual_seller_stats SET business_day = period WHERE business_day IS NULL");
+      }
+      console.log('[MANUAL_SCHEMA_V4] Added business_day to manual_seller_stats');
+    }
+    if (!msCols.includes('trips')) {
+      db.exec("ALTER TABLE manual_seller_stats ADD COLUMN trips INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!msCols.includes('tickets')) {
+      db.exec("ALTER TABLE manual_seller_stats ADD COLUMN tickets INTEGER NOT NULL DEFAULT 0");
+    }
+    
+    // Create indexes on business_day
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_manual_boat_stats_business_day ON manual_boat_stats(business_day)"); } catch {}
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_manual_seller_stats_business_day ON manual_seller_stats(business_day)"); } catch {}
+    
+    db.prepare("INSERT INTO settings (key, value) VALUES ('manual_owner_schema_v4', 'true')").run();
+    console.log('[MANUAL_SCHEMA_V4] Migration completed');
+  } else {
+    console.log('[MANUAL_SCHEMA_V4] Already migrated, skipping...');
+  }
+} catch (e) {
+  console.log('[MANUAL_SCHEMA_V4] Warning:', e?.message || e);
+}
+
+// =========================
+// MOTIVATION DAY SETTINGS: snapshot of motivation settings per business_day
+// Ensures motivation calculation for a day is fixed and doesn't change when owner updates settings
+// =========================
+try {
+  const motivationDaySettingsCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'motivation_day_settings_v1'").get();
+  if (motivationDaySettingsCheck.count === 0) {
+    console.log('[MOTIVATION_DAY_SETTINGS] Creating motivation_day_settings table...');
+    
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS motivation_day_settings (
+        business_day TEXT PRIMARY KEY,
+        settings_json TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    
+    db.prepare("INSERT INTO settings (key, value) VALUES ('motivation_day_settings_v1', 'true')").run();
+    console.log('[MOTIVATION_DAY_SETTINGS] Table created and marked as done');
+  } else {
+    console.log('[MOTIVATION_DAY_SETTINGS] Table already exists, skipping...');
+  }
+} catch (e) {
+  console.log('[MOTIVATION_DAY_SETTINGS] Warning:', e?.message || e);
+}
+
+// =========================
+// PRESALES SELLER_ID: seller attribution for money_ledger
+// Fixes: seller_id in money_ledger should come from presales.seller_id, not req.user.id (dispatcher)
+// =========================
+try {
+  const presalesSellerIdCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'presales_seller_id_column_v1'").get();
+  if (presalesSellerIdCheck.count === 0) {
+    console.log('[PRESALES_SELLER_ID] Adding seller_id column to presales table...');
+    
+    try {
+      const cols = db.prepare("PRAGMA table_info(presales)").all().map(r => r.name);
+      if (!cols.includes('seller_id')) {
+        db.exec("ALTER TABLE presales ADD COLUMN seller_id INTEGER NULL");
+        console.log('[PRESALES_SELLER_ID] Added seller_id column to presales table');
+      }
+    } catch (e) {
+      console.log('[PRESALES_SELLER_ID] Column may already exist:', e?.message || e);
+    }
+    
+    db.prepare("INSERT INTO settings (key, value) VALUES ('presales_seller_id_column_v1', 'true')").run();
+    console.log('[PRESALES_SELLER_ID] Migration completed');
+  } else {
+    console.log('[PRESALES_SELLER_ID] Migration already ran, skipping...');
+  }
+} catch (e) {
+  console.log('[PRESALES_SELLER_ID] Warning:', e?.message || e);
 }
 
 export default db;
@@ -1265,4 +1494,35 @@ try {
   try { db.exec("CREATE INDEX IF NOT EXISTS idx_owner_audit_action ON owner_audit_log(action)"); } catch {}
 } catch (e) {
   console.log('[OWNER_AUDIT_LOG] init failed:', e?.message || e);
+}
+
+/* =========================
+   OWNER SETTINGS: persistent owner configuration
+   Single-row JSON storage for motivation coefficients and thresholds.
+========================= */
+try {
+  const ownerSettingsCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'owner_settings_table_v1'").get();
+  if (ownerSettingsCheck.count === 0) {
+    console.log('[OWNER_SETTINGS] Creating owner_settings table...');
+    
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS owner_settings (
+        id INTEGER PRIMARY KEY,
+        settings_json TEXT,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    // Insert default row so UPDATE in API works
+    db.prepare("INSERT OR IGNORE INTO owner_settings (id, settings_json, updated_at) VALUES (1, '{}', datetime('now'))").run();
+    
+    console.log('[OWNER_SETTINGS] Created owner_settings table');
+    
+    db.prepare("INSERT INTO settings (key, value) VALUES ('owner_settings_table_v1', 'true')").run();
+    console.log('[OWNER_SETTINGS] Table creation marked as done');
+  } else {
+    console.log('[OWNER_SETTINGS] owner_settings table already exists, skipping...');
+  }
+} catch (e) {
+  console.log('[OWNER_SETTINGS] init failed:', e?.message || e);
 }

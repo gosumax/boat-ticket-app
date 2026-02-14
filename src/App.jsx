@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
+import { OwnerDataProvider } from './contexts/OwnerDataContext';
 import ProtectedRoute from './components/ProtectedRoute';
 
 // Import views
@@ -38,7 +39,7 @@ const RoleHomeRedirect = () => {
 
 function App() {
   return (
-    <>
+    <OwnerDataProvider>
       <Routes>
         {/* Public */}
         <Route path="/login" element={<LoginPage />} />
@@ -130,7 +131,7 @@ function App() {
       </Routes>
 
       <DebugButton />
-    </>
+    </OwnerDataProvider>
   );
 }
 

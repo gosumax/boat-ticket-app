@@ -14,10 +14,18 @@ class ApiClient {
 
   setToken(token) {
     this.token = token;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('token', token);
+    }
   }
 
   clearToken() {
     this.token = null;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('token');
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('jwt');
+    }
   }
 
   async request(url, options = {}) {
@@ -100,6 +108,10 @@ class ApiClient {
   async logout() {
     try { await this.request('/auth/logout', { method: 'POST' }); } catch {}
     this.clearToken();
+  }
+
+  getCurrentUser() {
+    return this.request('/auth/me');
   }
 
   // ---------------- SELLING (TRIPS/SLOTS) ----------------

@@ -165,7 +165,7 @@ function getTicketStatus(ticket) {
 const ALLOWED_PRESALE_STATUSES_FOR_TICKET_OPS = ['ACTIVE', 'PAID'];
 
 const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) => {
-  const { refreshOwnerData } = useOwnerData();
+  const { refreshOwnerData, refreshPendingByDays } = useOwnerData();
   const [presales, setPresales] = useState([]);
   const [tickets, setTickets] = useState({});
   const [loading, setLoading] = useState(false);
@@ -453,12 +453,9 @@ const loadTransferOptions = async (ctx) => {
       // Refresh pending-by-day for affected days if available in response
       try {
         const affectedDays = response?.affected_days;
-        console.log('[PassengerList] Transfer response affected_days:', affectedDays);
-        console.log('[PassengerList] Full transfer response:', response);
         
         if (affectedDays && (affectedDays.old_day || affectedDays.new_day)) {
           // Normalize ISO dates to day keys (today/tomorrow/day2)
-          // IMPORTANT: Use local date formatting, NOT toISOString() which converts to UTC!
           const now = new Date();
           const pad = (n) => String(n).padStart(2, '0');
           const formatLocalDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -468,8 +465,6 @@ const loadTransferOptions = async (ctx) => {
           const tomorrowStr = formatLocalDate(tomorrow);
           const day2 = new Date(now); day2.setDate(day2.getDate() + 2);
           const day2Str = formatLocalDate(day2);
-          
-          console.log('[PassengerList] Date mapping:', { todayStr, tomorrowStr, day2Str, old_day: affectedDays.old_day, new_day: affectedDays.new_day });
           
           const dateToKeyMap = { [todayStr]: 'today', [tomorrowStr]: 'tomorrow', [day2Str]: 'day2' };
           
@@ -483,23 +478,20 @@ const loadTransferOptions = async (ctx) => {
             daysToRefresh.push(normalizedNew);
           }
           
-          // Filter only valid day keys that pending-by-day endpoint accepts
-          const validDays = daysToRefresh.filter(d => ['today', 'tomorrow', 'day2'].includes(d));
-          
-          console.log('[PassengerList] Normalized days to refresh:', validDays, 'from:', daysToRefresh);
+          // Filter only valid day keys and deduplicate
+          const validDays = [...new Set(daysToRefresh)].filter(d => ['today', 'tomorrow', 'day2'].includes(d));
           
           if (validDays.length > 0) {
-            // Dispatch event with delay to ensure DB transaction is fully committed
+            // TanStack Query pattern: call context refreshPendingByDays directly
+            console.log('[transfer] refresh pending days=', validDays);
+            // Call with delay to ensure DB transaction is committed
             setTimeout(() => {
-              console.log('[PassengerList] Dispatching owner:refresh-pending with valid days:', validDays);
-              window.dispatchEvent(new CustomEvent('owner:refresh-pending', { detail: { days: validDays } }));
-              // Also trigger general owner data refresh
-              window.dispatchEvent(new CustomEvent('owner:refresh-data'));
+              refreshPendingByDays(validDays, 'transfer');
             }, 100);
           }
         }
       } catch (e) {
-        console.error('[PassengerList] Error dispatching refresh event:', e);
+        console.error('[PassengerList] Error refreshing pending:', e);
       }
     } catch (e) {
       setTransferError(e?.message || 'Ошибка переноса');
@@ -709,6 +701,29 @@ const loadTransferOptions = async (ctx) => {
         window.dispatchEvent(new CustomEvent('dispatcher:refresh'));
         // notify owner dashboard to refresh data
         refreshOwnerData();
+        // refresh pending amounts for affected day (based on trip date)
+        const tripDate = trip?.trip_date;
+        if (tripDate) {
+          const now = new Date();
+          const pad = (n) => String(n).padStart(2, '0');
+          const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+          const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+          const tomorrowStr = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}`;
+          const day2 = new Date(now); day2.setDate(day2.getDate() + 2);
+          const day2Str = `${day2.getFullYear()}-${pad(day2.getMonth() + 1)}-${pad(day2.getDate())}`;
+          
+          let affectedDay = null;
+          if (tripDate === todayStr) affectedDay = 'today';
+          else if (tripDate === tomorrowStr) affectedDay = 'tomorrow';
+          else if (tripDate === day2Str) affectedDay = 'day2';
+          
+          if (affectedDay) {
+            refreshPendingByDays([affectedDay], 'ticket-operation');
+          }
+        } else {
+          // fallback if no trip_date
+          refreshPendingByDays(['today', 'tomorrow'], 'ticket-operation');
+        }
       } catch (e) {}
     } catch (error) {
       console.error('Error performing ticket operation:', error);

@@ -52,40 +52,39 @@ export default function OwnerLoadView() {
   const [comment, setComment] = useState("");
 
   // 5.2 Деньги
-  const [totalRevenue, setTotalRevenue] = useState(0);
   const [cash, setCash] = useState(0);
   const [card, setCard] = useState(0);
+  const [pending, setPending] = useState(0);
 
   // 5.3 Продажи по лодкам
-  const [boats, setBoats] = useState([
-    { id: uid(), type: "прогулочная", name: "Ласточка", trips: 6, seats: 42, revenue: 168000 },
-    { id: uid(), type: "скоростная", name: "Волна", trips: 4, seats: 18, revenue: 120000 },
-  ]);
+  const [boats, setBoats] = useState([]);
 
   // 5.4 Продавцы
-  const [sellers, setSellers] = useState([
-    { id: uid(), name: "Андрей", revenue: 182000, seats: 48 },
-    { id: uid(), name: "Дмитрий", revenue: 106000, seats: 29 },
-  ]);
+  const [sellers, setSellers] = useState([]);
 
-  const acceptedTotal = useMemo(() => toNumber(cash) + toNumber(card), [cash, card]);
+  // Drafts info for parallel input
+  const [drafts, setDrafts] = useState([]);
+
+  const paid = useMemo(() => toNumber(cash) + toNumber(card), [cash, card]);
+  const forecast = useMemo(() => paid + toNumber(pending), [paid, pending]);
   const boatsRevenueSum = useMemo(() => boats.reduce((s, b) => s + toNumber(b.revenue), 0), [boats]);
-  const sellersRevenueSum = useMemo(() => sellers.reduce((s, r) => s + toNumber(r.revenue), 0), [sellers]);
+  const sellersRevenuePaid = useMemo(() => sellers.reduce((s, r) => s + toNumber(r.revenue_paid), 0), [sellers]);
+  const sellersRevenuePending = useMemo(() => sellers.reduce((s, r) => s + toNumber(r.revenue_pending), 0), [sellers]);
+  const sellersRevenueForecast = useMemo(() => sellersRevenuePaid + sellersRevenuePending, [sellersRevenuePaid, sellersRevenuePending]);
 
   const warnings = useMemo(() => {
     const w = [];
     if (!dateFrom || !dateTo) w.push("Укажи период загрузки (дата с / дата по).");
-    if (toNumber(totalRevenue) !== acceptedTotal) w.push("Деньги: «Общая выручка» должна равняться «Наличные + Карта».");
     if (boats.length === 0) w.push("Лодки: добавь хотя бы одну лодку.");
-    if (toNumber(totalRevenue) > 0 && Math.abs(toNumber(totalRevenue) - boatsRevenueSum) > 0) {
-      w.push("Лодки: сумма выручки по лодкам не совпадает с общей выручкой.");
+    if (forecast > 0 && Math.abs(forecast - boatsRevenueSum) > 0) {
+      w.push("Лодки: сумма выручки по лодкам не совпадает с прогнозом.");
     }
     if (sellers.length === 0) w.push("Продавцы: добавь продавцов для корректной мотивации.");
-    if (toNumber(totalRevenue) > 0 && Math.abs(toNumber(totalRevenue) - sellersRevenueSum) > 0) {
-      w.push("Продавцы: сумма выручки по продавцам не совпадает с общей выручкой.");
+    if (forecast > 0 && Math.abs(forecast - sellersRevenueForecast) > 0) {
+      w.push("Продавцы: сумма прогноза по продавцам не совпадает с общим прогнозом.");
     }
     return w;
-  }, [dateFrom, dateTo, totalRevenue, acceptedTotal, boats, boatsRevenueSum, sellers, sellersRevenueSum]);
+  }, [dateFrom, dateTo, forecast, boats, boatsRevenueSum, sellers, sellersRevenueForecast]);
 
   async function loadForDate(dateIso) {
     const d = String(dateIso || "").trim();
@@ -100,36 +99,45 @@ export default function OwnerLoadView() {
       setBatchId(data?.id ?? null);
 
       const payload = data?.payload;
+      const totals = data?.totals;
+      
+      setDrafts(data?.drafts || []);
+      
       if (payload) {
-        setDateFrom(payload?.dateFrom || data?.dateFrom || d);
-        setDateTo(payload?.dateTo || data?.dateTo || d);
+        setDateFrom(data?.period || d);
+        setDateTo(data?.period || d);
         setComment(payload?.comment || "");
 
         const m = payload?.money || {};
-        setTotalRevenue(Number(m.totalRevenue || 0));
         setCash(Number(m.cash || 0));
         setCard(Number(m.card || 0));
+        setPending(Number(m.pending || 0));
 
         const boatsIn = Array.isArray(payload?.boats) ? payload.boats : [];
         const sellersIn = Array.isArray(payload?.sellers) ? payload.sellers : [];
 
         setBoats(boatsIn.map((b) => ({
-          id: b.id || uid(),
-          type: b.type || b.boat_type || "прогулочная",
-          name: b.name || b.boat_name || "",
-          trips: toNumber(b.trips ?? b.trips_completed ?? 0),
-          seats: toNumber(b.seats ?? b.seats_sold ?? 0),
+          id: b.id || b.boat_id || uid(),
+          boat_id: b.boat_id || null,
+          type: b.type || "прогулочная",
+          name: b.name || "",
+          trips: toNumber(b.trips ?? 0),
+          seats: toNumber(b.seats ?? 0),
           revenue: toNumber(b.revenue ?? 0),
         })));
 
         setSellers(sellersIn.map((s) => ({
-          id: s.id || uid(),
-          name: s.name || s.username || "",
-          revenue: toNumber(s.revenue ?? 0),
-          seats: toNumber(s.seats ?? s.seats_sold ?? 0),
+          id: s.id || s.seller_id || uid(),
+          seller_id: s.seller_id || null,
+          name: s.name || "",
+          revenue_paid: toNumber(s.revenue_paid ?? s.revenue ?? 0),
+          revenue_pending: toNumber(s.revenue_pending ?? 0),
+          revenue_forecast: toNumber(s.revenue_forecast ?? (s.revenue_paid || 0) + (s.revenue_pending || 0)),
+          seats: toNumber(s.seats ?? 0),
+          contacts: s.contacts || "",
         })));
 
-        setSavedAt(data?.savedAt ? new Date(data.savedAt) : null);
+        setSavedAt(data?.lockedAt ? new Date(data.lockedAt) : null);
       } else {
         // No saved payload for this date: keep user-selected dates, reset lock
         setLocked(false);
@@ -149,15 +157,16 @@ export default function OwnerLoadView() {
     setError("");
     try {
       const payload = {
-        id: batchId,
         dateFrom,
         dateTo,
         comment,
-        totalRevenue: toNumber(totalRevenue),
-        cash: toNumber(cash),
-        card: toNumber(card),
+        money: {
+          cash: toNumber(cash),
+          card: toNumber(card),
+          pending: toNumber(pending),
+        },
         boats: boats.map((b) => ({
-          id: b.id,
+          boat_id: b.boat_id || null,
           type: b.type,
           name: b.name,
           trips: toNumber(b.trips),
@@ -165,10 +174,12 @@ export default function OwnerLoadView() {
           revenue: toNumber(b.revenue),
         })),
         sellers: sellers.map((s) => ({
-          id: s.id,
+          seller_id: s.seller_id || null,
           name: s.name,
-          revenue: toNumber(s.revenue),
+          revenue_paid: toNumber(s.revenue_paid),
+          revenue_pending: toNumber(s.revenue_pending),
           seats: toNumber(s.seats),
+          contacts: s.contacts || null,
         })),
       };
 
@@ -198,7 +209,7 @@ export default function OwnerLoadView() {
         id = r.id;
       }
 
-      await apiClient.request('/owner/manual/lock', { method: 'POST', body: { id } });
+      await apiClient.request('/owner/manual/lock', { method: 'POST', body: { date: dateFrom } });
       setLocked(true);
       setSavedAt(new Date());
       // Reload to confirm server state
@@ -216,7 +227,7 @@ export default function OwnerLoadView() {
   }, []);
 
   function addBoat() {
-    setBoats((prev) => [...prev, { id: uid(), type: "прогулочная", name: "", trips: 0, seats: 0, revenue: 0 }]);
+    setBoats((prev) => [...prev, { id: uid(), boat_id: null, type: "прогулочная", name: "", trips: 0, seats: 0, revenue: 0 }]);
   }
   function removeBoat(id) {
     setBoats((prev) => prev.filter((b) => b.id !== id));
@@ -226,7 +237,7 @@ export default function OwnerLoadView() {
   }
 
   function addSeller() {
-    setSellers((prev) => [...prev, { id: uid(), name: "", revenue: 0, seats: 0 }]);
+    setSellers((prev) => [...prev, { id: uid(), seller_id: null, name: "", revenue_paid: 0, revenue_pending: 0, revenue_forecast: 0, seats: 0, contacts: "" }]);
   }
   function removeSeller(id) {
     setSellers((prev) => prev.filter((s) => s.id !== id));
@@ -347,20 +358,30 @@ export default function OwnerLoadView() {
       <Section title="Денежные данные">
         <Card>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <Field label="Общая выручка за период">
-              <MoneyInput value={totalRevenue} onChange={setTotalRevenue} disabled={locked} />
-            </Field>
             <Field label="Наличные">
               <MoneyInput value={cash} onChange={setCash} disabled={locked} />
             </Field>
             <Field label="Карта">
               <MoneyInput value={card} onChange={setCard} disabled={locked} />
             </Field>
+            <Field label="Pending (должен)">
+              <MoneyInput value={pending} onChange={setPending} disabled={locked} />
+            </Field>
           </div>
 
-          <div className="mt-3 rounded-2xl border border-neutral-800 p-3 flex items-center justify-between">
-            <div className="text-sm text-neutral-300">Итого принятых денег</div>
-            <div className="text-lg font-semibold">{formatMoney(acceptedTotal)} ₽</div>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <div className="rounded-2xl border border-neutral-800 p-3 text-center">
+              <div className="text-[10px] text-neutral-500">Оплачено</div>
+              <div className="text-base font-semibold text-emerald-300">{formatMoney(paid)} ₽</div>
+            </div>
+            <div className="rounded-2xl border border-neutral-800 p-3 text-center">
+              <div className="text-[10px] text-neutral-500">Pending</div>
+              <div className="text-base font-semibold text-amber-300">{formatMoney(pending)} ₽</div>
+            </div>
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-950/20 p-3 text-center">
+              <div className="text-[10px] text-neutral-500">Прогноз</div>
+              <div className="text-base font-bold text-amber-200">{formatMoney(forecast)} ₽</div>
+            </div>
           </div>
         </Card>
       </Section>
@@ -495,7 +516,7 @@ export default function OwnerLoadView() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-                  <div className="md:col-span-6">
+                  <div className="md:col-span-4">
                     <div className="text-xs text-neutral-500 mb-1">Имя продавца</div>
                     <TextInput
                       value={s.name}
@@ -505,23 +526,53 @@ export default function OwnerLoadView() {
                     />
                   </div>
 
-                  <div className="md:col-span-3">
-                    <div className="text-xs text-neutral-500 mb-1">Выручка</div>
-                    <MoneyInput value={s.revenue} onChange={(v) => updateSeller(s.id, { revenue: v })} disabled={locked} />
+                  <div className="md:col-span-2">
+                    <div className="text-xs text-neutral-500 mb-1">Оплачено</div>
+                    <MoneyInput value={s.revenue_paid} onChange={(v) => updateSeller(s.id, { revenue_paid: v })} disabled={locked} />
                   </div>
 
-                  <div className="md:col-span-3">
-                    <div className="text-xs text-neutral-500 mb-1">Продано мест</div>
+                  <div className="md:col-span-2">
+                    <div className="text-xs text-neutral-500 mb-1">Pending</div>
+                    <MoneyInput value={s.revenue_pending} onChange={(v) => updateSeller(s.id, { revenue_pending: v })} disabled={locked} />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <div className="text-xs text-neutral-500 mb-1">Прогноз</div>
+                    <div className={inputCls(true)}>{formatMoney(Number(s.revenue_paid || 0) + Number(s.revenue_pending || 0))} ₽</div>
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <div className="text-xs text-neutral-500 mb-1">Мест</div>
                     <SmallNumberInput value={s.seats} onChange={(v) => updateSeller(s.id, { seats: v })} disabled={locked} />
+                  </div>
+
+                  <div className="md:col-span-12">
+                    <div className="text-xs text-neutral-500 mb-1">Контакты (необязательно)</div>
+                    <TextInput
+                      value={s.contacts || ""}
+                      onChange={(v) => updateSeller(s.id, { contacts: v })}
+                      disabled={locked}
+                      placeholder="Имя/телефон, если есть"
+                    />
                   </div>
                 </div>
               </div>
             ))}
           </div>
 
-          <div className="mt-3 rounded-2xl border border-neutral-800 p-3 flex items-center justify-between">
-            <div className="text-sm text-neutral-300">Сумма выручки по продавцам</div>
-            <div className="text-lg font-semibold">{formatMoney(sellersRevenueSum)} ₽</div>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <div className="rounded-2xl border border-neutral-800 p-3 text-center">
+              <div className="text-[10px] text-neutral-500">Оплачено</div>
+              <div className="text-base font-semibold">{formatMoney(sellersRevenuePaid)} ₽</div>
+            </div>
+            <div className="rounded-2xl border border-neutral-800 p-3 text-center">
+              <div className="text-[10px] text-neutral-500">Pending</div>
+              <div className="text-base font-semibold">{formatMoney(sellersRevenuePending)} ₽</div>
+            </div>
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-950/20 p-3 text-center">
+              <div className="text-[10px] text-neutral-500">Прогноз</div>
+              <div className="text-base font-bold text-amber-200">{formatMoney(sellersRevenueForecast)} ₽</div>
+            </div>
           </div>
         </Card>
       </Section>

@@ -309,6 +309,19 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
     }
   };
 
+  // Calculate days difference between trip date and today
+  const tripDateStr = trip?.trip_date;
+  const daysUntilTrip = (() => {
+    if (!tripDateStr) return 0;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tripDate = new Date(tripDateStr);
+    tripDate.setHours(0, 0, 0, 0);
+    const diffMs = tripDate.getTime() - today.getTime();
+    return Math.round(diffMs / (1000 * 60 * 60 * 24));
+  })();
+  const showFarDateWarning = daysUntilTrip > 2;
+
   return (
     <div
   className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm overflow-hidden" style={{ paddingTop: 20, paddingBottom: 20, paddingLeft: "clamp(16px, 5vw, 24px)", paddingRight: "clamp(16px, 5vw, 24px)" }}>
@@ -327,6 +340,14 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       <div className="bg-neutral-900 rounded-xl shadow-lg p-1 mb-1 -mt-1 border border-neutral-800">
         <h3 className="font-bold text-lg mb-1">Детали рейса</h3>
         <p className="text-neutral-400">{trip.boat_name} • {trip.time}</p>
+        
+        {/* Warning for far dates (only today/tomorrow/day2 allowed for payment) */}
+        {showFarDateWarning && (
+          <div className="mt-2 rounded-lg border border-amber-500/50 bg-amber-900/20 p-2 text-amber-200 text-sm">
+            Внимание: оплату принимаем только на сегодня, завтра и послезавтра. Для более дальних дат — оформляй бронь без оплаты.
+          </div>
+        )}
+        
         <p className="font-bold text-blue-400">
           {allowedCategories.map((category, index) => {
             const label = category === 'adult' ? 'Взрослый' : 

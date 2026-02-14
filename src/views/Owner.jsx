@@ -92,38 +92,31 @@ export default function OwnerMoneyView() {
     return "7d";
   }, [preset]);
 
-  const boatsPreset = useMemo(() => {
-    // boats route supports today / yesterday / d7 / month / all (зависит от реализации backend)
-    if (preset === "today") return "today";
-    if (preset === "yesterday") return "yesterday";
-    if (preset === "7d") return "d7";
-    if (preset === "30d") return "month";
-    if (preset === "90d") return "d30";
-    if (preset === "last_nonzero_day") return "all";
-    return "today";
-  }, [preset]);
-
   const reload = async ({ silent } = {}) => {
     if (!silent) setBusy(true);
     setErr("");
     try {
-      const [m, b, d] = await Promise.all([
+      const [m, d] = await Promise.all([
         ownerGet(`/owner/money/summary?preset=${encodeURIComponent(preset)}`),
-        ownerGet(`/owner/boats?preset=${encodeURIComponent(boatsPreset)}`),
         ownerGet(`/owner/money/compare-days?preset=${encodeURIComponent(compareDaysPreset)}`),
       ]);
 
       setMoney({
         preset: m?.data?.preset ?? preset,
         range: m?.data?.range ?? null,
-        totals: m?.data?.totals ?? { revenue: 0, cash: 0, card: 0 },
+        totals: m?.data?.totals ?? { collected_total: 0, collected_cash: 0, collected_card: 0, tickets: 0, trips: 0, fillPercent: 0 },
         warnings: m?.meta?.warnings || [],
       });
       setBoats({
-        preset: b?.data?.preset ?? boatsPreset,
-        range: b?.data?.range ?? null,
-        totals: b?.data?.totals ?? { revenue: 0, tickets: 0, trips: 0, fillPercent: 0 },
-        warnings: b?.meta?.warnings || [],
+        preset: preset,
+        range: null,
+        totals: {
+          revenue: m?.data?.totals?.collected_total ?? 0,
+          tickets: m?.data?.totals?.tickets ?? 0,
+          trips: m?.data?.totals?.trips ?? 0,
+          fillPercent: m?.data?.totals?.fillPercent ?? 0,
+        },
+        warnings: [],
       });
       setDays({
         preset: d?.data?.preset ?? compareDaysPreset,
@@ -183,19 +176,13 @@ export default function OwnerMoneyView() {
     return all.toLowerCase().includes("manual override");
   }, [money.warnings, boats.warnings, days.warnings]);
 
-  const revenue = Number(money.totals?.revenue || 0);
-  const cash = Number(money.totals?.cash || 0);
-  const card = Number(money.totals?.card || 0);
+  const revenue = Number(money.totals?.collected_total || money.totals?.revenue || 0);
+  const cash = Number(money.totals?.collected_cash || money.totals?.cash || 0);
+  const card = Number(money.totals?.collected_card || money.totals?.card || 0);
 
-  // "Ожидает оплаты" = продано, но оплата ещё не зафиксирована
-  // Показываем ТОЛЬКО для "Сегодня", для остальных пресетов = 0
-  const awaitingPaymentRaw = revenue - (cash + card);
-  const isToday = preset === "today";
-  const awaitingPayment = isToday ? Math.max(awaitingPaymentRaw, 0) : 0;
-
-  const tickets = Number(boats.totals?.tickets || 0);
-  const trips = Number(boats.totals?.trips || 0);
-  const fillPercent = Number(boats.totals?.fillPercent || 0);
+  const tickets = Number(money.totals?.tickets || boats.totals?.tickets || 0);
+  const trips = Number(money.totals?.trips || boats.totals?.trips || 0);
+  const fillPercent = Number(money.totals?.fillPercent || boats.totals?.fillPercent || 0);
   const avgCheck = tickets > 0 ? Math.round(revenue / tickets) : 0;
 
   const bars = useMemo(() => {
@@ -243,11 +230,6 @@ export default function OwnerMoneyView() {
           <Chip active={preset === "7d"} onClick={() => setPreset("7d")} label="7 дней" />
           <Chip active={preset === "30d"} onClick={() => setPreset("30d")} label="30 дней" />
           <Chip active={preset === "90d"} onClick={() => setPreset("90d")} label="90 дней" />
-          <Chip
-            active={preset === "last_nonzero_day"}
-            onClick={() => setPreset("last_nonzero_day")}
-            label="Последний день с выручкой"
-          />
         </div>
       </div>
 
@@ -262,7 +244,7 @@ export default function OwnerMoneyView() {
         <Card className="col-span-2">
           <div className="flex items-start justify-between gap-2">
             <div>
-              <div className="text-[11px] text-neutral-500">Выручка</div>
+              <div className="text-[11px] text-neutral-500">Собрано денег</div>
               <div className="mt-1 text-3xl font-extrabold tracking-tight">{formatRUB(revenue)}</div>
               <div className="mt-1 text-sm text-neutral-400">Средний чек: {formatRUB(avgCheck)}</div>
             </div>
@@ -284,10 +266,9 @@ export default function OwnerMoneyView() {
             <Pill label="Загрузка" value={fillPercent ? `${formatInt(fillPercent)}%` : "—"} accent="amber" />
           </div>
 
-          <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="mt-3 grid grid-cols-2 gap-2">
             <MiniCard label="Наличные" value={formatRUB(cash)} />
             <MiniCard label="Карта" value={formatRUB(card)} />
-            <MiniCard label="Ожидает оплаты" value={formatRUB(awaitingPayment)} />
           </div>
         </Card>
       </div>
@@ -296,7 +277,10 @@ export default function OwnerMoneyView() {
       {preset === "today" && (
       <Card className="mt-2">
         <div className="flex items-center justify-between">
-          <div className="text-sm font-semibold">Ожидает оплаты (по дате рейса)</div>
+          <div>
+            <div className="text-sm font-semibold">Ожидает оплаты (по дате рейса)</div>
+            <div className="text-[10px] text-neutral-500">По дате рейса (business_day), не по дате оплаты</div>
+          </div>
           <div className="flex gap-1">
             {[
               { key: "today", label: "Сегодня" },
@@ -337,7 +321,7 @@ export default function OwnerMoneyView() {
       {/* Week bars */}
       <Card className="mt-2">
         <div className="flex items-center justify-between">
-          <div className="text-sm font-semibold">Выручка по дням</div>
+          <div className="text-sm font-semibold">Собрано по дням</div>
           <div className="text-[11px] text-neutral-500">{days.preset}</div>
         </div>
 

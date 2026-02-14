@@ -1,4 +1,4 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import db from './db.js';
 
 // Seat-occupying ticket statuses (1 ticket = 1 seat)
@@ -219,7 +219,7 @@ const validateTicketBreakdown = (tickets, serviceType, capacity) => {
   if (!Number.isInteger(adult) || adult < 0 ||
       !Number.isInteger(teen) || teen < 0 ||
       !Number.isInteger(child) || child < 0) {
-    return { valid: false, error: 'Количество билетов должно быть неотрицательным целым числом' };
+    return { valid: false, error: 'РљРѕР»РёС‡РµСЃС‚РІРѕ Р±РёР»РµС‚РѕРІ РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ РЅРµРѕС‚СЂРёС†Р°С‚РµР»СЊРЅС‹Рј С†РµР»С‹Рј С‡РёСЃР»РѕРј' };
   }
   
   const totalSeats = adult + teen + child;
@@ -227,17 +227,17 @@ const validateTicketBreakdown = (tickets, serviceType, capacity) => {
   if (serviceType === 'BANANA') {
     // For banana: no teen tickets allowed
     if (teen > 0) {
-      return { valid: false, error: 'Для банана подростковые билеты недоступны' };
+      return { valid: false, error: 'Р”Р»СЏ Р±Р°РЅР°РЅР° РїРѕРґСЂРѕСЃС‚РєРѕРІС‹Рµ Р±РёР»РµС‚С‹ РЅРµРґРѕСЃС‚СѓРїРЅС‹' };
     }
     
     // For banana: capacity is always 12
     if (totalSeats > 12) {
-      return { valid: false, error: 'Для банана вместимость не может превышать 12 мест' };
+      return { valid: false, error: 'Р”Р»СЏ Р±Р°РЅР°РЅР° РІРјРµСЃС‚РёРјРѕСЃС‚СЊ РЅРµ РјРѕР¶РµС‚ РїСЂРµРІС‹С€Р°С‚СЊ 12 РјРµСЃС‚' };
     }
   } else {
     // For boats: check against slot capacity
     if (totalSeats > capacity) {
-      return { valid: false, error: `Количество мест не может превышать вместимость лодки (${capacity})` };
+      return { valid: false, error: `РљРѕР»РёС‡РµСЃС‚РІРѕ РјРµСЃС‚ РЅРµ РјРѕР¶РµС‚ РїСЂРµРІС‹С€Р°С‚СЊ РІРјРµСЃС‚РёРјРѕСЃС‚СЊ Р»РѕРґРєРё (${capacity})` };
     }
   }
   
@@ -249,12 +249,12 @@ const validateDuration = (duration, serviceType) => {
   if (serviceType === 'BANANA') {
     // For banana: duration must be 40 minutes
     if (duration !== 40) {
-      return { valid: false, error: 'Для банана длительность должна быть 40 минут' };
+      return { valid: false, error: 'Р”Р»СЏ Р±Р°РЅР°РЅР° РґР»РёС‚РµР»СЊРЅРѕСЃС‚СЊ РґРѕР»Р¶РЅР° Р±С‹С‚СЊ 40 РјРёРЅСѓС‚' };
     }
   } else {
     // For boats: duration must be 60, 120, or 180 minutes
     if (duration && ![60, 120, 180].includes(duration)) {
-      return { valid: false, error: 'Для лодки длительность должна быть 60, 120 или 180 минут' };
+      return { valid: false, error: 'Р”Р»СЏ Р»РѕРґРєРё РґР»РёС‚РµР»СЊРЅРѕСЃС‚СЊ РґРѕР»Р¶РЅР° Р±С‹С‚СЊ 60, 120 РёР»Рё 180 РјРёРЅСѓС‚' };
     }
   }
   
@@ -451,7 +451,7 @@ router.get('/boats', authenticateToken, canSell, (req, res) => {
     res.json(boats);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/boats message=', error.message, 'stack=', error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -465,7 +465,7 @@ router.get('/boats/:type/slots', authenticateToken, canSell, (req, res) => {
     
     // Validate boat type
     if (!['speed', 'cruise', 'banana'].includes(boatType)) {
-      return res.status(400).json({ error: 'Недопустимый тип лодки' });
+      return res.status(400).json({ error: 'РќРµРґРѕРїСѓСЃС‚РёРјС‹Р№ С‚РёРї Р»РѕРґРєРё' });
     }
     
     // [SELLER_ZERO_DEBUG] TEMPORARY diagnostics - run BEFORE returning response
@@ -633,7 +633,7 @@ router.get('/boats/:type/slots', authenticateToken, canSell, (req, res) => {
     });
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/boats/:type/slots type=' + req.params.type + ' message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -658,20 +658,20 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
         return res.status(400).json({ 
           ok: false,
           code: 'CUSTOMER_NAME_REQUIRED',
-          message: 'Требуется имя клиента' 
+          message: 'РўСЂРµР±СѓРµС‚СЃСЏ РёРјСЏ РєР»РёРµРЅС‚Р°' 
         });
       }
       if (!customerPhone || customerPhone.trim().length === 0) {
         return res.status(400).json({ 
           ok: false,
           code: 'CUSTOMER_PHONE_REQUIRED',
-          message: 'Требуется номер телефона клиента' 
+          message: 'РўСЂРµР±СѓРµС‚СЃСЏ РЅРѕРјРµСЂ С‚РµР»РµС„РѕРЅР° РєР»РёРµРЅС‚Р°' 
         });
       }
       return res.status(400).json({ 
         ok: false,
         code: 'MISSING_REQUIRED_FIELDS',
-        message: 'Отсутствуют обязательные поля' 
+        message: 'РћС‚СЃСѓС‚СЃС‚РІСѓСЋС‚ РѕР±СЏР·Р°С‚РµР»СЊРЅС‹Рµ РїРѕР»СЏ' 
       });
     }
     
@@ -680,7 +680,7 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
       return res.status(400).json({ 
         ok: false,
         code: 'INVALID_CUSTOMER_NAME',
-        message: 'Имя клиента должно содержать не менее 2 символов' 
+        message: 'РРјСЏ РєР»РёРµРЅС‚Р° РґРѕР»Р¶РЅРѕ СЃРѕРґРµСЂР¶Р°С‚СЊ РЅРµ РјРµРЅРµРµ 2 СЃРёРјРІРѕР»РѕРІ' 
       });
     }
     
@@ -688,7 +688,7 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
       return res.status(400).json({ 
         ok: false,
         code: 'INVALID_CUSTOMER_PHONE',
-        message: 'Номер телефона клиента должен содержать не менее 5 символов' 
+        message: 'РќРѕРјРµСЂ С‚РµР»РµС„РѕРЅР° РєР»РёРµРЅС‚Р° РґРѕР»Р¶РµРЅ СЃРѕРґРµСЂР¶Р°С‚СЊ РЅРµ РјРµРЅРµРµ 5 СЃРёРјРІРѕР»РѕРІ' 
       });
     }
     
@@ -706,7 +706,7 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
         return res.status(400).json({ 
           ok: false,
           code: 'INVALID_TICKET_STRUCTURE',
-          message: 'Некорректная структура билетов' 
+          message: 'РќРµРєРѕСЂСЂРµРєС‚РЅР°СЏ СЃС‚СЂСѓРєС‚СѓСЂР° Р±РёР»РµС‚РѕРІ' 
         });
       }
       
@@ -722,7 +722,7 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
         return res.status(400).json({ 
           ok: false,
           code: 'INVALID_TICKET_COUNT',
-          message: 'Количество билетов должно быть неотрицательным целым числом' 
+          message: 'РљРѕР»РёС‡РµСЃС‚РІРѕ Р±РёР»РµС‚РѕРІ РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ РЅРµРѕС‚СЂРёС†Р°С‚РµР»СЊРЅС‹Рј С†РµР»С‹Рј С‡РёСЃР»РѕРј' 
         });
       }
       
@@ -737,7 +737,7 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
         return res.status(400).json({ 
           ok: false,
           code: 'INVALID_SEAT_COUNT',
-          message: 'Количество мест должно быть не менее 1' 
+          message: 'РљРѕР»РёС‡РµСЃС‚РІРѕ РјРµСЃС‚ РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ РЅРµ РјРµРЅРµРµ 1' 
         });
       }
     } else {
@@ -747,7 +747,7 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
         return res.status(400).json({ 
           ok: false,
           code: 'INVALID_SEAT_COUNT',
-          message: 'Некорректное количество мест' 
+          message: 'РќРµРєРѕСЂСЂРµРєС‚РЅРѕРµ РєРѕР»РёС‡РµСЃС‚РІРѕ РјРµСЃС‚' 
         });
       }
     }
@@ -775,7 +775,7 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
       if (paymentMethodUpper === 'CASH' || paymentMethodUpper === 'CARD') {
         // ok
       } else {
-        return res.status(400).json({ ok: false, code: 'INVALID_PAYMENT_METHOD', message: 'Некорректный способ оплаты' });
+        return res.status(400).json({ ok: false, code: 'INVALID_PAYMENT_METHOD', message: 'РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ СЃРїРѕСЃРѕР± РѕРїР»Р°С‚С‹' });
       }
     }
 
@@ -798,13 +798,13 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
         const ca = Number(req.body?.cash_amount ?? req.body?.cashAmount ?? 0);
         const cr = Number(req.body?.card_amount ?? req.body?.cardAmount ?? 0);
         if (!Number.isFinite(ca) || !Number.isFinite(cr) || ca < 0 || cr < 0) {
-          return res.status(400).json({ ok: false, code: 'INVALID_PAYMENT_SPLIT', message: 'Некорректные суммы для комбо' });
+          return res.status(400).json({ ok: false, code: 'INVALID_PAYMENT_SPLIT', message: 'РќРµРєРѕСЂСЂРµРєС‚РЅС‹Рµ СЃСѓРјРјС‹ РґР»СЏ РєРѕРјР±Рѕ' });
         }
         if (Math.round(ca + cr) !== Math.round(prepayment)) {
-          return res.status(400).json({ ok: false, code: 'INVALID_PAYMENT_SPLIT', message: 'Сумма НАЛ + КАРТА должна быть равна предоплате' });
+          return res.status(400).json({ ok: false, code: 'INVALID_PAYMENT_SPLIT', message: 'РЎСѓРјРјР° РќРђР› + РљРђР РўРђ РґРѕР»Р¶РЅР° Р±С‹С‚СЊ СЂР°РІРЅР° РїСЂРµРґРѕРїР»Р°С‚Рµ' });
         }
         if (ca === 0 || cr === 0) {
-          return res.status(400).json({ ok: false, code: 'INVALID_PAYMENT_SPLIT', message: 'Для комбо укажи суммы и для налички, и для карты' });
+          return res.status(400).json({ ok: false, code: 'INVALID_PAYMENT_SPLIT', message: 'Р”Р»СЏ РєРѕРјР±Рѕ СѓРєР°Р¶Рё СЃСѓРјРјС‹ Рё РґР»СЏ РЅР°Р»РёС‡РєРё, Рё РґР»СЏ РєР°СЂС‚С‹' });
         }
         paymentCashAmount = Math.round(ca);
         paymentCardAmount = Math.round(cr);
@@ -1026,7 +1026,7 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
         return res.status(400).json({
           ok: false,
           code: 'SEAT_CAPACITY_EXCEEDED',
-          message: `Количество мест не может превышать вместимость лодки (${resolvedSlot.capacity})`
+          message: `РљРѕР»РёС‡РµСЃС‚РІРѕ РјРµСЃС‚ РЅРµ РјРѕР¶РµС‚ РїСЂРµРІС‹С€Р°С‚СЊ РІРјРµСЃС‚РёРјРѕСЃС‚СЊ Р»РѕРґРєРё (${resolvedSlot.capacity})`
         });
       }
             
@@ -1053,7 +1053,7 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
           return res.status(409).json({
             ok: false,
             code: 'SALES_CLOSED',
-            message: 'Продажи закрыты за 10 минут до старта рейса'
+            message: 'РџСЂРѕРґР°Р¶Рё Р·Р°РєСЂС‹С‚С‹ Р·Р° 10 РјРёРЅСѓС‚ РґРѕ СЃС‚Р°СЂС‚Р° СЂРµР№СЃР°'
           });
         }
       }
@@ -1064,7 +1064,7 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
           return res.status(409).json({
             ok: false,
             code: 'SALES_CLOSED',
-            message: 'Продажи закрыты через 10 минут после старта рейса'
+            message: 'РџСЂРѕРґР°Р¶Рё Р·Р°РєСЂС‹С‚С‹ С‡РµСЂРµР· 10 РјРёРЅСѓС‚ РїРѕСЃР»Рµ СЃС‚Р°СЂС‚Р° СЂРµР№СЃР°'
           });
         }
       }
@@ -1075,7 +1075,7 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
       return res.status(409).json({
         ok: false,
         code: 'NO_SEATS',
-        message: 'Недостаточно мест'
+        message: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РјРµСЃС‚'
       });
     }
     
@@ -1162,7 +1162,7 @@ if (breakdown) {
 
     const gen = db.prepare(`
       SELECT boat_id, time, capacity, seats_left, duration_minutes,
-             price_adult, price_teen, price_child
+             price_adult, price_teen, price_child, trip_date
       FROM generated_slots
       WHERE id = ?
     `).get(genId);
@@ -1213,6 +1213,21 @@ if (breakdown) {
     }
   }
 
+  // Compute business_day (trip date) for owner analytics
+  let presaleBusinessDay = null;
+  if (typeof presaleSlotUid === 'string' && presaleSlotUid.startsWith('generated:')) {
+    const genId = Number(presaleSlotUid.split(':')[1]);
+    const genRow = db.prepare(`SELECT trip_date FROM generated_slots WHERE id = ?`).get(genId);
+    presaleBusinessDay = genRow?.trip_date || null;
+  } else if (boatSlotIdForFK) {
+    const slotRow = db.prepare(`SELECT trip_date FROM boat_slots WHERE id = ?`).get(boatSlotIdForFK);
+    presaleBusinessDay = slotRow?.trip_date || null;
+  }
+  // Fallback to today if no trip_date found
+  if (!presaleBusinessDay) {
+    presaleBusinessDay = db.prepare(`SELECT DATE('now','localtime') AS d`).get()?.d || null;
+  }
+
   // 3) Create presale
   // For generated slots, do NOT count occupied seats via boat_slots (it aggregates by time-only).
   // Use generated_slots.seats_left/capacity as source of truth.
@@ -1220,16 +1235,17 @@ if (breakdown) {
 
   const presaleStmt = db.prepare(`
 INSERT INTO presales (
-      boat_slot_id, slot_uid,
+      boat_slot_id, slot_uid, seller_id,
       customer_name, customer_phone, number_of_seats,
       total_price, prepayment_amount, prepayment_comment, status, tickets_json,
-      payment_method, payment_cash_amount, payment_card_amount
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      payment_method, payment_cash_amount, payment_card_amount, business_day
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
 	  const presaleResult = presaleStmt.run(
     boatSlotIdForFK,
     presaleSlotUid,
+    (req.user?.role === 'seller' ? req.user?.id : null),
     customerName.trim(),
     customerPhone.trim(),
     seats,
@@ -1240,11 +1256,12 @@ INSERT INTO presales (
     ticketsJson || null,
     paymentMethodUpper,
     Math.round(Number(paymentCashAmount || 0)),
-    Math.round(Number(paymentCardAmount || 0))
+    Math.round(Number(paymentCardAmount || 0)),
+    presaleBusinessDay
   );
 
 	  // 3.1) If payment/prepayment is provided at creation time, write SELLER_SHIFT ledger row immediately.
-	  // This keeps Dispatcher "Закрытие смены" (money_ledger based) consistent with presales that are already paid.
+	  // This keeps Dispatcher "Р—Р°РєСЂС‹С‚РёРµ СЃРјРµРЅС‹" (money_ledger based) consistent with presales that are already paid.
 	  try {
 	    const paidNow = Math.round((Number(paymentCashAmount || 0) + Number(paymentCardAmount || 0)) || 0);
 	    if (paidNow > 0 && paymentMethodUpper) {
@@ -1429,7 +1446,7 @@ INSERT INTO presales (
         let cardPart = 0;
 
         if (i === canonTicketRows.length - 1) {
-          // Last ticket gets остаток (ensures sums match exactly)
+          // Last ticket gets РѕСЃС‚Р°С‚РѕРє (ensures sums match exactly)
           cashPart = Math.max(0, Math.min(amt, cashRemaining));
           cardPart = Math.max(0, Math.min(amt - cashPart, cardRemaining));
         } else {
@@ -1525,7 +1542,7 @@ return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedT
         paymentMethodUpper,
         paymentCashAmount,
 	        paymentCardAmount,
-	        req.user?.id ?? null
+	        (req.user?.role === 'seller' ? req.user?.id : null)
       );
 
       newPresaleId = result.lastInsertRowid;
@@ -1584,7 +1601,7 @@ return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedT
   } catch (error) {
     console.error('[PRESALE_CREATE_500]', { slotUid: req.body?.slotUid, message: error.message, stack: error.stack });
     if (error?.message === 'CAPACITY_EXCEEDED') {
-      return res.status(409).json({ ok: false, code: 'CAPACITY_EXCEEDED', message: 'Недостаточно мест в рейсе', details: error.details || null });
+      return res.status(409).json({ ok: false, code: 'CAPACITY_EXCEEDED', message: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РјРµСЃС‚ РІ СЂРµР№СЃРµ', details: error.details || null });
     }
     res.status(500).json({
       ok: false,
@@ -1639,7 +1656,7 @@ router.get('/presales', authenticateToken, canSell, (req, res) => {
     res.json(presales);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales method=GET message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -1688,7 +1705,7 @@ router.get('/presales/cancelled-trip-pending', authenticateToken, canDispatchMan
     res.json(cancelledPresales);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales/cancelled-trip-pending method=GET message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -1743,7 +1760,7 @@ router.get('/presales/:id', authenticateToken, canSell, (req, res) => {
     res.json(presale);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales/:id method=GET id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -1755,7 +1772,7 @@ router.post('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req
     const { boat_id, time, capacity, duration_minutes, active = 1, price_adult, price_child, price_teen } = req.body;
     
     if (!boat_id || !time || capacity === undefined) {
-      return res.status(400).json({ error: 'boat_id, time, и capacity обязательны' });
+      return res.status(400).json({ error: 'boat_id, time, Рё capacity РѕР±СЏР·Р°С‚РµР»СЊРЅС‹' });
     }
     
     // Validate data types
@@ -1768,7 +1785,7 @@ router.post('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req
     // Get boat type to validate duration
     const slotBoat = db.prepare('SELECT type FROM boats WHERE id = ?').get(boatId);
     if (!slotBoat) {
-      return res.status(404).json({ error: 'Лодка не найдена' });
+      return res.status(404).json({ error: 'Р›РѕРґРєР° РЅРµ РЅР°Р№РґРµРЅР°' });
     }
     
     // Validate duration if provided
@@ -1787,7 +1804,7 @@ router.post('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req
     if (slotBoat.type === 'banana') {
       // Validate capacity is 12
       if (slotCapacity !== 12) {
-        return res.status(400).json({ error: 'Для банана вместимость должна быть 12 мест' });
+        return res.status(400).json({ error: 'Р”Р»СЏ Р±Р°РЅР°РЅР° РІРјРµСЃС‚РёРјРѕСЃС‚СЊ РґРѕР»Р¶РЅР° Р±С‹С‚СЊ 12 РјРµСЃС‚' });
       }
       
       // For banana: force duration to 40 minutes if not provided or different
@@ -1802,35 +1819,35 @@ router.post('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req
     console.log('[CREATE_SLOT_DEBUG] Values:', { boatId, slotCapacity, durationMinutes, isActive, price_adult, price_child, price_teen });
     
     if (isNaN(boatId) || boatId <= 0) {
-      return res.status(400).json({ error: 'Некорректный ID лодки' });
+      return res.status(400).json({ error: 'РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ ID Р»РѕРґРєРё' });
     }
     
     // Validate category-specific prices instead of legacy price
     if (price_adult === undefined || isNaN(price_adult) || price_adult <= 0) {
-      return res.status(400).json({ error: 'Некорректная цена для взрослых' });
+      return res.status(400).json({ error: 'РќРµРєРѕСЂСЂРµРєС‚РЅР°СЏ С†РµРЅР° РґР»СЏ РІР·СЂРѕСЃР»С‹С…' });
     }
     if (price_child === undefined || isNaN(price_child) || price_child <= 0) {
-      return res.status(400).json({ error: 'Некорректная цена для ребёнка' });
+      return res.status(400).json({ error: 'РќРµРєРѕСЂСЂРµРєС‚РЅР°СЏ С†РµРЅР° РґР»СЏ СЂРµР±С‘РЅРєР°' });
     }
     
     // Validate teen price for banana boats
     if (slotBoat.type === 'banana' && (price_teen !== undefined && price_teen !== null && price_teen !== 0)) {
-      return res.status(400).json({ error: 'Подростковый билет запрещён для banana' });
+      return res.status(400).json({ error: 'РџРѕРґСЂРѕСЃС‚РєРѕРІС‹Р№ Р±РёР»РµС‚ Р·Р°РїСЂРµС‰С‘РЅ РґР»СЏ banana' });
     }
     
     if (isNaN(slotCapacity) || slotCapacity <= 0) {
-      return res.status(400).json({ error: 'Некорректная вместимость' });
+      return res.status(400).json({ error: 'РќРµРєРѕСЂСЂРµРєС‚РЅР°СЏ РІРјРµСЃС‚РёРјРѕСЃС‚СЊ' });
     }
     
     // Validate time format
     if (!validateTimeFormat(time)) {
-      return res.status(400).json({ error: 'Недопустимое время рейса. Разрешено 08:00–21:00, шаг 30 минут.' });
+      return res.status(400).json({ error: 'РќРµРґРѕРїСѓСЃС‚РёРјРѕРµ РІСЂРµРјСЏ СЂРµР№СЃР°. Р Р°Р·СЂРµС€РµРЅРѕ 08:00вЂ“21:00, С€Р°Рі 30 РјРёРЅСѓС‚.' });
     }
     
     // Check if boat exists and is active
     const boat = db.prepare('SELECT id FROM boats WHERE id = ? AND is_active = 1').get(boatId);
     if (!boat) {
-      return res.status(404).json({ error: 'Лодка не найдена или неактивна' });
+      return res.status(404).json({ error: 'Р›РѕРґРєР° РЅРµ РЅР°Р№РґРµРЅР° РёР»Рё РЅРµР°РєС‚РёРІРЅР°' });
     }
     
     try {
@@ -1849,7 +1866,7 @@ router.post('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req
       if (insertError.message.includes('UNIQUE constraint failed: boat_slots.boat_id, boat_slots.time')) {
         console.error('[CREATE_SLOT_CONFLICT]', insertError.message);
         return res.status(409).json({
-          error: 'Рейс на это время уже существует для этой лодки'
+          error: 'Р РµР№СЃ РЅР° СЌС‚Рѕ РІСЂРµРјСЏ СѓР¶Рµ СЃСѓС‰РµСЃС‚РІСѓРµС‚ РґР»СЏ СЌС‚РѕР№ Р»РѕРґРєРё'
         });
       }
       // Re-throw other errors to be caught by the outer catch block
@@ -1857,7 +1874,7 @@ router.post('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req
     }
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/dispatcher/slots method=POST message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -1889,7 +1906,7 @@ router.patch('/dispatcher/slots/:id', authenticateToken, canDispatchManageSlots,
       (active === true || active === 1 || active === '1' || active === 'true') ? 1 : 0;
     
     if (isNaN(slotId) || slotId <= 0) {
-      return res.status(400).json({ error: 'Некорректный ID слота' });
+      return res.status(400).json({ error: 'РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ ID СЃР»РѕС‚Р°' });
     }
     
     // Get current slot data
@@ -1921,32 +1938,32 @@ router.patch('/dispatcher/slots/:id', authenticateToken, canDispatchManageSlots,
     `).get(slotId);
     
     if (!boat) {
-      return res.status(404).json({ error: 'Слот не найден или лодка не найдена' });
+      return res.status(404).json({ error: 'РЎР»РѕС‚ РЅРµ РЅР°Р№РґРµРЅ РёР»Рё Р»РѕРґРєР° РЅРµ РЅР°Р№РґРµРЅР°' });
     }
     
     if (!currentSlot) {
-      return res.status(404).json({ error: 'Слот не найден' });
+      return res.status(404).json({ error: 'РЎР»РѕС‚ РЅРµ РЅР°Р№РґРµРЅ' });
     }
     
     // Validate category-specific prices if they are being updated
     if (price_adult !== undefined && (isNaN(price_adult) || price_adult <= 0)) {
-      return res.status(400).json({ error: 'Некорректная цена для взрослых' });
+      return res.status(400).json({ error: 'РќРµРєРѕСЂСЂРµРєС‚РЅР°СЏ С†РµРЅР° РґР»СЏ РІР·СЂРѕСЃР»С‹С…' });
     }
     if (price_child !== undefined && (isNaN(price_child) || price_child <= 0)) {
-      return res.status(400).json({ error: 'Некорректная цена для ребёнка' });
+      return res.status(400).json({ error: 'РќРµРєРѕСЂСЂРµРєС‚РЅР°СЏ С†РµРЅР° РґР»СЏ СЂРµР±С‘РЅРєР°' });
     }
     
     // Get boat type to validate teen price for banana boats
     if (price_teen !== undefined && price_teen !== null && price_teen !== 0) {
       if (boat.type === 'banana') {
-        return res.status(400).json({ error: 'Подростковый билет запрещён для banana' });
+        return res.status(400).json({ error: 'РџРѕРґСЂРѕСЃС‚РєРѕРІС‹Р№ Р±РёР»РµС‚ Р·Р°РїСЂРµС‰С‘РЅ РґР»СЏ banana' });
       }
     }
     
     // Validate time format if time is being updated
     if (time !== undefined && time !== null) {
       if (!validateTimeFormat(time)) {
-        return res.status(400).json({ error: 'Недопустимое время рейса. Разрешено 08:00–21:00, шаг 30 минут.' });
+        return res.status(400).json({ error: 'РќРµРґРѕРїСѓСЃС‚РёРјРѕРµ РІСЂРµРјСЏ СЂРµР№СЃР°. Р Р°Р·СЂРµС€РµРЅРѕ 08:00вЂ“21:00, С€Р°Рі 30 РјРёРЅСѓС‚.' });
       }
     }
     
@@ -1966,13 +1983,13 @@ router.patch('/dispatcher/slots/:id', authenticateToken, canDispatchManageSlots,
       if (capacity !== undefined) {
         const newCapacity = parseInt(capacity);
         if (newCapacity !== 12) {
-          return res.status(400).json({ error: 'Для банана вместимость должна быть 12 мест' });
+          return res.status(400).json({ error: 'Р”Р»СЏ Р±Р°РЅР°РЅР° РІРјРµСЃС‚РёРјРѕСЃС‚СЊ РґРѕР»Р¶РЅР° Р±С‹С‚СЊ 12 РјРµСЃС‚' });
         }
       }
       
       // For banana: force duration to 40 minutes if being updated and different
       if (duration_minutes !== undefined && Number(duration_minutes) !== 40) {
-        return res.status(400).json({ error: 'Для банана длительность должна быть 40 минут' });
+        return res.status(400).json({ error: 'Р”Р»СЏ Р±Р°РЅР°РЅР° РґР»РёС‚РµР»СЊРЅРѕСЃС‚СЊ РґРѕР»Р¶РЅР° Р±С‹С‚СЊ 40 РјРёРЅСѓС‚' });
       }
       
 
@@ -2031,13 +2048,13 @@ router.patch('/dispatcher/slots/:id', authenticateToken, canDispatchManageSlots,
     if (capacity !== undefined) {
       newCapacity = parseInt(capacity);
       if (isNaN(newCapacity) || newCapacity <= 0) {
-        return res.status(400).json({ error: 'Некорректная вместимость' });
+        return res.status(400).json({ error: 'РќРµРєРѕСЂСЂРµРєС‚РЅР°СЏ РІРјРµСЃС‚РёРјРѕСЃС‚СЊ' });
       }
       // Debug logging to see the values being compared - using more accurate calculation from presales
       const actualSoldSeats = currentSlot.sold_seats_from_presales;
       console.log('[CAPACITY_UPDATE_DEBUG] newCapacity:', newCapacity, 'sold_seats_from_calc:', currentSlot.sold_seats_from_calc, 'sold_seats_from_presales:', actualSoldSeats);
       if (newCapacity < actualSoldSeats) {
-        return res.status(400).json({ error: 'Новая вместимость не может быть меньше количества проданных мест' });
+        return res.status(400).json({ error: 'РќРѕРІР°СЏ РІРјРµСЃС‚РёРјРѕСЃС‚СЊ РЅРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ РјРµРЅСЊС€Рµ РєРѕР»РёС‡РµСЃС‚РІР° РїСЂРѕРґР°РЅРЅС‹С… РјРµСЃС‚' });
       }
       
       // Adjust seats_left if capacity is increased - using accurate sold seats calculation
@@ -2096,7 +2113,7 @@ router.patch('/dispatcher/slots/:id', authenticateToken, canDispatchManageSlots,
     });
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/dispatcher/slots/:id method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -2111,17 +2128,17 @@ router.patch('/dispatcher/slots/:id/active', authenticateToken, canDispatchManag
       (active === true || active === 1 || active === '1' || active === 'true') ? 1 : 0;
     
     if (isNaN(slotId) || slotId <= 0) {
-      return res.status(400).json({ error: 'Некорректный ID слота' });
+      return res.status(400).json({ error: 'РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ ID СЃР»РѕС‚Р°' });
     }
     
     if (active === undefined) {
-      return res.status(400).json({ error: 'Поле active обязательно' });
+      return res.status(400).json({ error: 'РџРѕР»Рµ active РѕР±СЏР·Р°С‚РµР»СЊРЅРѕ' });
     }
     
     // Check if slot exists
     const slot = db.prepare('SELECT id, capacity, seats_left FROM boat_slots WHERE id = ?').get(slotId);
     if (!slot) {
-      return res.status(404).json({ error: 'Слот не найден' });
+      return res.status(404).json({ error: 'РЎР»РѕС‚ РЅРµ РЅР°Р№РґРµРЅ' });
     }
     
     // Get detailed presales diagnostics before update
@@ -2187,7 +2204,7 @@ router.patch('/dispatcher/slots/:id/active', authenticateToken, canDispatchManag
     });
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/dispatcher/slots/:id/active method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -2197,7 +2214,7 @@ router.delete('/dispatcher/slots/:id', authenticateToken, canDispatchManageSlots
     const slotId = parseInt(req.params.id);
     
     if (isNaN(slotId) || slotId <= 0) {
-      return res.status(400).json({ error: 'Некорректный ID слота' });
+      return res.status(400).json({ error: 'РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ ID СЃР»РѕС‚Р°' });
     }
     
     // Check if slot exists
@@ -2207,7 +2224,7 @@ router.delete('/dispatcher/slots/:id', authenticateToken, canDispatchManageSlots
       WHERE id = ?
     `).get(slotId);
     if (!slot) {
-      return res.status(404).json({ error: 'Рейс не найден' });
+      return res.status(404).json({ error: 'Р РµР№СЃ РЅРµ РЅР°Р№РґРµРЅ' });
     }
     
     // Check for any presales (regardless of status) that would prevent hard deletion
@@ -2237,13 +2254,13 @@ router.delete('/dispatcher/slots/:id', authenticateToken, canDispatchManageSlots
       const result = transaction();
       
       if (result.updateResult.changes === 0) {
-        return res.status(500).json({ error: 'Не удалось деактивировать рейс' });
+        return res.status(500).json({ error: 'РќРµ СѓРґР°Р»РѕСЃСЊ РґРµР°РєС‚РёРІРёСЂРѕРІР°С‚СЊ СЂРµР№СЃ' });
       }
       
       return res.json({
         ok: true,
         mode: 'archived',
-        message: 'Рейс нельзя удалить, потому что по нему есть продажи. Рейс деактивирован.',
+        message: 'Р РµР№СЃ РЅРµР»СЊР·СЏ СѓРґР°Р»РёС‚СЊ, РїРѕС‚РѕРјСѓ С‡С‚Рѕ РїРѕ РЅРµРјСѓ РµСЃС‚СЊ РїСЂРѕРґР°Р¶Рё. Р РµР№СЃ РґРµР°РєС‚РёРІРёСЂРѕРІР°РЅ.',
         slot: result.updatedSlot
       });
     } else {
@@ -2252,19 +2269,19 @@ router.delete('/dispatcher/slots/:id', authenticateToken, canDispatchManageSlots
       const result = stmt.run(slotId);
       
       if (result.changes === 0) {
-        return res.status(404).json({ error: 'Рейс не найден' });
+        return res.status(404).json({ error: 'Р РµР№СЃ РЅРµ РЅР°Р№РґРµРЅ' });
       }
       
       res.json({ 
         ok: true,
         mode: 'deleted',
-        message: 'Рейс удалён',
+        message: 'Р РµР№СЃ СѓРґР°Р»С‘РЅ',
         id: slotId 
       });
     }
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/dispatcher/slots/:id method=DELETE id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -2275,7 +2292,7 @@ router.get('/dispatcher/boats', authenticateToken, canDispatchManageSlots, (req,
     res.json(boats);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/dispatcher/boats method=GET message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -2322,7 +2339,7 @@ router.get('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req,
     res.json(rows);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/dispatcher/slots method=GET message=' + (error?.message || error) + ' stack=' + (error?.stack || ''));
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -2386,7 +2403,7 @@ router.patch('/presales/:id/payment', authenticateToken, canSell, (req, res) => 
     res.json(updatedPresale);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales/:id/payment method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -2461,14 +2478,14 @@ router.patch('/presales/:id/accept-payment', authenticateToken, canSell, (req, r
       WHERE id = ?
     `).get(presaleId);
     
-    // If presale not found → 404 json
+    // If presale not found в†’ 404 json
     if (!presale) {
-      return res.status(404).json({ error: 'Предзаказ не найден' });
+      return res.status(404).json({ error: 'РџСЂРµРґР·Р°РєР°Р· РЅРµ РЅР°Р№РґРµРЅ' });
     }
     
-    // If presale.status != 'ACTIVE' → 400 json
+    // If presale.status != 'ACTIVE' в†’ 400 json
     if (presale.status !== 'ACTIVE') {
-      return res.status(400).json({ error: 'Нельзя принять оплату для этого статуса' });
+      return res.status(400).json({ error: 'РќРµР»СЊР·СЏ РїСЂРёРЅСЏС‚СЊ РѕРїР»Р°С‚Сѓ РґР»СЏ СЌС‚РѕРіРѕ СЃС‚Р°С‚СѓСЃР°' });
     }
     
     // Accept remaining payment with method tracking
@@ -2477,7 +2494,7 @@ const body = req.body || {};
 const method = String(body.payment_method || body.method || '').toUpperCase();
 
 if (method !== 'CASH' && method !== 'CARD' && method !== 'MIXED') {
-  return res.status(400).json({ error: 'Не указан способ оплаты' });
+  return res.status(400).json({ error: 'РќРµ СѓРєР°Р·Р°РЅ СЃРїРѕСЃРѕР± РѕРїР»Р°С‚С‹' });
 }
 
 let cashAmount = 0;
@@ -2492,15 +2509,15 @@ if (method === 'CASH') {
   cardAmount = Number(body.card_amount ?? body.cardAmount ?? 0);
 
   if (!Number.isFinite(cashAmount) || !Number.isFinite(cardAmount) || cashAmount < 0 || cardAmount < 0) {
-    return res.status(400).json({ error: 'Некорректные суммы для комбинированной оплаты' });
+    return res.status(400).json({ error: 'РќРµРєРѕСЂСЂРµРєС‚РЅС‹Рµ СЃСѓРјРјС‹ РґР»СЏ РєРѕРјР±РёРЅРёСЂРѕРІР°РЅРЅРѕР№ РѕРїР»Р°С‚С‹' });
   }
 
   if (Math.round(cashAmount + cardAmount) !== Math.round(remainingToPay)) {
-    return res.status(400).json({ error: 'Сумма НАЛ + КАРТА должна быть равна остатку к оплате' });
+    return res.status(400).json({ error: 'РЎСѓРјРјР° РќРђР› + РљРђР РўРђ РґРѕР»Р¶РЅР° Р±С‹С‚СЊ СЂР°РІРЅР° РѕСЃС‚Р°С‚РєСѓ Рє РѕРїР»Р°С‚Рµ' });
   }
 
   if (cashAmount === 0 || cardAmount === 0) {
-    return res.status(400).json({ error: 'Для комбо укажи суммы и для налички, и для карты' });
+    return res.status(400).json({ error: 'Р”Р»СЏ РєРѕРјР±Рѕ СѓРєР°Р¶Рё СЃСѓРјРјС‹ Рё РґР»СЏ РЅР°Р»РёС‡РєРё, Рё РґР»СЏ РєР°СЂС‚С‹' });
   }
 }
 
@@ -2552,6 +2569,11 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
 
         const totalAccepted = Math.round((Number(cashAmount || 0) + Number(cardAmount || 0)) || 0);
 
+        // Get seller_id from presales (source of truth), not from req.user (dispatcher)
+        const presaleSeller = db.prepare(
+          "SELECT seller_id FROM presales WHERE id = ?"
+        ).get(presaleId);
+
         let ledgerType = 'SALE_ACCEPTED';
         if (Number(cashAmount) > 0 && Number(cardAmount) > 0) ledgerType = 'SALE_ACCEPTED_MIXED';
         else if (Number(cashAmount) > 0) ledgerType = 'SALE_ACCEPTED_CASH';
@@ -2569,7 +2591,7 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
           type: ledgerType,
           method: method || null,
           amount: totalAccepted,
-          seller_id: req.user?.id ?? null,
+          seller_id: presaleSeller?.seller_id ?? null,
           business_day: bd
         });
       }
@@ -2578,8 +2600,8 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
     }
 
     // Persist payment method on tickets + canonical money layer.
-    // IMPORTANT: Owner "Нал/Карта" аналитика читается из sales_transactions_canonical,
-    // поэтому после принятия оплаты нужно синхронизировать деньги в каноне.
+    // IMPORTANT: Owner "РќР°Р»/РљР°СЂС‚Р°" Р°РЅР°Р»РёС‚РёРєР° С‡РёС‚Р°РµС‚СЃСЏ РёР· sales_transactions_canonical,
+    // РїРѕСЌС‚РѕРјСѓ РїРѕСЃР»Рµ РїСЂРёРЅСЏС‚РёСЏ РѕРїР»Р°С‚С‹ РЅСѓР¶РЅРѕ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ РґРµРЅСЊРіРё РІ РєР°РЅРѕРЅРµ.
     try {
       const pmLower = String(method).toLowerCase();
       // tickets may not have payment_method in older schemas
@@ -2635,7 +2657,7 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
               const row = canonRows[i];
               const amt = Math.round(Number(row.amount || 0));
               if (i === canonRows.length - 1) {
-                // last ticket gets the остаток
+                // last ticket gets the РѕСЃС‚Р°С‚РѕРє
                 const cashPart = Math.max(0, Math.min(amt, cashRemaining));
                 const cardPart = amt - cashPart;
                 updOne.run(cashPart, cardPart, row.ticket_id);
@@ -2673,7 +2695,7 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
     res.json(updatedPresale);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales/:id/accept-payment method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка при принятии оплаты' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° РїСЂРё РїСЂРёРЅСЏС‚РёРё РѕРїР»Р°С‚С‹' });
   }
 });
 
@@ -2807,7 +2829,7 @@ router.patch('/presales/:id/cancel', authenticateToken, canSell, (req, res) => {
     const code = error?.code && Number.isFinite(Number(error.code)) ? Number(error.code) : 500;
     if (code !== 500) return res.status(code).json({ error: error.message });
     console.error('[SELLING_500] route=/api/selling/presales/:id/cancel method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
-    return res.status(500).json({ error: 'Ошибка сервера' });
+    return res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -3012,9 +3034,9 @@ router.patch('/presales/:id/move', authenticateToken, canDispatchManageSlots, (r
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales/:id/move method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
     if (error?.message === 'CAPACITY_EXCEEDED') {
-      return res.status(409).json({ ok: false, code: 'CAPACITY_EXCEEDED', message: 'Недостаточно мест в рейсе', details: error.details || null });
+      return res.status(409).json({ ok: false, code: 'CAPACITY_EXCEEDED', message: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РјРµСЃС‚ РІ СЂРµР№СЃРµ', details: error.details || null });
     }
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -3029,7 +3051,7 @@ router.patch('/presales/:id/seats', authenticateToken, canDispatchManageSlots, (
     }
     
     if (number_of_seats === undefined || !Number.isInteger(number_of_seats) || number_of_seats < 1) {
-      return res.status(400).json({ error: 'Количество мест должно быть целым числом не менее 1' });
+      return res.status(400).json({ error: 'РљРѕР»РёС‡РµСЃС‚РІРѕ РјРµСЃС‚ РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ С†РµР»С‹Рј С‡РёСЃР»РѕРј РЅРµ РјРµРЅРµРµ 1' });
     }
     
     // Use transaction to ensure atomicity: update presale AND adjust slot seats
@@ -3047,7 +3069,7 @@ router.patch('/presales/:id/seats', authenticateToken, canDispatchManageSlots, (
       
       // Check that new seats is not greater than current seats (for now only allow reducing)
       if (newSeats > presale.current_seats) {
-        throw new Error('Новое количество мест не может быть больше текущего');
+        throw new Error('РќРѕРІРѕРµ РєРѕР»РёС‡РµСЃС‚РІРѕ РјРµСЃС‚ РЅРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ Р±РѕР»СЊС€Рµ С‚РµРєСѓС‰РµРіРѕ');
       }
       
       // Calculate the difference
@@ -3102,9 +3124,9 @@ router.patch('/presales/:id/seats', authenticateToken, canDispatchManageSlots, (
       transaction(presaleId, number_of_seats);
     } catch (transactionError) {
       if (transactionError.message === 'Presale not found') {
-        return res.status(404).json({ error: 'Бронь не найдена' });
+        return res.status(404).json({ error: 'Р‘СЂРѕРЅСЊ РЅРµ РЅР°Р№РґРµРЅР°' });
       }
-      if (transactionError.message === 'Новое количество мест не может быть больше текущего') {
+      if (transactionError.message === 'РќРѕРІРѕРµ РєРѕР»РёС‡РµСЃС‚РІРѕ РјРµСЃС‚ РЅРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ Р±РѕР»СЊС€Рµ С‚РµРєСѓС‰РµРіРѕ') {
         return res.status(400).json({ error: transactionError.message });
       }
       throw transactionError; // Re-throw other errors
@@ -3126,7 +3148,7 @@ router.patch('/presales/:id/seats', authenticateToken, canDispatchManageSlots, (
     res.json(updatedPresale);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales/:id/seats method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -3195,7 +3217,7 @@ router.patch('/presales/:id/used', authenticateToken, canDispatchManageSlots, (r
     res.json(updatedPresale);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales/:id/used method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -3312,7 +3334,7 @@ router.patch('/presales/:id/refund', authenticateToken, canDispatchManageSlots, 
     res.json(updatedPresale);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales/:id/refund method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -3323,18 +3345,18 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
     const presale = db.prepare(`SELECT * FROM presales WHERE id = ?`).get(presaleId);
     if (!presale) return res.status(404).json({ error: 'Presale not found' });
 
-    // нельзя "удалять" то, что уже закрыто финально
+    // РЅРµР»СЊР·СЏ "СѓРґР°Р»СЏС‚СЊ" С‚Рѕ, С‡С‚Рѕ СѓР¶Рµ Р·Р°РєСЂС‹С‚Рѕ С„РёРЅР°Р»СЊРЅРѕ
     if (['REFUNDED', 'CANCELLED', 'CANCELLED_TRIP_PENDING'].includes(presale.status)) {
       return res.status(400).json({ error: 'Cannot delete this presale in current status' });
     }
 
     const transaction = db.transaction(() => {
-      // 1) помечаем пресейл как CANCELLED (это “сжечь билет”)
+      // 1) РїРѕРјРµС‡Р°РµРј РїСЂРµСЃРµР№Р» РєР°Рє CANCELLED (СЌС‚Рѕ вЂњСЃР¶РµС‡СЊ Р±РёР»РµС‚вЂќ)
       db.prepare(`UPDATE presales SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(presaleId);
 
-	  // 1.1) если по этому presale уже были POSTED движения денег, их нужно реверснуть,
-	  // иначе “наличка/предоплата” не уменьшится после удаления билета.
-	  // Ряды не удаляем (audit), добавляем компенсирующие отрицательные строки.
+	  // 1.1) РµСЃР»Рё РїРѕ СЌС‚РѕРјСѓ presale СѓР¶Рµ Р±С‹Р»Рё POSTED РґРІРёР¶РµРЅРёСЏ РґРµРЅРµРі, РёС… РЅСѓР¶РЅРѕ СЂРµРІРµСЂСЃРЅСѓС‚СЊ,
+	  // РёРЅР°С‡Рµ вЂњРЅР°Р»РёС‡РєР°/РїСЂРµРґРѕРїР»Р°С‚Р°вЂќ РЅРµ СѓРјРµРЅСЊС€РёС‚СЃСЏ РїРѕСЃР»Рµ СѓРґР°Р»РµРЅРёСЏ Р±РёР»РµС‚Р°.
+	  // Р СЏРґС‹ РЅРµ СѓРґР°Р»СЏРµРј (audit), РґРѕР±Р°РІР»СЏРµРј РєРѕРјРїРµРЅСЃРёСЂСѓСЋС‰РёРµ РѕС‚СЂРёС†Р°С‚РµР»СЊРЅС‹Рµ СЃС‚СЂРѕРєРё.
 	  try {
 	    const ledgerExists = db
 	      .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='money_ledger'`)
@@ -3372,8 +3394,8 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
 	    console.warn('[DELETE_PRESALE] money_ledger reverse skipped:', e?.message || e);
 	  }
 
-      // 2) помечаем все НЕ-REFUNDED тикеты в этом пресейле как REFUNDED
-      // (чтобы они не учитывались как занятые места и не мешали пересчёту seats_left)
+      // 2) РїРѕРјРµС‡Р°РµРј РІСЃРµ РќР•-REFUNDED С‚РёРєРµС‚С‹ РІ СЌС‚РѕРј РїСЂРµСЃРµР№Р»Рµ РєР°Рє REFUNDED
+      // (С‡С‚РѕР±С‹ РѕРЅРё РЅРµ СѓС‡РёС‚С‹РІР°Р»РёСЃСЊ РєР°Рє Р·Р°РЅСЏС‚С‹Рµ РјРµСЃС‚Р° Рё РЅРµ РјРµС€Р°Р»Рё РїРµСЂРµСЃС‡С‘С‚Сѓ seats_left)
       const refundTicketsStmt = db.prepare(`
         UPDATE tickets
         SET status = 'REFUNDED', updated_at = CURRENT_TIMESTAMP
@@ -3381,8 +3403,8 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
       `);
       const refunded = refundTicketsStmt.run(presaleId).changes;
 
-      // 2.1) ВАЖНО: если пресейл удалили/отменили, в money-каноне не должно оставаться VALID-строк,
-      // иначе Owner будет видеть «ожидает оплаты» по уже удалённым билетам.
+      // 2.1) Р’РђР–РќРћ: РµСЃР»Рё РїСЂРµСЃРµР№Р» СѓРґР°Р»РёР»Рё/РѕС‚РјРµРЅРёР»Рё, РІ money-РєР°РЅРѕРЅРµ РЅРµ РґРѕР»Р¶РЅРѕ РѕСЃС‚Р°РІР°С‚СЊСЃСЏ VALID-СЃС‚СЂРѕРє,
+      // РёРЅР°С‡Рµ Owner Р±СѓРґРµС‚ РІРёРґРµС‚СЊ В«РѕР¶РёРґР°РµС‚ РѕРїР»Р°С‚С‹В» РїРѕ СѓР¶Рµ СѓРґР°Р»С‘РЅРЅС‹Рј Р±РёР»РµС‚Р°Рј.
       try {
         const canonExists = db
           .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`)
@@ -3398,7 +3420,7 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
         console.warn('[DELETE_PRESALE] canonical VOID skipped:', e?.message || e);
       }
 
-      // 3) определяем слот (manual/generated) и возвращаем места (clamp 0..capacity)
+      // 3) РѕРїСЂРµРґРµР»СЏРµРј СЃР»РѕС‚ (manual/generated) Рё РІРѕР·РІСЂР°С‰Р°РµРј РјРµСЃС‚Р° (clamp 0..capacity)
       const slotUid = presale.slot_uid ? String(presale.slot_uid) : null;
 
       const clampUpdateBoat = db.prepare(`
@@ -3421,7 +3443,7 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
         WHERE id = ?
       `);
 
-      const delta = Number(refunded || 0); // столько мест реально освободили
+      const delta = Number(refunded || 0); // СЃС‚РѕР»СЊРєРѕ РјРµСЃС‚ СЂРµР°Р»СЊРЅРѕ РѕСЃРІРѕР±РѕРґРёР»Рё
 
       if (delta > 0) {
         if (slotUid && slotUid.startsWith('generated:')) {
@@ -3431,13 +3453,13 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
           const id = Number(slotUid.split(':')[1]);
           clampUpdateBoat.run(delta, delta, delta, id);
         } else if (presale.boat_slot_id) {
-          // fallback: старое поле boat_slot_id (manual)
+          // fallback: СЃС‚Р°СЂРѕРµ РїРѕР»Рµ boat_slot_id (manual)
           clampUpdateBoat.run(delta, delta, delta, presale.boat_slot_id);
         }
       }
 
-      // 4) синхронизируем итоговые поля пресейла (чтобы в UI не висели старые “Билетов/Сумма”)
-      // после "удалить билет" в активных его уже не должно быть, но данные должны быть консистентны
+      // 4) СЃРёРЅС…СЂРѕРЅРёР·РёСЂСѓРµРј РёС‚РѕРіРѕРІС‹Рµ РїРѕР»СЏ РїСЂРµСЃРµР№Р»Р° (С‡С‚РѕР±С‹ РІ UI РЅРµ РІРёСЃРµР»Рё СЃС‚Р°СЂС‹Рµ вЂњР‘РёР»РµС‚РѕРІ/РЎСѓРјРјР°вЂќ)
+      // РїРѕСЃР»Рµ "СѓРґР°Р»РёС‚СЊ Р±РёР»РµС‚" РІ Р°РєС‚РёРІРЅС‹С… РµРіРѕ СѓР¶Рµ РЅРµ РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ, РЅРѕ РґР°РЅРЅС‹Рµ РґРѕР»Р¶РЅС‹ Р±С‹С‚СЊ РєРѕРЅСЃРёСЃС‚РµРЅС‚РЅС‹
       db.prepare(`
         UPDATE presales
         SET number_of_seats = 0,
@@ -3480,7 +3502,7 @@ router.get('/presales/:id/tickets', authenticateToken, canSell, (req, res) => {
     res.json(tickets);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales/:id/tickets method=GET id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -3525,7 +3547,7 @@ if (!isGenerated && isNaN(slotIdNum)) {
     res.json(tickets);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/slots/:slotId/tickets method=GET id=' + req.params.slotId + ' message=' + error.message + ' stack=' + error.stack);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
 });
 
@@ -3626,6 +3648,51 @@ router.patch('/tickets/:ticketId/refund', authenticateToken, canDispatchManageSl
         `).run(ticket.presale_boat_slot_id);
       }
 
+      // Recalculate presale total_price and number_of_seats based on remaining ACTIVE tickets
+      const presaleId = ticket.presale_id;
+      
+      // Get slot prices to determine ticket types
+      const presaleRow = db.prepare(`
+        SELECT p.slot_uid, p.boat_slot_id,
+               COALESCE(bs.price_adult, gs.price_adult, 0) as price_adult,
+               COALESCE(bs.price_teen, gs.price_teen, 0) as price_teen,
+               COALESCE(bs.price_child, gs.price_child, 0) as price_child
+        FROM presales p
+        LEFT JOIN boat_slots bs ON p.boat_slot_id = bs.id
+        LEFT JOIN generated_slots gs ON (p.slot_uid LIKE 'generated:%' AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER))
+        WHERE p.id = ?
+      `).get(presaleId);
+
+      const activeTickets = db.prepare(`
+        SELECT id, price
+        FROM tickets
+        WHERE presale_id = ? AND status = 'ACTIVE'
+      `).all(presaleId);
+
+      const newSeats = activeTickets.length;
+      const newTotal = activeTickets.reduce((sum, t) => sum + Number(t.price ?? 0), 0);
+
+      // Recalculate tickets_json by counting ACTIVE tickets by type
+      let cAdult = 0, cTeen = 0, cChild = 0;
+      const pAdult = Number(presaleRow?.price_adult ?? 0);
+      const pTeen = Number(presaleRow?.price_teen ?? 0);
+      const pChild = Number(presaleRow?.price_child ?? 0);
+      for (const t of activeTickets) {
+        const p = Number(t.price ?? 0);
+        if (pChild > 0 && p === pChild) cChild++;
+        else if (pTeen > 0 && p === pTeen) cTeen++;
+        else cAdult++;
+      }
+      const newTicketsJson = JSON.stringify({ adult: cAdult, teen: cTeen, child: cChild });
+
+      console.log('[TICKET_REFUND recalc presale]', { presaleId, newSeats, newTotal, newTicketsJson });
+
+      db.prepare(`
+        UPDATE presales
+        SET number_of_seats = ?, total_price = ?, tickets_json = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(newSeats, newTotal, newTicketsJson, presaleId);
+
       return db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
     });
 
@@ -3705,13 +3772,62 @@ router.patch('/tickets/:ticketId/delete', authenticateToken, canDispatchManageSl
         `).run(ticket.presale_boat_slot_id);
       }
 
-      return db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+      // Recalculate presale total_price and number_of_seats based on remaining ACTIVE tickets
+      const presaleId = ticket.presale_id;
+      
+      // Get slot prices to determine ticket types
+      const presaleRow = db.prepare(`
+        SELECT p.slot_uid, p.boat_slot_id,
+               COALESCE(bs.price_adult, gs.price_adult, 0) as price_adult,
+               COALESCE(bs.price_teen, gs.price_teen, 0) as price_teen,
+               COALESCE(bs.price_child, gs.price_child, 0) as price_child
+        FROM presales p
+        LEFT JOIN boat_slots bs ON p.boat_slot_id = bs.id
+        LEFT JOIN generated_slots gs ON (p.slot_uid LIKE 'generated:%' AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER))
+        WHERE p.id = ?
+      `).get(presaleId);
+
+      const activeTickets = db.prepare(`
+        SELECT id, price
+        FROM tickets
+        WHERE presale_id = ? AND status = 'ACTIVE'
+      `).all(presaleId);
+
+      const newSeats = activeTickets.length;
+      const newTotal = activeTickets.reduce((sum, t) => sum + Number(t.price ?? 0), 0);
+
+      // Recalculate tickets_json by counting ACTIVE tickets by type
+      let cAdult = 0, cTeen = 0, cChild = 0;
+      const pAdult = Number(presaleRow?.price_adult ?? 0);
+      const pTeen = Number(presaleRow?.price_teen ?? 0);
+      const pChild = Number(presaleRow?.price_child ?? 0);
+      for (const t of activeTickets) {
+        const p = Number(t.price ?? 0);
+        if (pChild > 0 && p === pChild) cChild++;
+        else if (pTeen > 0 && p === pTeen) cTeen++;
+        else cAdult++;
+      }
+      const newTicketsJson = JSON.stringify({ adult: cAdult, teen: cTeen, child: cChild });
+
+      console.log('[TICKET_DELETE recalc presale]', { presaleId, newSeats, newTotal, newTicketsJson });
+
+      db.prepare(`
+        UPDATE presales
+        SET number_of_seats = ?, total_price = ?, tickets_json = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(newSeats, newTotal, newTicketsJson, presaleId);
+
+      // Return updated presale in response for verification
+      const updatedPresale = db.prepare('SELECT * FROM presales WHERE id = ?').get(presaleId);
+      console.log('[TICKET_DELETE updated presale]', updatedPresale);
+
+      return { ticket: db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId), presale: updatedPresale };
     });
 
-    const updatedTicket = refundTransaction();
-    if (!updatedTicket) return;
+    const result = refundTransaction();
+    if (!result) return;
 
-    res.json({ success: true, ticket: updatedTicket });
+    res.json({ success: true, ticket: result.ticket, presale: result.presale });
   } catch (error) {
     console.error('Error refunding ticket:', error);
     res.status(500).json({ error: 'Failed to refund ticket' });
@@ -3754,8 +3870,8 @@ function transferTicketToAnotherSlot(req, res) {
       if (String(row.presale_status || 'ACTIVE') !== 'ACTIVE') return { error: `Cannot transfer ticket when presale status is ${row.presale_status}`, code: 409 };
 
       const fromSlotUid = String(row.presale_slot_uid || (row.presale_boat_slot_id ? `manual:${row.presale_boat_slot_id}` : ''));
-      if (!fromSlotUid) return { error: 'Source рейс not found', code: 400 };
-      if (String(fromSlotUid) === String(toSlotUid)) return { error: 'Cannot transfer to same рейс', code: 400 };
+      if (!fromSlotUid) return { error: 'Source СЂРµР№СЃ not found', code: 400 };
+      if (String(fromSlotUid) === String(toSlotUid)) return { error: 'Cannot transfer to same СЂРµР№СЃ', code: 400 };
 
       const toParsed = parseSlotUid(toSlotUid);
       if (!toParsed) return { error: 'Invalid to_slot_uid', code: 400 };
@@ -3769,10 +3885,10 @@ function transferTicketToAnotherSlot(req, res) {
         const r = db.prepare(`SELECT seats_left FROM boat_slots WHERE id = ?`).get(toParsed.id);
         targetSeatsLeft = Number(r?.seats_left ?? 0);
       }
-      if (targetSeatsLeft < 1) return { error: 'Not enough seats in target рейс', code: 400 };
+      if (targetSeatsLeft < 1) return { error: 'Not enough seats in target СЂРµР№СЃ', code: 400 };
 
       const targetBaseBoatSlotId = getBaseBoatSlotIdForSlot(toSlotUid);
-      if (!targetBaseBoatSlotId) return { error: 'Target рейс base slot not found', code: 400 };
+      if (!targetBaseBoatSlotId) return { error: 'Target СЂРµР№СЃ base slot not found', code: 400 };
 
       // Infer ticket_type by price (fallback to adult)
       const pAdult = Number(row.price_adult ?? 0);
@@ -3796,7 +3912,7 @@ function transferTicketToAnotherSlot(req, res) {
         child: ticketType === 'child' ? 1 : 0
       });
 
-      // IMPORTANT: business_day for transferred presales must follow the рейс date (trip_date),
+      // IMPORTANT: business_day for transferred presales must follow the СЂРµР№СЃ date (trip_date),
       // not the timestamp of the transfer operation. Otherwise Owner "revenue by day" keeps
       // the amount in the old day after moving the ticket to tomorrow.
       let targetBusinessDay = null;
@@ -3883,7 +3999,7 @@ function transferTicketToAnotherSlot(req, res) {
         WHERE id = ?
       `).run(newOldSeats, newOldTotal, newOldPrepay, newOldTicketsJson, newStatus, oldPresaleId);
 
-      // Seats: free 1 in old рейс and take 1 in new рейс
+      // Seats: free 1 in old СЂРµР№СЃ and take 1 in new СЂРµР№СЃ
       applySeatsDelta(fromSlotUid, +1);
       applySeatsDelta(toSlotUid, -1);
 
@@ -3946,7 +4062,7 @@ router.patch('/tickets/:ticketId/transfer', authenticateToken, canDispatchManage
 
 
 
-// Transfer options for UI dropdown (only рейсы where sales are open: is_active=1)
+// Transfer options for UI dropdown (only СЂРµР№СЃС‹ where sales are open: is_active=1)
 router.get('/transfer-options', authenticateToken, canSellOrDispatch, (req, res) => {
   try {
     const now = new Date();
@@ -4000,15 +4116,15 @@ router.get('/transfer-options', authenticateToken, canSellOrDispatch, (req, res)
     const options = (rows || []).map(r => {
       let dayLabel = '';
       if (!r.trip_date) {
-        dayLabel = 'Сегодня';
+        dayLabel = 'РЎРµРіРѕРґРЅСЏ';
       } else if (r.trip_date === todayStr) {
-        dayLabel = 'Сегодня';
+        dayLabel = 'РЎРµРіРѕРґРЅСЏ';
       } else {
         const tomorrow = new Date(now);
         tomorrow.setDate(now.getDate() + 1);
         const tomorrowStr = tomorrow.toISOString().slice(0, 10);
         if (r.trip_date === tomorrowStr) {
-          dayLabel = 'Завтра';
+          dayLabel = 'Р—Р°РІС‚СЂР°';
         } else {
           // DD.MM
           const [y, m, d] = String(r.trip_date).split('-');
@@ -4017,7 +4133,7 @@ router.get('/transfer-options', authenticateToken, canSellOrDispatch, (req, res)
       }
 
       const seatsLeft = Number(r.seats_left ?? 0);
-      const label = `${dayLabel} ${r.time} • ${r.boat_name} • свободно ${seatsLeft}`;
+      const label = `${dayLabel} ${r.time} вЂў ${r.boat_name} вЂў СЃРІРѕР±РѕРґРЅРѕ ${seatsLeft}`;
 
       return {
         slot_uid: r.slot_uid,
@@ -4132,7 +4248,7 @@ function applySeatsDelta(slotUid, delta) {
   }
 }
 
-// Transfer whole presale to another slot_uid (new перенос, no cancelled tabs)
+// Transfer whole presale to another slot_uid (new РїРµСЂРµРЅРѕСЃ, no cancelled tabs)
 function doTransferPresaleToSlot(presaleId, toSlotUid) {
   const toParsed = parseSlotUid(toSlotUid);
   if (!toParsed) throw new Error('Invalid to_slot_uid');
@@ -4151,7 +4267,7 @@ function doTransferPresaleToSlot(presaleId, toSlotUid) {
   const fromParsed = parseSlotUid(fromSlotUid);
   if (!fromParsed) throw new Error('Invalid source slot for presale');
 
-  if (String(fromSlotUid) === String(toSlotUid)) return { error: 'Cannot transfer to same рейс', code: 400 };
+  if (String(fromSlotUid) === String(toSlotUid)) return { error: 'Cannot transfer to same СЂРµР№СЃ', code: 400 };
 
   // Get old trip day before transfer
   let oldTripDay = null;
@@ -4190,10 +4306,10 @@ function doTransferPresaleToSlot(presaleId, toSlotUid) {
     const r = db.prepare(`SELECT seats_left FROM boat_slots WHERE id = ?`).get(toParsed.id);
     targetSeatsLeft = Number(r?.seats_left ?? 0);
   }
-  if (targetSeatsLeft < movedSeats) return { error: 'Not enough seats in target рейс', code: 400 };
+  if (targetSeatsLeft < movedSeats) return { error: 'Not enough seats in target СЂРµР№СЃ', code: 400 };
 
   const targetBaseBoatSlotId = getBaseBoatSlotIdForSlot(toSlotUid);
-  if (!targetBaseBoatSlotId) return { error: 'Target рейс base slot not found', code: 400 };
+  if (!targetBaseBoatSlotId) return { error: 'Target СЂРµР№СЃ base slot not found', code: 400 };
 
   // Update presale + all tickets to target
   db.prepare(`
@@ -4209,7 +4325,7 @@ function doTransferPresaleToSlot(presaleId, toSlotUid) {
   `).run(targetBaseBoatSlotId, presaleId);
 
 
-  // === FIX: recalc prices when transferring a whole presale between рейсы ===
+  // === FIX: recalc prices when transferring a whole presale between СЂРµР№СЃС‹ ===
   // If you move 2h(3000) -> 1h(2000), totals and per-ticket prices must change.
   try {
     const getSlotPrices = (slotUid) => {
@@ -4226,11 +4342,22 @@ function doTransferPresaleToSlot(presaleId, toSlotUid) {
     const fromPrices = getSlotPrices(fromSlotUid);
     const toPrices   = getSlotPrices(toSlotUid);
 
-    let counts = null;
-    try { counts = presale.tickets_json ? JSON.parse(presale.tickets_json) : null; } catch { counts = null; }
-    const cAdult = Math.max(0, Number(counts?.adult ?? 0));
-    const cTeen  = Math.max(0, Number(counts?.teen  ?? 0));
-    const cChild = Math.max(0, Number(counts?.child ?? 0));
+    // Count ACTIVE tickets by type from database (not stale tickets_json)
+    const activeTicketsForCount = db.prepare(`
+      SELECT id, price
+      FROM tickets
+      WHERE presale_id = ? AND status = 'ACTIVE'
+    `).all(presaleId);
+
+    let cAdult = 0, cTeen = 0, cChild = 0;
+    for (const t of activeTicketsForCount) {
+      const p = Number(t.price ?? 0);
+      if (fromPrices.child > 0 && p === fromPrices.child) cChild++;
+      else if (fromPrices.teen > 0 && p === fromPrices.teen) cTeen++;
+      else cAdult++;
+    }
+
+    console.log('[PRESALE_TRANSFER] active ticket counts:', { cAdult, cTeen, cChild, movedSeats });
 
     const computedTotal =
       (cAdult * (toPrices.adult || fromPrices.adult || 0)) +
@@ -4241,13 +4368,20 @@ function doTransferPresaleToSlot(presaleId, toSlotUid) {
       const oldPrepay = Number(presale.prepayment_amount ?? 0);
       const newPrepay = Math.min(oldPrepay, computedTotal);
 
+      // Update tickets_json with ACTIVE counts
+      const newTicketsJson = JSON.stringify({ adult: cAdult, teen: cTeen, child: cChild });
+
       db.prepare(`
         UPDATE presales
         SET total_price = ?,
             prepayment_amount = ?,
+            number_of_seats = ?,
+            tickets_json = ?,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).run(computedTotal, newPrepay, presaleId);
+      `).run(computedTotal, newPrepay, movedSeats, newTicketsJson, presaleId);
+
+      console.log('[PRESALE_TRANSFER] updated presale:', { presaleId, computedTotal, movedSeats, newTicketsJson });
 
       // Update each ticket.price by matching its old price to old slot prices (fallback adult)
       const tickets = db.prepare(`
@@ -4312,11 +4446,84 @@ function doTransferPresaleToSlot(presaleId, toSlotUid) {
     console.log('[PRESALE_TRANSFER_REPRICE] skipped', e?.message || e);
   }
 
+  // === SYNC VALID CANONICAL to target slot ===
+  // Update slot_uid, slot_id, business_day for all VALID rows of this presale
+  try {
+    const getGeneratedSlotIdFromUid = (slotUid) => {
+      if (!slotUid || typeof slotUid !== 'string') return null;
+      if (slotUid.startsWith('generated:')) {
+        const genId = Number(slotUid.slice('generated:'.length));
+        return Number.isFinite(genId) ? genId : null;
+      }
+      return null;
+    };
+
+    const resolveTripDayForSlot = (slotUid) => {
+      if (!slotUid) return null;
+      if (typeof slotUid === 'string' && slotUid.startsWith('generated:')) {
+        const genId = Number(slotUid.slice('generated:'.length));
+        if (Number.isFinite(genId)) {
+          const row = db.prepare('SELECT trip_date FROM generated_slots WHERE id = ?').get(genId);
+          if (row?.trip_date) return row.trip_date;
+        }
+      }
+      const baseSlotId = getBaseBoatSlotIdForSlot(slotUid);
+      if (baseSlotId) {
+        const row = db.prepare('SELECT trip_date FROM boat_slots WHERE id = ?').get(baseSlotId);
+        if (row?.trip_date) return row.trip_date;
+      }
+      return db.prepare("SELECT DATE('now','localtime') AS d").get()?.d || null;
+    };
+
+    const targetSlotId = getGeneratedSlotIdFromUid(toSlotUid) || getBaseBoatSlotIdForSlot(toSlotUid) || null;
+    const targetBusinessDay = resolveTripDayForSlot(toSlotUid);
+
+    db.prepare(`
+      UPDATE sales_transactions_canonical
+      SET slot_uid = ?, slot_id = ?, business_day = ?
+      WHERE presale_id = ? AND status = 'VALID'
+    `).run(toSlotUid, targetSlotId, targetBusinessDay, presaleId);
+
+    console.log('[PRESALE_TRANSFER_VALID_CANON] synced:', { presaleId, toSlotUid, targetSlotId, targetBusinessDay });
+  } catch (e) {
+    console.log('[PRESALE_TRANSFER_VALID_CANON] skipped', e?.message || e);
+  }
+
   // Seats: free in old, take in new
   applySeatsDelta(fromSlotUid, +movedSeats);
   applySeatsDelta(toSlotUid, -movedSeats);
 
-  // === PENDING CANONICAL: keep "ожидает оплаты" tied to trip_date after transfer ===
+  // === Resolve target trip day and slot id (shared by PENDING canonical and presales update) ===
+  const resolveTripDayForSlot = (slotUid) => {
+    if (!slotUid) return null;
+    if (typeof slotUid === 'string' && slotUid.startsWith('generated:')) {
+      const genId = Number(slotUid.slice('generated:'.length));
+      if (Number.isFinite(genId)) {
+        const row = db.prepare('SELECT trip_date FROM generated_slots WHERE id = ?').get(genId);
+        if (row?.trip_date) return row.trip_date;
+      }
+    }
+    const baseSlotId = getBaseBoatSlotIdForSlot(slotUid);
+    if (baseSlotId) {
+      const row = db.prepare('SELECT trip_date FROM boat_slots WHERE id = ?').get(baseSlotId);
+      if (row?.trip_date) return row.trip_date;
+    }
+    return db.prepare("SELECT DATE('now','localtime') AS d").get()?.d || null;
+  };
+
+  const getGeneratedSlotIdFromUid = (slotUid) => {
+    if (!slotUid || typeof slotUid !== 'string') return null;
+    if (slotUid.startsWith('generated:')) {
+      const genId = Number(slotUid.slice('generated:'.length));
+      return Number.isFinite(genId) ? genId : null;
+    }
+    return null;
+  };
+
+  const targetBusinessDay = resolveTripDayForSlot(toSlotUid);
+  const targetSlotId = getGeneratedSlotIdFromUid(toSlotUid) || getBaseBoatSlotIdForSlot(toSlotUid) || null;
+
+  // === PENDING CANONICAL: keep "РѕР¶РёРґР°РµС‚ РѕРїР»Р°С‚С‹" tied to trip_date after transfer ===
   // Owner pending-by-trip-date relies on canonical rows with status='PENDING'.
   // When a presale moves to another slot, its unpaid remainder must follow the new slot.
   try {
@@ -4348,28 +4555,32 @@ function doTransferPresaleToSlot(presaleId, toSlotUid) {
           slot_id,
           created_at
         )
-        VALUES
-        (
-          NULL,
-          'PENDING',
-          ?,
-          ?,
-          NULL,
-          ?,
-          ?,
-          ?,
-          CURRENT_TIMESTAMP
-        )
+        VALUES (?, 'PENDING', ?, ?, NULL, ?, ?, ?, CURRENT_TIMESTAMP)
       `).run(
+        targetBusinessDay,
         remainder,
-        Number(cur?.number_of_seats ?? movedSeats) || movedSeats || 1,
+        Number(cur?.number_of_seats ?? movedSeats) || 1,
         presaleId,
-        String(cur?.slot_uid ?? toSlotUid),
-        Number(cur?.boat_slot_id ?? 0) || getBaseBoatSlotIdForSlot(toSlotUid) || null
+        toSlotUid,
+        targetSlotId
       );
     }
   } catch (e) {
     console.log('[PRESALE_TRANSFER_PENDING_CANON] skipped', e?.message || e);
+  }
+
+  // === UPDATE PRESALES to target slot (Owner pending-by-day reads presales.business_day) ===
+  try {
+    const presaleBoatSlotId = getBaseBoatSlotIdForSlot(toSlotUid) || null;
+    console.log('[PRESALE_TRANSFER_PRESALE] before update:', { presaleId, toSlotUid, presaleBoatSlotId, targetBusinessDay });
+    const updRes = db.prepare(`
+      UPDATE presales
+      SET business_day = ?, slot_uid = ?, boat_slot_id = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(targetBusinessDay, toSlotUid, presaleBoatSlotId, presaleId);
+    console.log('[PRESALE_TRANSFER_PRESALE] after update:', { changes: updRes.changes, lastInsertRowid: updRes.lastInsertRowid });
+  } catch (e) {
+    console.log('[PRESALE_TRANSFER_PRESALE] skipped', e?.message || e);
   }
 
   // === Recalc EXPECT_PAYMENT in money_ledger for owner pending-by-day ===
@@ -4431,7 +4642,7 @@ router.post('/presales/:id/transfer', authenticateToken, canSellOrDispatch, (req
   }
 });
 
-// Backward compatible: PATCH /presales/:id/transfer (now требует body.to_slot_uid)
+// Backward compatible: PATCH /presales/:id/transfer (now С‚СЂРµР±СѓРµС‚ body.to_slot_uid)
 router.patch('/presales/:id/transfer', authenticateToken, canSellOrDispatch, (req, res) => {
   try {
     const presaleId = Number(req.params.id);
@@ -4483,7 +4694,7 @@ router.patch('/presales/:id/cancel-trip-pending', authenticateToken, canSellOrDi
     if (!result) return;
 
     // IMPORTANT:
-    // Owner analytics "Ожидает оплаты (по дате рейса)" is based on money_ledger rows (not sales_transactions_canonical).
+    // Owner analytics "РћР¶РёРґР°РµС‚ РѕРїР»Р°С‚С‹ (РїРѕ РґР°С‚Рµ СЂРµР№СЃР°)" is based on money_ledger rows (not sales_transactions_canonical).
     // When a presale is moved into "CANCELLED_TRIP_PENDING" (transfer without payment), we must record an expected payment.
     // Do this OUTSIDE of the transaction so seat-restore edge cases do not rollback the money_ledger write.
     try {

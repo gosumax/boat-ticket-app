@@ -1,7 +1,6 @@
 import { useAuth } from "../contexts/AuthContext";
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import apiClient from "../utils/apiClient.js";
-import { OwnerDataContext } from "../contexts/OwnerDataContext.jsx";
 import OwnerMoneyView from "./OwnerMoneyView";
 import OwnerBoatsView from "./OwnerBoatsView";
 import OwnerSellersView from "./OwnerSellersView";
@@ -9,6 +8,7 @@ import OwnerMotivationView from "./OwnerMotivationView";
 import OwnerSettingsView from "./OwnerSettingsView";
 import OwnerLoadView from "../components/owner/OwnerLoadView.jsx";
 import OwnerExportView from "./OwnerExportView";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 /**
  * OwnerView.jsx
@@ -20,33 +20,187 @@ import OwnerExportView from "./OwnerExportView";
 
 /**
  * SCREEN 0 — Сравнение периодов (Owner)
- * UI-only implementation per TZ:
- * - Choose Period A and Period B (presets)
- * - Show metrics with A, B, delta
+ * Unified LineChart for: Revenue / Boats / Sellers
  */
 function OwnerComparePeriodsView() {
-  const [preset, setPreset] = useState("7d");
+  const [compareMode, setCompareMode] = useState("revenue"); // 'revenue' | 'boats' | 'sellers'
+  const [chartMode, setChartMode] = useState("daily"); // 'daily' | 'cumulative'
+
+  // Date pickers state
+  const today = new Date().toISOString().split('T')[0];
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+  const twoWeeksAgo = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
+  const [fromA, setFromA] = useState(twoWeeksAgo);
+  const [toA, setToA] = useState(weekAgo);
+  const [fromB, setFromB] = useState(weekAgo);
+  const [toB, setToB] = useState(today);
+
+  // Boat/Seller selection
+  const [selectedBoatId, setSelectedBoatId] = useState(null);
+  const [selectedSellerId, setSelectedSellerId] = useState(null);
+  const [boats, setBoats] = useState([]);
+  const [sellers, setSellers] = useState([]);
+
+  // Load boats list
+  useEffect(() => {
+    const loadBoats = async () => {
+      try {
+        const json = await apiClient.request('/owner/boats?preset=all', { method: 'GET' });
+        setBoats(json?.data?.boats || []);
+        if (json?.data?.boats?.length > 0 && !selectedBoatId) {
+          setSelectedBoatId(json.data.boats[0].boat_id);
+        }
+      } catch {}
+    };
+    if (compareMode === 'boats') loadBoats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compareMode]);
+
+  // Load sellers list
+  useEffect(() => {
+    const loadSellers = async () => {
+      try {
+        const json = await apiClient.request('/owner/sellers?preset=all', { method: 'GET' });
+        const items = json?.data?.items || [];
+        setSellers(items);
+        if (items.length > 0 && !selectedSellerId) {
+          setSelectedSellerId(items[0].seller_id);
+        }
+      } catch {}
+    };
+    if (compareMode === 'sellers') loadSellers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compareMode]);
+
+  return (
+    <div className="p-4 pb-24 space-y-4">
+      <div className="text-xl font-semibold">Сравнение</div>
+
+      {/* Info block */}
+      <div className="rounded-2xl border border-neutral-800 p-3 text-xs text-neutral-500">
+        Сравнение считается по дате оплаты (business_day).
+      </div>
+
+      {/* Mode switcher */}
+      <div className="rounded-2xl border border-neutral-800 p-1 flex gap-1">
+        <ModeChip active={compareMode === "revenue"} onClick={() => setCompareMode("revenue")} label="Выручка" />
+        <ModeChip active={compareMode === "boats"} onClick={() => setCompareMode("boats")} label="Лодки" />
+        <ModeChip active={compareMode === "sellers"} onClick={() => setCompareMode("sellers")} label="Продавцы" />
+      </div>
+
+      {/* Date pickers */}
+      <div className="rounded-2xl border border-neutral-800 p-3 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-neutral-500 w-20">Период A:</span>
+          <input type="date" value={fromA} onChange={e => setFromA(e.target.value)}
+            className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+          <span className="text-xs text-neutral-500">—</span>
+          <input type="date" value={toA} onChange={e => setToA(e.target.value)}
+            className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-neutral-500 w-20">Период B:</span>
+          <input type="date" value={fromB} onChange={e => setFromB(e.target.value)}
+            className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+          <span className="text-xs text-neutral-500">—</span>
+          <input type="date" value={toB} onChange={e => setToB(e.target.value)}
+            className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+        </div>
+      </div>
+
+      {/* Boat selector */}
+      {compareMode === 'boats' && boats.length > 0 && (
+        <div className="rounded-2xl border border-neutral-800 p-3">
+          <select value={selectedBoatId || ''} onChange={e => setSelectedBoatId(Number(e.target.value))}
+            className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200">
+            {boats.map(b => (
+              <option key={b.boat_id} value={b.boat_id}>{b.boat_name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* Seller selector */}
+      {compareMode === 'sellers' && sellers.length > 0 && (
+        <div className="rounded-2xl border border-neutral-800 p-3">
+          <select value={selectedSellerId || ''} onChange={e => setSelectedSellerId(Number(e.target.value))}
+            className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200">
+            {sellers.map(s => (
+              <option key={s.seller_id} value={s.seller_id}>{s.seller_name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* Unified LineChart */}
+      <UnifiedLineChart
+        compareMode={compareMode}
+        chartMode={chartMode}
+        setChartMode={setChartMode}
+        fromA={fromA} toA={toA} fromB={fromB} toB={toB}
+        boatId={selectedBoatId}
+        sellerId={selectedSellerId}
+      />
+    </div>
+  );
+}
+
+function ModeChip({ active, onClick, label }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "flex-1 px-3 py-2 rounded-xl text-sm font-medium transition-colors",
+        active
+          ? "bg-amber-900/40 text-amber-300 border border-amber-500/50"
+          : "text-neutral-400 hover:bg-neutral-800/50",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
+}
+
+/**
+ * Unified LineChart Component
+ */
+function UnifiedLineChart({ compareMode, chartMode, setChartMode, fromA, toA, fromB, toB, boatId, sellerId }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const [rows, setRows] = useState([]);
-  const [range, setRange] = useState(null);
+  const [data, setData] = useState(null);
   const [warnings, setWarnings] = useState([]);
 
+  // Calculate days
+  const parseDate = (s) => new Date(s + 'T00:00:00');
+  const daysInA = fromA && toA ? Math.ceil((parseDate(toA) - parseDate(fromA)) / 86400000) + 1 : 0;
+  const daysInB = fromB && toB ? Math.ceil((parseDate(toB) - parseDate(fromB)) / 86400000) + 1 : 0;
+  const maxDays = Math.max(daysInA, daysInB);
+  const isSingleDay = maxDays === 1;
+
   const load = async () => {
+    if (!fromA || !toA || !fromB || !toB) return;
+    if (compareMode === 'boats' && !boatId) return;
+    if (compareMode === 'sellers' && !sellerId) return;
+
     setErr("");
     setBusy(true);
     try {
-      const json = await apiClient.request(
-        `/owner/money/compare-days?preset=${encodeURIComponent(preset)}`,
-        { method: "GET" }
-      );
-      setRows(json?.data?.rows || []);
-      setRange(json?.data?.range || null);
+      let url = '';
+      if (compareMode === 'revenue') {
+        url = `/owner/money/compare-periods-daily?fromA=${encodeURIComponent(fromA)}&toA=${encodeURIComponent(toA)}&fromB=${encodeURIComponent(fromB)}&toB=${encodeURIComponent(toB)}&mode=${chartMode}`;
+      } else if (compareMode === 'boats') {
+        url = `/owner/money/compare-boat-daily?boatId=${boatId}&fromA=${encodeURIComponent(fromA)}&toA=${encodeURIComponent(toA)}&fromB=${encodeURIComponent(fromB)}&toB=${encodeURIComponent(toB)}&mode=${chartMode}`;
+      } else if (compareMode === 'sellers') {
+        url = `/owner/money/compare-seller-daily?sellerId=${sellerId}&fromA=${encodeURIComponent(fromA)}&toA=${encodeURIComponent(toA)}&fromB=${encodeURIComponent(fromB)}&toB=${encodeURIComponent(toB)}&mode=${chartMode}`;
+      }
+
+      const json = await apiClient.request(url, { method: "GET" });
+      setData(json?.data || null);
       setWarnings(json?.meta?.warnings || []);
     } catch (e) {
-      setErr(e?.message || "Ошибка загрузки");
-      setRows([]);
-      setRange(null);
+      setErr(e?.message || "Не удалось загрузить данные.");
+      setData(null);
       setWarnings([]);
     } finally {
       setBusy(false);
@@ -56,79 +210,173 @@ function OwnerComparePeriodsView() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preset]);
+  }, [compareMode, chartMode, fromA, toA, fromB, toB, boatId, sellerId]);
 
-  const manualOn = useMemo(() => (warnings || []).join("\n").toLowerCase().includes("manual override"), [warnings]);
+  const points = data?.points || [];
+  const periodA = data?.periodA || {};
+  const periodB = data?.periodB || {};
+  const entityName = data?.boatName || data?.sellerName || '';
 
-  const maxRev = useMemo(() => {
-    let m = 0;
-    for (const r of rows || []) m = Math.max(m, Number(r.revenue || 0));
-    return m;
-  }, [rows]);
+  // Custom tooltip
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (!active || !payload || payload.length === 0) return null;
+    const a = payload.find(p => p.dataKey === 'A')?.value || 0;
+    const b = payload.find(p => p.dataKey === 'B')?.value || 0;
+    const deltaAbs = a - b;
+    const deltaPct = b > 0 ? ((a - b) / b) * 100 : null;
+    const isPositive = deltaAbs >= 0;
+
+    return (
+      <div className="bg-neutral-900 border border-neutral-700 rounded-lg p-3 text-xs">
+        <div className="text-neutral-400 mb-2">День {label}</div>
+        <div className="flex justify-between gap-4">
+          <span className="text-blue-400">A:</span>
+          <span className="text-neutral-200">{formatRUB(a)}</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-amber-400">B:</span>
+          <span className="text-neutral-200">{formatRUB(b)}</span>
+        </div>
+        <div className="border-t border-neutral-700 mt-2 pt-2">
+          <div className="flex justify-between gap-4">
+            <span className="text-neutral-400">Δ:</span>
+            <span className={isPositive ? "text-green-400" : "text-red-400"}>
+              {isPositive ? '+' : ''}{formatRUBShort(deltaAbs)}
+            </span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span className="text-neutral-400">Δ%:</span>
+            <span className={isPositive ? "text-green-400" : "text-red-400"}>
+              {deltaPct !== null ? `${deltaPct >= 0 ? '+' : ''}${deltaPct.toFixed(1)}%` : '—'}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Check if there's any data
+  const hasData = points.some(p => p.A > 0 || p.B > 0);
 
   return (
-    <div className="p-4 pb-24 space-y-4">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-xl font-semibold">Сравнение</div>
-        {manualOn && (
-          <div className="text-[11px] px-2 py-1 rounded-full border border-amber-500/50 text-amber-300 bg-amber-900/20">
-            manual
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-2xl border border-neutral-800 p-2 flex items-center justify-between gap-2">
-        <div className="flex gap-2 overflow-x-auto">
-          <PresetChip active={preset === "7d"} onClick={() => setPreset("7d")} label="7 дней" />
-          <PresetChip active={preset === "30d"} onClick={() => setPreset("30d")} label="30 дней" />
-          <PresetChip active={preset === "90d"} onClick={() => setPreset("90d")} label="90 дней" />
+    <div className="space-y-4">
+      {/* Mode toggle */}
+      <div className="flex justify-end">
+        <div className="flex rounded-lg border border-neutral-700 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setChartMode('daily')}
+            className={`px-3 py-1 text-xs ${chartMode === 'daily' ? 'bg-neutral-700 text-white' : 'text-neutral-400'}`}
+          >
+            По дням
+          </button>
+          <button
+            type="button"
+            onClick={() => setChartMode('cumulative')}
+            className={`px-3 py-1 text-xs ${chartMode === 'cumulative' ? 'bg-neutral-700 text-white' : 'text-neutral-400'}`}
+          >
+            Накопительно
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={load}
-          className="rounded-xl border border-neutral-800 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-900/40"
-          disabled={busy}
-        >
-          {busy ? "..." : "Обновить"}
-        </button>
       </div>
 
+      {/* Error */}
       {err && (
-        <div className="rounded-2xl border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-200">
-          {err}
+        <div className="rounded-2xl border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-200">{err}</div>
+      )}
+
+      {/* Warnings */}
+      {warnings.length > 0 && (
+        <div className="rounded-2xl border border-amber-900/60 bg-amber-950/30 p-3">
+          <div className="text-xs text-amber-300 font-medium mb-1">Есть предупреждения</div>
+          {warnings.map((w, i) => (<div key={i} className="text-xs text-amber-200/70">{w}</div>))}
         </div>
       )}
 
-      <div className="rounded-2xl border border-neutral-800 p-3 text-xs text-neutral-500">
-        Диапазон: {range?.from && range?.to ? `${range.from} → ${range.to}` : "—"}
-      </div>
+      {busy && <div className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-500">Загрузка...</div>}
 
-      <div className="space-y-2">
-        {(rows || []).slice().reverse().map((r) => {
-          const revenue = Number(r.revenue || 0);
-          const pct = maxRev > 0 ? Math.round((revenue / maxRev) * 100) : 0;
-          return (
-            <div key={r.day} className="rounded-2xl border border-neutral-800 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-semibold">{r.day}</div>
-                <div className="text-sm text-neutral-200">{formatRUB(revenue)}</div>
-              </div>
-              <div className="mt-2 h-2 rounded-full bg-neutral-900 overflow-hidden">
-                <div className="h-full bg-amber-900/70" style={{ width: `${Math.max(2, pct)}%` }} />
-              </div>
-              <div className="mt-2 text-xs text-neutral-500 flex gap-3">
-                <div>cash: {formatRUB(r.cash || 0)}</div>
-                <div>card: {formatRUB(r.card || 0)}</div>
-              </div>
+      {/* Single-day fallback */}
+      {!busy && isSingleDay && (
+        <div className="rounded-2xl border border-neutral-800 p-4">
+          <div className="text-sm text-neutral-400 mb-2">Один день — используйте больший период</div>
+        </div>
+      )}
+
+      {/* No data */}
+      {!busy && !isSingleDay && !hasData && !err && (
+        <div className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-500">Нет данных за выбранные периоды</div>
+      )}
+
+      {/* Line Chart */}
+      {!busy && !isSingleDay && hasData && (
+        <div className="rounded-2xl border border-neutral-800 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs text-neutral-500">
+              {compareMode === 'revenue' ? 'Выручка (Net)' : compareMode === 'boats' ? `Лодка: ${entityName}` : `Продавец: ${entityName}`}
+              <span className="ml-2 text-neutral-600">({chartMode === 'cumulative' ? 'Накопительно' : 'По дням'})</span>
             </div>
-          );
-        })}
-        {(rows || []).length === 0 && !err && (
-          <div className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-500">Нет данных</div>
-        )}
-      </div>
+          </div>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={points} margin={{ top: 10, right: 30, left: 10, bottom: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" horizontal vertical={false} />
+                <XAxis
+                  dataKey="day"
+                  tick={{ fill: '#888', fontSize: 10 }}
+                  tickLine={false}
+                  axisLine={{ stroke: '#333' }}
+                  tickFormatter={(v, i) => (i % 5 === 0 || i === 0) ? v : ''}
+                />
+                <YAxis
+                  tick={{ fill: '#888', fontSize: 10 }}
+                  tickLine={false}
+                  axisLine={{ stroke: '#333' }}
+                  tickFormatter={v => formatRUBShort(v)}
+                />
+                <Tooltip content={<CustomTooltip />} />
+                <Line
+                  type="monotone"
+                  dataKey="A"
+                  stroke="#3b82f6"
+                  strokeWidth={3}
+                  dot={false}
+                  activeDot={{ r: 5, fill: '#3b82f6' }}
+                  name="A"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="B"
+                  stroke="#f59e0b"
+                  strokeWidth={2}
+                  strokeOpacity={0.8}
+                  dot={false}
+                  activeDot={{ r: 5, fill: '#f59e0b' }}
+                  name="B"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex justify-center gap-6 mt-3">
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-0.5 bg-blue-500"></div>
+              <span className="text-xs text-neutral-400">A: {periodA.from || '—'} → {periodA.to || '—'}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-0.5 bg-amber-500 opacity-80"></div>
+              <span className="text-xs text-neutral-400">B: {periodB.from || '—'} → {periodB.to || '—'}</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function formatRUBShort(v) {
+  const n = Number(v || 0);
+  if (Math.abs(n) >= 1000000) return `${(n / 1000000).toFixed(1)}M ₽`;
+  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(0)}K ₽`;
+  return `${n} ₽`;
 }
 
 function formatRUB(v) {
@@ -165,66 +413,31 @@ export default function OwnerView() {
   const { logout } = useAuth();
   const [tab, setTab] = useState("money"); // money | compare | boats | sellers | motivation | settings | load | export
 
-  // Ref for triggering refresh in OwnerMoneyView
-  const refreshMoneyRef = useCallback((fn) => {
-    if (fn && typeof fn === 'function') {
-      refreshMoneyRef.current = fn;
-    }
-  }, []);
-
-  // Ref for triggering pending refresh in OwnerMoneyView
-  const refreshPendingRef = useCallback((fn) => {
-    if (fn && typeof fn === 'function') {
-      refreshPendingRef.current = fn;
-    }
-  }, []);
-
-  // Function to refresh owner data - called from context
-  const refreshOwnerData = useCallback(() => {
-    if (refreshMoneyRef.current && typeof refreshMoneyRef.current === 'function') {
-      refreshMoneyRef.current();
-    }
-  }, []);
-
-  // Function to refresh pending by day - called from context with affected days
-  const refreshPendingByDay = useCallback((days) => {
-    if (refreshPendingRef.current && typeof refreshPendingRef.current === 'function') {
-      refreshPendingRef.current(days);
-    }
-  }, []);
-
-  const contextValue = useMemo(() => ({
-    refreshOwnerData,
-    refreshPendingByDay,
-  }), [refreshOwnerData, refreshPendingByDay]);
-
   return (
-    <OwnerDataContext.Provider value={contextValue}>
-      <div className="min-h-screen bg-neutral-950 text-neutral-100">
-        
-        {/* Logout button (fixed, next to debug) */}
-        <button
-          type="button"
-          onClick={logout}
-          className="fixed top-3 right-3 z-50 rounded-2xl border border-neutral-800 bg-neutral-950/40 backdrop-blur px-3 py-2 text-xs font-semibold text-neutral-200 hover:bg-neutral-900/40 shadow-[0_10px_30px_rgba(0,0,0,0.25)]"
-          title="Выйти"
-        >
-          Выйти
-        </button>
-<main className="pb-24 pb-24">
-          {tab === "money" && <OwnerMoneyView onRegisterRefresh={refreshMoneyRef} onRegisterPendingRefresh={refreshPendingRef} />}
-          {tab === "compare" && <OwnerComparePeriodsView />}
-          {tab === "boats" && <OwnerBoatsView />}
-          {tab === "sellers" && <OwnerSellersView />}
-          {tab === "motivation" && <OwnerMotivationView />}
-          {tab === "settings" && <OwnerSettingsView />}
-          {tab === "load" && <OwnerLoadView />}
-          {tab === "export" && <OwnerExportView />}
-        </main>
+    <div className="min-h-screen bg-neutral-950 text-neutral-100">
+      
+      {/* Logout button (fixed, next to debug) */}
+      <button
+        type="button"
+        onClick={logout}
+        className="fixed top-3 right-3 z-50 rounded-2xl border border-neutral-800 bg-neutral-950/40 backdrop-blur px-3 py-2 text-xs font-semibold text-neutral-200 hover:bg-neutral-900/40 shadow-[0_10px_30px_rgba(0,0,0,0.25)]"
+        title="Выйти"
+      >
+        Выйти
+      </button>
+      <main className="pb-24">
+        {tab === "money" && <OwnerMoneyView />}
+        {tab === "compare" && <OwnerComparePeriodsView />}
+        {tab === "boats" && <OwnerBoatsView />}
+        {tab === "sellers" && <OwnerSellersView />}
+        {tab === "motivation" && <OwnerMotivationView />}
+        {tab === "settings" && <OwnerSettingsView />}
+        {tab === "load" && <OwnerLoadView />}
+        {tab === "export" && <OwnerExportView />}
+      </main>
 
-        <OwnerBottomTabs tab={tab} setTab={setTab} />
-      </div>
-    </OwnerDataContext.Provider>
+      <OwnerBottomTabs tab={tab} setTab={setTab} />
+    </div>
   );
 }
 
@@ -331,7 +544,7 @@ function OwnerBottomTabs({ tab, setTab }) {
         </div>
       </div>
 
-      {/* MOBILE “ЕЩЕ” МЕНЮ */}
+      {/* MOBILE "ЕЩЕ" МЕНЮ */}
       {moreOpen && (
         <div className="md:hidden">
           <button
