@@ -2,7 +2,13 @@ import jwt from 'jsonwebtoken';
 import express from 'express';
 import db from './db.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'boat_ticket_secret_key';
+// JWT secret: require in production, allow fallback for local dev
+const isProd = process.env.NODE_ENV === 'production';
+const JWT_SECRET = process.env.JWT_SECRET || (!isProd ? 'boat_ticket_secret_key' : null);
+if (!JWT_SECRET) {
+  console.error('[AUTH] FATAL: JWT_SECRET environment variable is required in production');
+  process.exit(1);
+}
 
 // ======================
 // Middleware
@@ -53,12 +59,22 @@ export const canSell = (req, res, next) => {
 };
 
 export const canDispatchManageSlots = (req, res, next) => {
-  if (req.user?.role !== 'dispatcher') return res.status(403).json({ error: 'Требуется доступ диспетчера' });
+  const r = req.user?.role;
+  // dispatcher, owner, admin can access; primary goal: block seller
+  if (r !== 'dispatcher' && r !== 'owner' && r !== 'admin') {
+    console.warn(`[AUTH] canDispatchManageSlots blocked: role=${r} path=${req.path}`);
+    return res.status(403).json({ ok: false, error: 'Недостаточно прав' });
+  }
   next();
 };
 
 export const canOwnerAccess = (req, res, next) => {
-  if (req.user?.role !== 'owner') return res.status(403).json({ error: 'Требуется доступ владельца' });
+  const r = req.user?.role;
+  // owner + admin allowed (admin panel exists)
+  if (r !== 'owner' && r !== 'admin') {
+    console.warn(`[AUTH] canOwnerAccess blocked: role=${r} path=${req.path}`);
+    return res.status(403).json({ ok: false, error: 'Недостаточно прав' });
+  }
   next();
 };
 

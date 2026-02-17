@@ -1,0 +1,38 @@
+{
+  "users": {
+    "sellerA": {
+      "id": 1,
+      "username": "sellerA"
+    },
+    "sellerB": {
+      "id": 2,
+      "username": "sellerB"
+    },
+    "dispatcher": {
+      "id": 3,
+      "username": "dispatcher1"
+    }
+  },
+  "boats": {
+    "speed": 1,
+    "cruise": 2
+  },
+  "slots": {
+    "manual": {
+      "slot1": 1,
+      "slot2": 2,
+      "slot3": 3,
+      "slot4": 4,
+      "slot5": 5,
+      "slot6": 6,
+      "slot7": 7,
+      "slot8": 8,
+      "slot9": 9
+    },
+    "generated": {
+      "genSlot1": 1,
+      "genSlot2": 2,
+      "tomorrow": "2026-02-18"
+    }
+  }
+}

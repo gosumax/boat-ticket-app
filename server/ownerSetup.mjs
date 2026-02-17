@@ -17,6 +17,11 @@ import bcrypt from 'bcrypt';
  * Minimal, stable, and does not touch other tables.
  */
 export function ensureOwnerRoleAndUser(db, { username = 'owner', password = 'owner123', saltRounds = 10 } = {}) {
+  // Skip owner setup in test mode to avoid conflicts with test seed data
+  if (process.env.NODE_ENV === 'test') {
+    return;
+  }
+  
   try {
     const usersTable = db.prepare(
       "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"

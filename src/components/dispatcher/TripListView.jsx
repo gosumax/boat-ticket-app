@@ -204,7 +204,9 @@ if (dateFrom && dateTo) {
             return (
               <div
                 key={key}
-                className={`relative text-left rounded-2xl border border-neutral-800 bg-neutral-900 p-3 pointer-events-none ${filled <= 4 ? "ring-2 ring-red-500/40 shadow-[0_0_18px_rgba(239,68,68,0.25)]" : filled <= 9 ? "ring-2 ring-amber-400/40 shadow-[0_0_18px_rgba(251,191,36,0.25)]" : "ring-2 ring-emerald-500/40 shadow-[0_0_18px_rgba(16,185,129,0.28)]"}`}>
+                data-testid={`trip-card-${trip.slot_uid || trip.slotUid || key}`}
+                className={`relative text-left rounded-2xl border border-neutral-800 bg-neutral-900 p-3 pointer-events-none ${filled <= 4 ? "ring-2 ring-red-500/40 shadow-[0_0_18px_rgba(239,68,68,0.25)]" : filled <= 9 ? "ring-2 ring-amber-400/40 shadow-[0_0_18px_rgba(251,191,36,0.25)]" : "ring-2 ring-emerald-500/40 shadow-[0_0_18px_rgba(16,185,129,0.28)]"}`}
+              >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 min-w-0">

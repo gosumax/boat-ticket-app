@@ -263,6 +263,7 @@ const validateDuration = (duration, serviceType) => {
 
 // Helper function to resolve slot by UID for both manual and generated slots
 const resolveSlotByUid = (slotUid, tripDate = null) => {
+  console.log(`[RESOLVE_SLOT_START] slotUid=${slotUid}, tripDate=${tripDate}`);
   // Extract the type and id from slotUid
   let slotId, slotType;
   
@@ -358,6 +359,11 @@ const resolveSlotByUid = (slotUid, tripDate = null) => {
     
     slotInfo = db.prepare(query).get(...queryParams);
 
+    // DEBUG LOG for seller-dispatcher-sync tests
+    if (slotType === 'generated' && slotId <= 2) {
+      console.log(`[RESOLVE_SLOT_DEBUG] slotId=${slotId}, tripDate=${tripDate}, seats_left_raw=${slotInfo?.seats_left}, capacity=${slotInfo?.capacity}`);
+    }
+
     
     // If we required a specific date but didn't find a match, throw specific error
     if (tripDate && !slotInfo) {
@@ -442,7 +448,7 @@ function restoreSeatsForPresale(presale) {
 router.get('/boats', authenticateToken, canSell, (req, res) => {
   try {
     const boats = db.prepare(`
-      SELECT id, name, type, capacity, is_active
+      SELECT id, name, type, NULL AS capacity, is_active
       FROM boats 
       WHERE is_active = 1
       ORDER BY type, name
@@ -641,8 +647,9 @@ router.get('/boats/:type/slots', authenticateToken, canSell, (req, res) => {
 
 // Create a new presale
 router.post('/presales', authenticateToken, canSell, async (req, res) => {
+  console.log('[PRESALE_CREATE_START] slotUid=', req.body?.slotUid, 'seats=', req.body?.numberOfSeats, 'user=', req.user?.username, 'role=', req.user?.role);
   try {
-    const { slotUid, customerName, customerPhone, numberOfSeats, prepaymentAmount, prepaymentComment } = req.body;
+    const { slotUid, customerName, customerPhone, numberOfSeats, prepaymentAmount, prepaymentComment, sellerId } = req.body;
     
     // Validate required fields - slotUid is now required
     if (!slotUid) {
@@ -1047,9 +1054,13 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
       const now = new Date();
       const role = req.user?.role;
 
+      console.log(`[SALES_TIME_CHECK] tripStart=${tripStart.toISOString()}, now=${now.toISOString()}, role=${role}`);
+
       if (role === 'seller') {
         const closeAt = new Date(tripStart.getTime() - 10 * 60 * 1000);
+        console.log(`[SALES_TIME_CHECK] seller closeAt=${closeAt.toISOString()}, now>=closeAt? ${now >= closeAt}`);
         if (now >= closeAt) {
+          console.log(`[SALES_CLOSED] Seller sales closed for slot ${slotUid}`);
           return res.status(409).json({
             ok: false,
             code: 'SALES_CLOSED',
@@ -1071,7 +1082,9 @@ router.post('/presales', authenticateToken, canSell, async (req, res) => {
     }
 
     // Check if there are enough seats available
+    console.log(`[PRESALE_CAPACITY_CHECK] slotUid=${slotUid}, resolvedSlot.seats_left=${resolvedSlot.seats_left}, seats=${seats}`);
     if (resolvedSlot.seats_left < seats) {
+      console.log(`[PRESALE_CAPACITY_FAIL] BEFORE TRANSACTION: seats_left ${resolvedSlot.seats_left} < requested ${seats}`);
       return res.status(409).json({
         ok: false,
         code: 'NO_SEATS',
@@ -1119,11 +1132,37 @@ if (breakdown) {
     
     // Validate prepayment amount
     if (prepayment > calculatedTotalPrice) {
-      return res.status(400).json({
+      return res.status(400).json({ 
         ok: false,
         code: 'PREPAYMENT_EXCEEDS_TOTAL',
-        message: 'Prepayment amount cannot exceed total price'
+        message: 'Prepayment amount cannot exceed total price' 
       });
+    }
+    
+    // Validate sellerId for dispatcher role
+    if (req.user?.role === 'dispatcher' && sellerId != null) {
+      const sellerIdNum = Number(sellerId);
+      if (!Number.isFinite(sellerIdNum) || sellerIdNum <= 0) {
+        return res.status(400).json({
+          ok: false,
+          code: 'INVALID_SELLER_ID',
+          message: 'Нельзя оформить продажу: выбранный продавец недоступен'
+        });
+      }
+    
+      const sellerRow = db.prepare(`
+        SELECT id FROM users 
+        WHERE id = ? AND role = 'seller' AND is_active = 1
+      `).get(sellerIdNum);
+    
+      if (!sellerRow) {
+        console.error('[PRESALE_CREATE] Invalid seller_id:', { sellerId: sellerIdNum, dispatcher: req.user?.id });
+        return res.status(400).json({
+          ok: false,
+          code: 'SELLER_NOT_FOUND',
+          message: 'Нельзя оформить продажу: выбранный продавец недоступен'
+        });
+      }
     }
     
 	// Use transaction to ensure atomicity: decrement seats_left AND create presale
@@ -1233,7 +1272,13 @@ if (breakdown) {
   // Use generated_slots.seats_left/capacity as source of truth.
   assertCapacityForSlotUidOrThrow(presaleSlotUid, boatSlotIdForFK, seats);
 
-  const presaleStmt = db.prepare(`
+  // Schema compatibility: check if presales has business_day column
+  const presalesCols = db.prepare("PRAGMA table_info(presales)").all();
+  const hasBusinessDay = presalesCols.some(c => c.name === 'business_day');
+
+  let presaleStmt, presaleParams;
+  if (hasBusinessDay) {
+    presaleStmt = db.prepare(`
 INSERT INTO presales (
       boat_slot_id, slot_uid, seller_id,
       customer_name, customer_phone, number_of_seats,
@@ -1241,24 +1286,51 @@ INSERT INTO presales (
       payment_method, payment_cash_amount, payment_card_amount, business_day
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+    presaleParams = [
+      boatSlotIdForFK,
+      presaleSlotUid,
+      sellerId,
+      customerName.trim(),
+      customerPhone.trim(),
+      seats,
+      calculatedTotalPrice,
+      prepayment,
+      prepaymentComment?.trim() || null,
+      'ACTIVE',
+      ticketsJson || null,
+      paymentMethodUpper,
+      Math.round(Number(paymentCashAmount || 0)),
+      Math.round(Number(paymentCardAmount || 0)),
+      presaleBusinessDay
+    ];
+  } else {
+    presaleStmt = db.prepare(`
+INSERT INTO presales (
+      boat_slot_id, slot_uid, seller_id,
+      customer_name, customer_phone, number_of_seats,
+      total_price, prepayment_amount, prepayment_comment, status, tickets_json,
+      payment_method, payment_cash_amount, payment_card_amount
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+    presaleParams = [
+      boatSlotIdForFK,
+      presaleSlotUid,
+      sellerId,
+      customerName.trim(),
+      customerPhone.trim(),
+      seats,
+      calculatedTotalPrice,
+      prepayment,
+      prepaymentComment?.trim() || null,
+      'ACTIVE',
+      ticketsJson || null,
+      paymentMethodUpper,
+      Math.round(Number(paymentCashAmount || 0)),
+      Math.round(Number(paymentCardAmount || 0))
+    ];
+  }
 
-	  const presaleResult = presaleStmt.run(
-    boatSlotIdForFK,
-    presaleSlotUid,
-    (req.user?.role === 'seller' ? req.user?.id : null),
-    customerName.trim(),
-    customerPhone.trim(),
-    seats,
-    calculatedTotalPrice,
-    prepayment,
-    prepaymentComment?.trim() || null,
-    'ACTIVE',
-    ticketsJson || null,
-    paymentMethodUpper,
-    Math.round(Number(paymentCashAmount || 0)),
-    Math.round(Number(paymentCardAmount || 0)),
-    presaleBusinessDay
-  );
+  const presaleResult = presaleStmt.run(...presaleParams);
 
 	  // 3.1) If payment/prepayment is provided at creation time, write SELLER_SHIFT ledger row immediately.
 	  // This keeps Dispatcher "Р—Р°РєСЂС‹С‚РёРµ СЃРјРµРЅС‹" (money_ledger based) consistent with presales that are already paid.
@@ -1542,7 +1614,10 @@ return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedT
         paymentMethodUpper,
         paymentCashAmount,
 	        paymentCardAmount,
-	        (req.user?.role === 'seller' ? req.user?.id : null)
+	        // seller_id logic: seller uses own id, dispatcher uses sellerId or own id as fallback
+	        (req.user?.role === 'seller'
+          ? req.user?.id
+          : (Number.isFinite(Number(sellerId)) ? Number(sellerId) : req.user?.id))
       );
 
       newPresaleId = result.lastInsertRowid;
@@ -2296,6 +2371,28 @@ router.get('/dispatcher/boats', authenticateToken, canDispatchManageSlots, (req,
   }
 });
 
+// Get sellers list for dispatcher (for "sell on behalf of seller" feature)
+router.get('/dispatcher/sellers', authenticateToken, canSell, (req, res) => {
+  try {
+    const sellers = db.prepare(`
+      SELECT id, username, is_active
+      FROM users
+      WHERE role = 'seller' AND is_active = 1
+      ORDER BY id
+    `).all();
+    
+    res.json({
+      ok: true,
+      data: {
+        items: sellers
+      }
+    });
+  } catch (error) {
+    console.error('[SELLING_500] route=/api/selling/dispatcher/sellers method=GET message=' + error.message + ' stack=' + error.stack);
+    res.status(500).json({ ok: false, error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
+  }
+});
+
 // Get all slots for dispatcher (including inactive)
 router.get('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req, res) => {
   try {
@@ -2343,6 +2440,110 @@ router.get('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req,
   }
 });
 
+// Get tickets for a specific dispatcher slot
+router.get('/dispatcher/slots/:slotId/tickets', authenticateToken, canDispatchManageSlots, (req, res) => {
+  try {
+    const slotId = parseInt(req.params.slotId);
+    
+    if (isNaN(slotId)) {
+      return res.status(400).json({ ok: false, error: 'INVALID_SLOT_ID' });
+    }
+    
+    // Check if slot exists
+    const slot = db.prepare('SELECT id FROM generated_slots WHERE id = ?').get(slotId);
+    if (!slot) {
+      return res.status(404).json({ ok: false, error: 'SLOT_NOT_FOUND' });
+    }
+    
+    const slotUid = `generated:${slotId}`;
+    
+    // Get all tickets for this slot with presale and seller info
+    const tickets = db.prepare(`
+      SELECT 
+        t.id as ticket_id,
+        t.status as ticket_status,
+        t.price as ticket_price,
+        t.ticket_code,
+        p.id as presale_id,
+        p.status as presale_status,
+        p.number_of_seats,
+        p.customer_name,
+        p.customer_phone,
+        p.total_price,
+        p.prepayment_amount,
+        p.tickets_json,
+        p.seller_id,
+        u.username as seller_name,
+        p.created_at,
+        p.slot_uid
+      FROM tickets t
+      JOIN presales p ON p.id = t.presale_id
+      LEFT JOIN users u ON u.id = p.seller_id
+      WHERE p.slot_uid = ?
+        AND t.status IN ('ACTIVE','PAID','UNPAID','RESERVED','PARTIALLY_PAID','CONFIRMED','USED')
+        AND p.status NOT IN ('CANCELLED')
+      ORDER BY p.created_at DESC, t.id ASC
+    `).all(slotUid);
+    
+    // Determine category for each ticket from tickets_json
+    const items = tickets.map((ticket, index) => {
+      let category = 'adult'; // default
+      
+      if (ticket.tickets_json) {
+        try {
+          const breakdown = JSON.parse(ticket.tickets_json);
+          const adultCount = parseInt(breakdown.adult || 0) || 0;
+          const teenCount = parseInt(breakdown.teen || 0) || 0;
+          const childCount = parseInt(breakdown.child || 0) || 0;
+          
+          // Determine category based on position
+          if (index < adultCount) {
+            category = 'adult';
+          } else if (index < adultCount + teenCount) {
+            category = 'teen';
+          } else {
+            category = 'child';
+          }
+        } catch (e) {
+          // Keep default adult
+        }
+      }
+      
+      return {
+        ticket_id: ticket.ticket_id,
+        id: ticket.ticket_id, // alias for convenience
+        status: ticket.ticket_status, // alias for convenience
+        ticket_status: ticket.ticket_status,
+        ticket_price: ticket.ticket_price,
+        ticket_code: ticket.ticket_code,
+        presale_id: ticket.presale_id,
+        presale_status: ticket.presale_status,
+        number_of_seats: ticket.number_of_seats,
+        customer_name: ticket.customer_name,
+        customer_phone: ticket.customer_phone,
+        total_price: ticket.total_price,
+        prepayment_amount: ticket.prepayment_amount,
+        category,
+        seller_id: ticket.seller_id,
+        seller_name: ticket.seller_name,
+        created_at: ticket.created_at
+      };
+    });
+    
+    res.json({
+      ok: true,
+      data: {
+        slot_id: slotId,
+        slot_uid: slotUid,
+        items
+      }
+    });
+  } catch (error) {
+    console.error('[SELLING_500] route=/api/selling/dispatcher/slots/:slotId/tickets method=GET id=' + req.params.slotId + ' message=' + (error?.message || error) + ' stack=' + (error?.stack || ''));
+    res.status(500).json({ ok: false, error: 'Internal server error' });
+  }
+});
+
 
 
 // Update presale payment (complete sale - for dispatcher)
@@ -2350,6 +2551,8 @@ router.patch('/presales/:id/payment', authenticateToken, canSell, (req, res) => 
   try {
     const presaleId = parseInt(req.params.id);
     const { additionalPayment } = req.body;
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
     
     if (isNaN(presaleId)) {
       return res.status(400).json({ error: 'Invalid presale ID' });
@@ -2360,15 +2563,22 @@ router.patch('/presales/:id/payment', authenticateToken, canSell, (req, res) => 
       return res.status(400).json({ error: 'Invalid payment amount' });
     }
     
-    // Get the presale to check remaining amount
+    // Get the presale to check remaining amount and ownership
     const presale = db.prepare(`
-      SELECT total_price, prepayment_amount
+      SELECT total_price, prepayment_amount, seller_id
       FROM presales
       WHERE id = ?
     `).get(presaleId);
     
     if (!presale) {
       return res.status(404).json({ error: 'Presale not found' });
+    }
+    
+    // SECURITY: Only presale owner or dispatcher/admin/owner can update payment
+    const isOwner = Number(presale.seller_id) === Number(userId);
+    const isPrivileged = userRole === 'dispatcher' || userRole === 'admin' || userRole === 'owner';
+    if (!isOwner && !isPrivileged) {
+      return res.status(403).json({ error: 'Insufficient permissions to update payment for another seller\'s presale' });
     }
     
     const remainingAmount = presale.total_price - presale.prepayment_amount;
@@ -2408,15 +2618,28 @@ router.patch('/presales/:id/payment', authenticateToken, canSell, (req, res) => 
 });
 
 // Accept payment for presale (alternative endpoint)
-router.patch('/selling/presales/:id/paid', authenticateToken, (req, res) => {
+router.patch('/selling/presales/:id/paid', authenticateToken, canSell, (req, res) => {
   const presaleId = Number(req.params.id);
   const paymentMethod = req.body?.payment_method ?? null;
+  const userId = req.user?.id;
+  const userRole = req.user?.role;
 
   if (paymentMethod && !['cash', 'card'].includes(paymentMethod)) {
     return res.status(400).json({ message: 'Invalid payment_method' });
   }
 
   try {
+    // SECURITY: Check ownership before marking as paid
+    const presaleOwner = db.prepare('SELECT seller_id FROM presales WHERE id = ?').get(presaleId);
+    if (!presaleOwner) {
+      return res.status(404).json({ message: 'Presale not found' });
+    }
+    const isOwner = Number(presaleOwner.seller_id) === Number(userId);
+    const isPrivileged = userRole === 'dispatcher' || userRole === 'admin' || userRole === 'owner';
+    if (!isOwner && !isPrivileged) {
+      return res.status(403).json({ message: 'Insufficient permissions to mark another seller\'s presale as paid' });
+    }
+
     const result = markPresaleAsPaid(presaleId);
     // FIX (owner analytics): also persist payment split into presales columns (source for cash/card)
     try {
@@ -2462,6 +2685,8 @@ router.patch('/selling/presales/:id/paid', authenticateToken, (req, res) => {
 router.patch('/presales/:id/accept-payment', authenticateToken, canSell, (req, res) => {
   try {
     const presaleId = parseInt(req.params.id);
+    const userId = req.user?.id;
+    const userRole = req.user?.role;
     
     if (isNaN(presaleId)) {
       return res.status(400).json({ error: 'Invalid presale ID' });
@@ -2473,19 +2698,27 @@ router.patch('/presales/:id/accept-payment', authenticateToken, canSell, (req, r
              total_price, prepayment_amount, prepayment_comment, status, tickets_json,
              payment_method, payment_cash_amount, payment_card_amount,
              (total_price - prepayment_amount) as remaining_amount,
+             seller_id,
              created_at, updated_at
       FROM presales 
       WHERE id = ?
     `).get(presaleId);
     
-    // If presale not found в†’ 404 json
+    // If presale not found
     if (!presale) {
-      return res.status(404).json({ error: 'РџСЂРµРґР·Р°РєР°Р· РЅРµ РЅР°Р№РґРµРЅ' });
+      return res.status(404).json({ error: 'Presale not found' });
     }
     
-    // If presale.status != 'ACTIVE' в†’ 400 json
+    // SECURITY: Only presale owner or dispatcher/admin/owner can accept payment
+    const isOwner = Number(presale.seller_id) === Number(userId);
+    const isPrivileged = userRole === 'dispatcher' || userRole === 'admin' || userRole === 'owner';
+    if (!isOwner && !isPrivileged) {
+      return res.status(403).json({ error: 'Insufficient permissions to accept payment for another seller\'s presale' });
+    }
+    
+    // If presale.status != 'ACTIVE'
     if (presale.status !== 'ACTIVE') {
-      return res.status(400).json({ error: 'РќРµР»СЊР·СЏ РїСЂРёРЅСЏС‚СЊ РѕРїР»Р°С‚Сѓ РґР»СЏ СЌС‚РѕРіРѕ СЃС‚Р°С‚СѓСЃР°' });
+      return res.status(400).json({ error: 'Cannot accept payment for this status' });
     }
     
     // Accept remaining payment with method tracking
@@ -2712,15 +2945,25 @@ router.patch('/presales/:id/cancel', authenticateToken, canSell, (req, res) => {
     // 1) presale.status -> CANCELLED
     // 2) all presale tickets -> REFUNDED (only those not already REFUNDED)
     // 3) restore seats to the correct slot using slot_uid when present
+    // 4) verify ownership (seller can only cancel own presales)
     const transaction = db.transaction(() => {
       const presale = db.prepare(`
-        SELECT id, boat_slot_id, slot_uid, status
+        SELECT id, boat_slot_id, slot_uid, status, seller_id
         FROM presales
         WHERE id = ?
       `).get(presaleId);
 
       if (!presale) throw Object.assign(new Error('Presale not found'), { code: 404 });
       if (presale.status === 'CANCELLED') throw Object.assign(new Error('Presale already cancelled'), { code: 400 });
+
+      // SECURITY: Only presale owner or dispatcher/admin/owner can cancel
+      const userRole = req.user?.role;
+      const userId = req.user?.id;
+      const isOwner = Number(presale.seller_id) === Number(userId);
+      const isPrivileged = userRole === 'dispatcher' || userRole === 'admin' || userRole === 'owner';
+      if (!isOwner && !isPrivileged) {
+        throw Object.assign(new Error('Недостаточно прав для отмены чужой брони'), { code: 403 });
+      }
 
       db.prepare(`
         UPDATE presales
@@ -4649,6 +4892,13 @@ router.patch('/presales/:id/transfer', authenticateToken, canSellOrDispatch, (re
     const toSlotUid = req.body?.to_slot_uid;
 
     if (!toSlotUid) return res.status(400).json({ error: 'to_slot_uid required' });
+
+    // Check ownership before transfer
+    const presale = db.prepare('SELECT id, seller_id FROM presales WHERE id = ?').get(presaleId);
+    if (!presale) return res.status(404).json({ error: 'Presale not found' });
+    if (presale.seller_id !== req.user.id) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
 
     const tx = db.transaction(() => {
       const result = doTransferPresaleToSlot(presaleId, toSlotUid);

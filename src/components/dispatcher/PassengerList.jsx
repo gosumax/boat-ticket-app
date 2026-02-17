@@ -913,7 +913,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
     const payPill = remaining > 0 ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200';
 
     return (
-      <div className="bg-neutral-950/40 rounded-2xl  border border-neutral-800 p-4">
+      <div className="bg-neutral-950/40 rounded-2xl  border border-neutral-800 p-4" data-testid={`presale-card-${presale.id}`}>
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-xl bg-neutral-800/50 flex items-center justify-center text-neutral-200">
             <span className="text-lg">👤</span>
@@ -983,6 +983,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                   !isActive || shiftClosed ? 'bg-gray-200 text-neutral-500' : 'bg-blue-600 text-white'
                 }`}
                 onClick={() => handleAcceptPaymentClick(presale)}
+                data-testid={`presale-pay-btn-${presale.id}`}
               >
                 Принять оплату
               </button>
@@ -994,6 +995,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                     !isActive || shiftClosed ? 'bg-gray-200 text-neutral-500' : 'bg-red-600 text-white'
                   }`}
                   onClick={() => handleDeletePresaleClick(presale)}
+                  data-testid={`presale-delete-btn-${presale.id}`}
                 >
                   Удалить билет
                 </button>
@@ -1004,6 +1006,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                     !isActive || shiftClosed ? 'bg-gray-200 text-neutral-500' : 'bg-purple-600 text-white'
                   }`}
                   onClick={() => handleOpenTransferForPresale(presale)}
+                  data-testid={`presale-transfer-btn-${presale.id}`}
                 >
                   Перенести билет
                 </button>
@@ -1016,6 +1019,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
           <button
             className="text-sm font-semibold text-neutral-200 flex items-center gap-2"
             onClick={() => togglePresaleExpanded(presale.id)}
+            data-testid={`presale-passengers-toggle-${presale.id}`}
           >
             <span>Пассажиры ({presaleTickets.length})</span>
             <span className="text-neutral-500">{expandedPresales[presale.id] ? '▲' : '▼'}</span>
@@ -1065,6 +1069,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
             <div
               key={ticket?.id ?? idx}
               className={`bg-neutral-950/40 rounded-2xl  border border-neutral-800 p-3 ${!isActive ? 'opacity-60' : ''}`}
+              data-testid={`ticket-row-${ticket?.id}`}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -1090,6 +1095,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                     presalePaid || !allowTicketOps || shiftClosed || !isActive ? 'bg-gray-200 text-neutral-500' : 'bg-amber-500 text-white'
                   }`}
                   onClick={() => handleTicketActionClick(ticket.id, 'transfer')}
+                  data-testid={`ticket-transfer-btn-${ticket.id}`}
                 >
                   Перенести
                 </button>
@@ -1100,6 +1106,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                     presalePaid || !allowTicketOps || shiftClosed || !isActive ? 'bg-gray-200 text-neutral-500' : 'bg-red-600 text-white'
                   }`}
                   onClick={() => handleTicketActionClick(ticket.id, 'delete')}
+                  data-testid={`ticket-delete-btn-${ticket.id}`}
                 >
                   Удалить
                 </button>
@@ -1156,6 +1163,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 shiftClosed ? 'bg-gray-200 text-neutral-500' : 'bg-emerald-600 text-white'
               }`}
               onClick={() => setShowQuickSale(true)}
+              data-testid="trip-sell-btn"
             >
               Продать билет
             </button>

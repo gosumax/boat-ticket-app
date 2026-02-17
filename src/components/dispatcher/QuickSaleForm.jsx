@@ -3,9 +3,11 @@ import { formatRUB } from '../../utils/currency';
 import { getSlotAvailable } from '../../utils/slotAvailability';
 import apiClient from '../../utils/apiClient';
 import { useOwnerData } from '../../contexts/OwnerDataContext';
+import { useAuth } from '../../contexts/AuthContext';
 
 const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots }) => {
   const { refreshOwnerData } = useOwnerData();
+  const { currentUser: user } = useAuth();
   // Initialize ticket categories with default values
   const [ticketCategories, setTicketCategories] = useState({ adult: 1, teen: 0, child: 0 });
   
@@ -37,6 +39,14 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
   const [prepaymentMethodError, setPrepaymentMethodError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+
+  // Seller selection for dispatcher role
+  const [sellers, setSellers] = useState([]);
+  const [selectedSellerId, setSelectedSellerId] = useState('');
+  const [sellersLoading, setSellersLoading] = useState(false);
+  const [sellersError, setSellersError] = useState('');
+
+  const isDispatcher = user?.role === 'dispatcher';
 
   // The slotId variable is kept for backward compatibility but we now use slot_uid from the trip object
   const slotId = trip?.slot_id ?? trip?.id ?? trip?.boatSlotId ?? trip?.boat_slot_id;
@@ -84,7 +94,8 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
                       customerName.trim().length > 0 &&
                       isPhoneValid &&
                       categoryTotalSeats > 0 && // Allow API call even if trip is closed, let backend decide
-                      isPrepaymentValid;
+                      isPrepaymentValid &&
+                      (!isDispatcher || !sellersError); // Dispatcher: allow submission even without seller selection, only block on load error
 
   // Update prepayment error message
   useEffect(() => {
@@ -109,6 +120,34 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
     // If user already picked a method, keep it; just clear error on any positive amount
     setPrepaymentMethodError('');
   }, [prepaymentAmount]);
+  
+  // Load sellers list for dispatcher role
+  useEffect(() => {
+    if (!isDispatcher) return;
+
+    const loadSellers = async () => {
+      setSellersLoading(true);
+      setSellersError('');
+      try {
+        const response = await apiClient.request('/selling/dispatcher/sellers');
+        if (response?.ok && response?.data?.items) {
+          // Filter only active sellers (already filtered on backend, but double-check)
+          const activeSellers = response.data.items.filter(s => s.is_active);
+          setSellers(activeSellers);
+          // Keep selectedSellerId = '' (dispatcher default, no auto-selection)
+        } else {
+          setSellersError('Не удалось загрузить список продавцов');
+        }
+      } catch (error) {
+        console.error('[QuickSaleForm] Failed to load sellers:', error);
+        setSellersError('Ошибка загрузки продавцов');
+      } finally {
+        setSellersLoading(false);
+      }
+    };
+
+    loadSellers();
+  }, [isDispatcher]);
   
 
 
@@ -224,6 +263,11 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       prepaymentAmount: prepay
     };
 
+    // Add sellerId for dispatcher role (only if a specific seller is selected)
+    if (isDispatcher && selectedSellerId && selectedSellerId !== '') {
+      presaleData.sellerId = Number(selectedSellerId);
+    }
+
     if (prepay > 0) {
       if (prepaymentMethod === 'cash') {
         presaleData.payment_method = 'CASH';
@@ -327,6 +371,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
   className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm overflow-hidden" style={{ paddingTop: 20, paddingBottom: 20, paddingLeft: "clamp(16px, 5vw, 24px)", paddingRight: "clamp(16px, 5vw, 24px)" }}>
       <div className="min-h-screen flex items-start justify-center p-1 pb-10">
         <div className="w-full max-w-[1200px] min-h-[95vh] max-h-[100vh] overflow-y-auto rounded-2xl border border-neutral-800 bg-neutral-950 pt-1 transform scale-[1] origin-top">
+
 <div className="flex justify-between items-center mb-1">
         <h2 className="text-2xl font-bold text-neutral-100"></h2>
         <button 
@@ -367,6 +412,49 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       </div>
       
 
+      {/* Seller Selection for Dispatcher Role */}
+      {isDispatcher && (
+        <div className="mt-[20px] bg-neutral-900 rounded-xl shadow-lg p-2 mb-1 border border-neutral-800">
+          <h3 className="font-bold text-lg mb-2">Продажа от имени продавца</h3>
+          
+          {sellersLoading && (
+            <div className="text-sm text-gray-400 mb-2">Загрузка продавцов...</div>
+          )}
+          
+          {sellersError && (
+            <div className="text-sm text-red-400 mb-2">{sellersError}</div>
+          )}
+          
+          {!sellersLoading && !sellersError && sellers.length === 0 && (
+            <div className="text-sm text-amber-400 mb-2">Нет активных продавцов</div>
+          )}
+          
+          {!sellersLoading && sellers.length > 0 && (
+            <div className="mb-2">
+              <label className="block text-neutral-200 text-sm font-bold mb-2" htmlFor="sellerSelect">
+                Продавец
+              </label>
+              <select
+                id="sellerSelect"
+                value={selectedSellerId}
+                onChange={(e) => setSelectedSellerId(e.target.value)}
+                data-testid="seller-select"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-black font-bold leading-tight focus:outline-none focus:shadow-outline"
+              >
+                <option value="">Диспетчер</option>
+                {sellers.map((seller) => (
+                  <option key={seller.id} value={String(seller.id)}>
+                    {seller.username}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                Если не выбрать продавца — продажа будет записана на диспетчера.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
       
       {/* Ticket Categories Section */}
       <div className="mt-[20px] bg-neutral-900 rounded-xl shadow-lg p-1 mb-1 border border-neutral-800">
@@ -386,16 +474,18 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
               <div key={category} className="flex items-center justify-between p-3  bg-neutral-800 rounded-lg">
                 <span className="font-medium">{label}</span>
                 <div className="flex items-center space-x-3">
-                  <button 
+                  <button
                     onClick={() => updateCategoryCount(category, -1)}
+                    data-testid={`qty-${category}-minus`}
                     className="bg-gray-200 !text-black w-8 h-8 rounded-full flex items-center justify-center text-lg font-bold hover:bg-gray-300 active:bg-gray-400"
                     disabled={ticketCategories[category] <= 0}
                   >
                     -
                   </button>
                   <span className="text-lg font-bold w-6 text-center">{ticketCategories[category]}</span>
-                  <button 
+                  <button
                     onClick={() => updateCategoryCount(category, 1)}
+                    data-testid={`qty-${category}-plus`}
                     className="bg-gray-200 !text-black w-8 h-8 rounded-full flex items-center justify-center text-lg font-bold hover:bg-gray-300 active:bg-gray-400"
                     disabled={false} // Allow adding more than available, let backend handle validation
                   >
@@ -422,6 +512,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             <button
               type="button"
               onClick={() => handleQuickName('Алексей')}
+              data-testid="customer-name-preset-Alexey"
               className={`py-1 rounded-lg font-medium transition-colors ${customerName === 'Алексей' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               Алексей
@@ -429,6 +520,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             <button
               type="button"
               onClick={() => handleQuickName('Дмитрий')}
+              data-testid="customer-name-preset-Dmitry"
               className={`py-1 rounded-lg font-medium transition-colors ${customerName === 'Дмитрий' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               Дмитрий
@@ -436,6 +528,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             <button
               type="button"
               onClick={() => handleQuickName('Иван')}
+              data-testid="customer-name-preset-Ivan"
               className={`py-1 rounded-lg font-medium transition-colors ${customerName === 'Иван' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               Иван
@@ -443,6 +536,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             <button
               type="button"
               onClick={() => handleQuickName('Анна')}
+              data-testid="customer-name-preset-Anna"
               className={`py-1 rounded-lg font-medium transition-colors ${customerName === 'Анна' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               Анна
@@ -450,6 +544,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             <button
               type="button"
               onClick={() => handleQuickName('Мария')}
+              data-testid="customer-name-preset-Maria"
               className={`py-1 rounded-lg font-medium transition-colors ${customerName === 'Мария' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               Мария
@@ -457,6 +552,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             <button
               type="button"
               onClick={() => handleQuickName('Елена')}
+              data-testid="customer-name-preset-Elena"
               className={`py-1 rounded-lg font-medium transition-colors ${customerName === 'Елена' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               Елена
@@ -468,6 +564,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             type="text"
             value={customerName}
             onChange={handleNameChange}
+            data-testid="customer-name-input"
             className="shadow appearance-none border rounded w-full py-1 px-2 text-black font-bold leading-tight focus:outline-none focus:shadow-outline"
           />
         </div>
@@ -481,6 +578,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             type="tel"
             value={customerPhone}
             onChange={handlePhoneChange}
+            data-testid="customer-phone-input"
             className={`shadow appearance-none border rounded w-full py-1 px-2 text-neutral-200 font-bold leading-tight focus:outline-none focus:shadow-outline ${!isPhoneValid ? 'border-red-500' : ''}`}
             placeholder="+7 (XXX) XXX-XXXX"
           />
@@ -499,6 +597,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             <button
               type="button"
               onClick={() => handleQuickPrepayment(500)}
+              data-testid="prepay-500"
               className={`py-1 rounded-lg font-medium transition-colors ${prepaymentAmount === 500 ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               500 ₽
@@ -506,6 +605,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             <button
               type="button"
               onClick={() => handleQuickPrepayment(1000)}
+              data-testid="prepay-1000"
               className={`py-1 rounded-lg font-medium transition-colors ${prepaymentAmount === 1000 ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               1000 ₽
@@ -513,6 +613,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             <button
               type="button"
               onClick={() => handleQuickPrepayment(2000)}
+              data-testid="prepay-2000"
               className={`py-1 rounded-lg font-medium transition-colors ${prepaymentAmount === 2000 ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
             >
               2000 ₽
@@ -522,6 +623,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             type="button"
             onClick={() => handleQuickPrepayment(totalPrice)}
             disabled={totalPrice <= 0}
+            data-testid="prepay-full"
             className={`w-full py-1 rounded-lg font-medium transition-colors mb-2 ${prepaymentAmount === totalPrice && totalPrice > 0 ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
           >
             Полная предоплата
@@ -535,6 +637,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
             inputMode="numeric"
             value={prepaymentStr}
             onChange={handlePrepaymentChange}
+            data-testid="prepay-input"
             className={`shadow appearance-none border rounded w-full py-1 px-2 text-black font-bold leading-tight focus:outline-none focus:shadow-outline ${prepaymentError ? 'border-red-500' : ''}`}
           />
           {prepaymentError && (
@@ -639,18 +742,20 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       <div className="flex space-x-3">
         <button
           onClick={onBack}
+          data-testid="presale-back-btn"
           className="flex-1 py-2 bg-gray-300 text-neutral-900 font-medium rounded-lg hover:bg-gray-400 active:bg-gray-500 transition-colors"
         >
           Назад
         </button>
         <div className="flex-1">
-          <button 
+          <button
             onClick={handleSubmit}
             disabled={!isFormValid || isSubmitting}
+            data-testid="presale-create-btn"
             className={`w-full py-4 font-medium rounded-lg transition-colors ${
-              isFormValid 
-                ? (categoryTotalSeats <= getSlotAvailable(trip) 
-                   ? 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800' 
+              isFormValid
+                ? (categoryTotalSeats <= getSlotAvailable(trip)
+                   ? 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800'
                    : 'bg-yellow-500 text-white hover:bg-yellow-600 active:bg-yellow-700')
                 : 'bg-gray-400 text-gray-200 cursor-not-allowed'
             }`}
@@ -662,7 +767,8 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
               {!slotId ? 'Не выбран рейс' :
                customerName.trim().length === 0 ? 'Введите имя' :
                customerPhone.trim().length === 0 ? 'Введите номер телефона' :
-               categoryTotalSeats <= 0 ? 'Выберите хотя бы один билет' : ''}
+               categoryTotalSeats <= 0 ? 'Выберите хотя бы один билет' :
+               isDispatcher && !selectedSellerId ? 'Выбери продавца' : ''}
             </div>
           )}
         </div>

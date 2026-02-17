@@ -113,6 +113,7 @@ const DispatcherView = () => {
               key={key}
               type="button"
               onClick={() => setActiveTab(key)}
+              data-testid={`tab-${key}`}
               className={`px-4 py-2 rounded-xl text-sm font-semibold border ${
                 activeTab === key
                   ? 'bg-blue-600 border-blue-500 text-white'

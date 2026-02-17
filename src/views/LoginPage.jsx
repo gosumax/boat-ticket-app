@@ -107,6 +107,7 @@ export default function LoginPage() {
             onChange={(e) => setUsername(e.target.value)}
             autoComplete="off"
             required
+            data-testid="login-username"
           />
 
           <datalist id="saved-logins">
@@ -126,6 +127,7 @@ export default function LoginPage() {
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
             required
+            data-testid="login-password"
           />
         </div>
 
@@ -149,6 +151,7 @@ export default function LoginPage() {
           type="submit"
           disabled={submitting}
           className="w-full bg-black text-white rounded p-2 disabled:opacity-60"
+          data-testid="login-submit"
         >
           {submitting ? "Вход..." : "Войти"}
         </button>

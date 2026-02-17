@@ -8,8 +8,9 @@ import { ensureOwnerRoleAndUser } from "./ownerSetup.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 🔒 ЖЁСТКО ФИКСИРУЕМ БАЗУ В КОРНЕ ПРОЕКТА
-const DB_FILE = path.join(process.cwd(), "database.sqlite");
+// 🔒 ЖЁСТКО ФИКСИРУЕМ БАЗУ В КОРНЕ ПРОЕКТА (относительно server/)
+// ENV OVERRIDE для тестов: process.env.DB_FILE
+const DB_FILE = process.env.DB_FILE || path.join(__dirname, "..", "database.sqlite");
 const SALT_ROUNDS = 10;
 
 // Initialize database
@@ -18,6 +19,7 @@ try {
   db = new Database(DB_FILE);
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
+  db.pragma('foreign_keys = ON');
   console.log("[DB] Using database file:", DB_FILE);
 } catch (error) {
   console.error("=== DATABASE INITIALIZATION ERROR ===");
@@ -1257,6 +1259,93 @@ try {
 
 export default db;
 
+
+/* =========================
+   MONEY LEDGER (Primary financial journal)
+   Records all money movements: payments, deposits, reversals.
+========================= */
+try {
+  const moneyLedgerCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'money_ledger_table_v1'").get();
+  if (moneyLedgerCheck.count === 0) {
+    console.log('[MONEY_LEDGER] Creating money_ledger table...');
+    
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS money_ledger (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        presale_id INTEGER NULL,
+        slot_id INTEGER NULL,
+        trip_day TEXT NULL,
+        business_day TEXT NULL,
+        kind TEXT NOT NULL,
+        type TEXT NOT NULL,
+        method TEXT NULL,
+        amount INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'POSTED',
+        seller_id INTEGER NULL,
+        event_time TEXT DEFAULT CURRENT_TIMESTAMP,
+        decision_final TEXT NULL
+      )
+    `);
+    
+    // Indexes for common queries
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_money_ledger_business_day ON money_ledger(business_day)"); } catch {}
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_money_ledger_presale_id ON money_ledger(presale_id)"); } catch {}
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_money_ledger_seller_id ON money_ledger(seller_id)"); } catch {}
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_money_ledger_status ON money_ledger(status)"); } catch {}
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_money_ledger_kind ON money_ledger(kind)"); } catch {}
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_money_ledger_type ON money_ledger(type)"); } catch {}
+    
+    db.prepare("INSERT INTO settings (key, value) VALUES ('money_ledger_table_v1', 'true')").run();
+    console.log('[MONEY_LEDGER] Table created and marked as done');
+  } else {
+    console.log('[MONEY_LEDGER] Table already exists, skipping...');
+  }
+} catch (e) {
+  console.log('[MONEY_LEDGER] Warning:', e?.message || e);
+}
+
+/* =========================
+   SALES TRANSACTIONS CANONICAL (Owner analytics layer)
+   Per-ticket financial records for cash/card breakdown.
+========================= */
+try {
+  const canonCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'sales_transactions_canonical_table_v1'").get();
+  if (canonCheck.count === 0) {
+    console.log('[SALES_TRANSACTIONS_CANONICAL] Creating table...');
+    
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS sales_transactions_canonical (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticket_id INTEGER UNIQUE,
+        presale_id INTEGER NULL,
+        slot_id INTEGER NULL,
+        boat_id INTEGER NULL,
+        slot_uid TEXT NULL,
+        slot_source TEXT NULL,
+        amount INTEGER NOT NULL DEFAULT 0,
+        cash_amount INTEGER NOT NULL DEFAULT 0,
+        card_amount INTEGER NOT NULL DEFAULT 0,
+        method TEXT NULL,
+        status TEXT NOT NULL DEFAULT 'VALID',
+        business_day TEXT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    // Indexes
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_canon_presale_id ON sales_transactions_canonical(presale_id)"); } catch {}
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_canon_business_day ON sales_transactions_canonical(business_day)"); } catch {}
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_canon_status ON sales_transactions_canonical(status)"); } catch {}
+    try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_canon_ticket_id ON sales_transactions_canonical(ticket_id)"); } catch {}
+    
+    db.prepare("INSERT INTO settings (key, value) VALUES ('sales_transactions_canonical_table_v1', 'true')").run();
+    console.log('[SALES_TRANSACTIONS_CANONICAL] Table created');
+  } else {
+    console.log('[SALES_TRANSACTIONS_CANONICAL] Table already exists, skipping...');
+  }
+} catch (e) {
+  console.log('[SALES_TRANSACTIONS_CANONICAL] Warning:', e?.message || e);
+}
 
 /* =========================
    SALES TRANSACTIONS (CANONICAL MONEY LAYER)

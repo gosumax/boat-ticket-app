@@ -254,6 +254,7 @@ const TicketSellingView = ({
           return (
             <div
               key={trip.slot_uid || trip.id}
+              data-testid={`trip-card-${trip.slot_uid || trip.id}`}
               className={`relative rounded-2xl border border-neutral-800 bg-neutral-900 p-3 cursor-pointer transition-all ${almostFull ? `ring-2 ${soldUi.ring}` : ''} ${isSlotSoldOut(trip) ? 'opacity-60' : ''}`}
               onClick={shiftClosed ? undefined : () => setSelectedTrip(trip)}
             >
