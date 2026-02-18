@@ -52,6 +52,35 @@ function salesLedgerWhere() {
   )`;
 }
 
+// Helper: generate cash/card CASE expressions with MIXED support
+function getCashCardCaseExprs() {
+  const hasCashAmt = hasColumn('money_ledger', 'cash_amount');
+  const hasCardAmt = hasColumn('money_ledger', 'card_amount');
+
+  if (hasCashAmt && hasCardAmt) {
+    // MIXED payments: split by cash_amount/card_amount
+    return {
+      cash: `CASE WHEN ml.method = 'CASH' THEN ml.amount WHEN ml.method = 'MIXED' THEN COALESCE(ml.cash_amount, 0) ELSE 0 END`,
+      card: `CASE WHEN ml.method = 'CARD' THEN ml.amount WHEN ml.method = 'MIXED' THEN COALESCE(ml.card_amount, 0) ELSE 0 END`,
+    };
+  }
+  // money_ledger doesn't have cash_amount/card_amount columns.
+  // For MIXED payments, get the split from presales.payment_cash_amount/payment_card_amount
+  // Return expressions that reference presales table (must JOIN)
+  return {
+    cash: `CASE 
+      WHEN ml.method = 'CASH' THEN ml.amount 
+      WHEN ml.method = 'MIXED' THEN COALESCE(p.payment_cash_amount, ml.amount) 
+      WHEN ml.method = 'CARD' THEN 0
+      ELSE 0 END`,
+    card: `CASE 
+      WHEN ml.method = 'CARD' THEN ml.amount 
+      WHEN ml.method = 'MIXED' THEN COALESCE(p.payment_card_amount, 0) 
+      WHEN ml.method = 'CASH' THEN 0
+      ELSE 0 END`,
+  };
+}
+
 function presetRange(preset) {
   const p = String(preset || 'today');
   // UI compatibility (OwnerBoatsView): today | yesterday | d7 | month | all
@@ -102,88 +131,193 @@ function resolveLastNonzeroDay() {
 // =====================
 router.get('/money/summary', (req, res) => {
   try {
+    // Поддержка явных from/to (приоритет над preset)
+    const explicitFrom = req.query.from;
+    const explicitTo = req.query.to;
     const preset = String(req.query.preset || 'today');
-    const r = presetRange(preset);
-    const fromExpr = r.from;
-    const toExpr = r.to;
+    let fromExpr, toExpr;
+    if (explicitFrom && explicitTo) {
+      fromExpr = `'${String(explicitFrom).replace(/'/g, "''")}'`;
+      toExpr = `'${String(explicitTo).replace(/'/g, "''")}'`;
+    } else {
+      const r = presetRange(preset);
+      fromExpr = r.from;
+      toExpr = r.to;
+    }
 
-    // === СОБРАНО ДЕНЕГ: из money_ledger по ДАТЕ ОПЛАТЫ ===
-    // Используем money_ledger.business_day как дату оплаты
-    // Только POSTED, только SELLER_SHIFT (не EXPECT_PAYMENT)
-    // Типы: SALE_PREPAYMENT_CASH, SALE_ACCEPTED_CASH, SALE_ACCEPTED_CARD, SALE_ACCEPTED_MIXED, SALE_CANCEL_REVERSE
-    const collectedRow = db
+    // === СОБРАНО ДЕНЕГ: total из money_ledger, cash/card из sales_transactions_canonical ===
+    // total — по ДАТЕ ОПЛАТЫ из money_ledger (для обратной совместимости)
+    // cash/card — из sales_transactions_canonical где MIXED разнесён по cash_amount/card_amount
+
+    // Total из money_ledger
+    const collectedTotalRow = db
       .prepare(
-        `SELECT
-           COALESCE(SUM(CASE
-             WHEN method = 'CASH' THEN amount
-             WHEN method = 'CARD' THEN 0
-             WHEN method = 'MIXED' THEN amount
-             ELSE 0
-           END), 0) AS collected_cash,
-           COALESCE(SUM(CASE
-             WHEN method = 'CARD' THEN amount
-             WHEN method = 'CASH' THEN 0
-             WHEN method = 'MIXED' THEN 0
-             ELSE 0
-           END), 0) AS collected_card,
-           COALESCE(SUM(amount), 0) AS collected_total
+        `SELECT COALESCE(SUM(amount), 0) AS collected_total
          FROM money_ledger
          WHERE status = 'POSTED'
            AND kind = 'SELLER_SHIFT'
-           AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+           AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
            AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
       )
       .get();
 
-    // === БИЛЕТЫ/РЕЙСЫ: из presales по ДАТЕ РЕЙСА (business_day) ===
+    // Cash/Card из sales_transactions_canonical (MIXED уже разнесён)
+    let collectedCash = 0;
+    let collectedCard = 0;
+    let usedStc = false;
+    try {
+      const stcExists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`).get();
+      if (stcExists) {
+        const stcCols = db.prepare(`PRAGMA table_info(sales_transactions_canonical)`).all().map(r => r.name);
+        const hasCashAmt = stcCols.includes('cash_amount');
+        const hasCardAmt = stcCols.includes('card_amount');
+        const hasBusinessDay = stcCols.includes('business_day');
+
+        // DO NOT use STC for collected_cash/collected_card!
+        // STC.business_day = trip_date, but collected money must be queried by payment date.
+        // Use money_ledger for collected amounts (it has business_day = payment date).
+        // STC is used only for pending_amount and paid_by_trip_day (trip_date semantics).
+        if (hasCashAmt && hasCardAmt && false) { // Force fallback to money_ledger
+          const cashCardRow = db
+            .prepare(
+              `SELECT
+                 COALESCE(SUM(cash_amount), 0) AS collected_cash,
+                 COALESCE(SUM(card_amount), 0) AS collected_card
+               FROM sales_transactions_canonical
+               WHERE status = 'VALID'
+                 AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+            )
+            .get();
+          collectedCash = Number(cashCardRow?.collected_cash || 0);
+          collectedCard = Number(cashCardRow?.collected_card || 0);
+          usedStc = true;
+        }
+      }
+    } catch {
+      // Fallback: leave as 0, will be populated from money_ledger below
+    }
+
+    // Fallback: если sales_transactions_canonical недоступна, читаем из money_ledger (старая логика)
+    // JOIN с presales для MIXED payment split
+    if (!usedStc) {
+      const cashCardExpr = getCashCardCaseExprs();
+      const hasCashAmt = hasColumn('money_ledger', 'cash_amount');
+      const hasCardAmt = hasColumn('money_ledger', 'card_amount');
+      
+      let collectedRow;
+      if (hasCashAmt && hasCardAmt) {
+        // money_ledger has cash_amount/card_amount columns - no JOIN needed
+        collectedRow = db
+          .prepare(
+            `SELECT
+               COALESCE(SUM(${cashCardExpr.cash}), 0) AS collected_cash,
+               COALESCE(SUM(${cashCardExpr.card}), 0) AS collected_card
+             FROM money_ledger ml
+             WHERE ml.status = 'POSTED'
+               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+               AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+          )
+          .get();
+      } else {
+        // money_ledger lacks cash_amount/card_amount - JOIN with presales for MIXED split
+        collectedRow = db
+          .prepare(
+            `SELECT
+               COALESCE(SUM(${cashCardExpr.cash}), 0) AS collected_cash,
+               COALESCE(SUM(${cashCardExpr.card}), 0) AS collected_card
+             FROM money_ledger ml
+             LEFT JOIN presales p ON p.id = ml.presale_id
+             WHERE ml.status = 'POSTED'
+               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+               AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+          )
+          .get();
+      }
+      collectedCash = Number(collectedRow?.collected_cash || 0);
+      collectedCard = Number(collectedRow?.collected_card || 0);
+    }
+
+    const collectedTotal = Number(collectedTotalRow?.collected_total || 0);
+
+    // === БИЛЕТЫ/РЕЙСЫ: из presales по ДАТЕ РЕЙСА ===
+    // trip_date = generated_slots.trip_date для generated:* слотов, иначе boat_slots.trip_date, иначе fallback
     // Включаем только ACTIVE (исключаем CANCELLED)
-    const tripDayExpr = getTripDayExpr();
     const seatsCol = pickFirstExisting('presales', ['number_of_seats', 'qty', 'seats'], null);
     const ticketsAgg = seatsCol ? `COALESCE(SUM(p.${seatsCol}),0)` : `COUNT(*)`;
 
-    const statsRow = db
-      .prepare(
-        `SELECT
-           ${ticketsAgg} AS tickets,
-           COUNT(DISTINCT COALESCE(p.slot_uid, p.boat_slot_id)) AS trips
-         FROM presales p
-         LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
-         WHERE p.status = 'ACTIVE'
-           AND ${tripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}`
-      )
-      .get();
+    // Проверяем наличие нужных таблиц/колонок для точного trip_date
+    const hasGs = hasColumn('generated_slots', 'trip_date');
+    const hasBs = hasColumn('boat_slots', 'trip_date');
+
+    let statsRow;
+    if (hasGs && hasBs) {
+      // Полный JOIN с generated_slots и boat_slots для точного trip_date
+      statsRow = db
+        .prepare(
+          `SELECT
+             ${ticketsAgg} AS tickets,
+             COUNT(DISTINCT COALESCE(p.slot_uid, p.boat_slot_id)) AS trips
+           FROM presales p
+           LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+           LEFT JOIN generated_slots gs ON (
+             p.slot_uid LIKE 'generated:%' 
+             AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER)
+           )
+           WHERE p.status = 'ACTIVE'
+             AND COALESCE(gs.trip_date, bs.trip_date, DATE(p.created_at)) BETWEEN ${fromExpr} AND ${toExpr}`
+        )
+        .get();
+    } else {
+      // Fallback: старая логика через getTripDayExpr
+      const tripDayExpr = getTripDayExpr();
+      statsRow = db
+        .prepare(
+          `SELECT
+             ${ticketsAgg} AS tickets,
+             COUNT(DISTINCT COALESCE(p.slot_uid, p.boat_slot_id)) AS trips
+           FROM presales p
+           LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+           WHERE p.status = 'ACTIVE'
+             AND ${tripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}`
+        )
+        .get();
+    }
 
     // === ЗАГРУЗКА: оценка по generated_slots ===
     let fillPercent = 0;
     try {
       const gsSeatsLeftCol = pickFirstExisting('generated_slots', ['seats_left', 'seatsLeft', 'left'], null);
-      const whereRange = `AND ${tripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}`;
-      if (gsSeatsLeftCol) {
+      const gsCapacityCol = pickFirstExisting('generated_slots', ['capacity', 'cap'], null);
+      
+      if (gsSeatsLeftCol && gsCapacityCol && hasGs) {
+        // Продано: SUM(number_of_seats) по ACTIVE presales на generated slots за период
+        // Капасити: SUM(capacity) по generated_slots за период
         const fillRow = db
           .prepare(
             `WITH sold AS (
-               SELECT p.slot_uid AS slot_uid,
-                      ${seatsCol ? `COALESCE(SUM(p.${seatsCol}),0)` : `COUNT(*)`} AS sold
+               SELECT
+                 COALESCE(SUM(p.${seatsCol || 'number_of_seats'}),0) AS sold_seats
                FROM presales p
-               LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+               LEFT JOIN generated_slots gs ON (
+                 p.slot_uid LIKE 'generated:%' 
+                 AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER)
+               )
                WHERE p.status = 'ACTIVE'
                  AND p.slot_uid LIKE 'generated:%'
-                 ${whereRange}
-               GROUP BY p.slot_uid
+                 AND gs.trip_date BETWEEN ${fromExpr} AND ${toExpr}
              ),
-             cap AS (
-               SELECT sold.slot_uid AS slot_uid,
-                      sold.sold AS sold,
-                      (SELECT MAX(COALESCE(gs.${gsSeatsLeftCol},0),0)
-                       FROM generated_slots gs
-                       WHERE gs.id = CAST(substr(sold.slot_uid, 11) AS INTEGER)
-                      ) AS seats_left
-               FROM sold
+             caps AS (
+               SELECT
+                 COALESCE(SUM(gs.${gsCapacityCol}),0) AS total_capacity
+               FROM generated_slots gs
+               WHERE gs.trip_date BETWEEN ${fromExpr} AND ${toExpr}
+                 AND gs.is_active = 1
              )
-             SELECT
-               COALESCE(SUM(sold),0) AS sold_sum,
-               COALESCE(SUM(sold + seats_left),0) AS cap_sum
-             FROM cap`
+             SELECT 
+               (SELECT sold_seats FROM sold) AS sold_sum,
+               (SELECT total_capacity FROM caps) AS cap_sum`
           )
           .get();
         const soldSum = Number(fillRow?.sold_sum || 0);
@@ -191,14 +325,241 @@ router.get('/money/summary', (req, res) => {
         if (capSum > 0) {
           fillPercent = Math.max(0, Math.min(100, Math.round((soldSum / capSum) * 100)));
         }
+      } else {
+        // Fallback: старая логика через seats_left
+        const tripDayExpr = getTripDayExpr();
+        const whereRange = `AND ${tripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}`;
+        if (gsSeatsLeftCol) {
+          const fillRow = db
+            .prepare(
+              `WITH sold AS (
+                 SELECT p.slot_uid AS slot_uid,
+                        ${seatsCol ? `COALESCE(SUM(p.${seatsCol}),0)` : `COUNT(*)`} AS sold
+                 FROM presales p
+                 LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+                 WHERE p.status = 'ACTIVE'
+                   AND p.slot_uid LIKE 'generated:%'
+                   ${whereRange}
+                 GROUP BY p.slot_uid
+               ),
+               cap AS (
+                 SELECT sold.slot_uid AS slot_uid,
+                        sold.sold AS sold,
+                        (SELECT MAX(COALESCE(gs.${gsSeatsLeftCol},0),0)
+                         FROM generated_slots gs
+                         WHERE gs.id = CAST(substr(sold.slot_uid, 11) AS INTEGER)
+                        ) AS seats_left
+                 FROM sold
+               )
+               SELECT
+                 COALESCE(SUM(sold),0) AS sold_sum,
+                 COALESCE(SUM(sold + seats_left),0) AS cap_sum
+               FROM cap`
+            )
+            .get();
+          const soldSum = Number(fillRow?.sold_sum || 0);
+          const capSum = Number(fillRow?.cap_sum || 0);
+          if (capSum > 0) {
+            fillPercent = Math.max(0, Math.min(100, Math.round((soldSum / capSum) * 100)));
+          }
+        }
       }
     } catch {
       // ignore
     }
 
-    const collectedTotal = Number(collectedRow?.collected_total || 0);
-    const collectedCash = Number(collectedRow?.collected_cash || 0);
-    const collectedCard = Number(collectedRow?.collected_card || 0);
+    // === PENDING AMOUNT: ожидает оплаты по ДАТЕ РЕЙСА ===
+    // pending = SUM(max(0, total_price - paid_sum)) для ACTIVE presales на период
+    // paid_sum из sales_transactions_canonical (cash_amount + card_amount)
+    let pendingAmount = 0;
+    try {
+      const stcExists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`).get();
+      if (stcExists) {
+        const stcCols = db.prepare(`PRAGMA table_info(sales_transactions_canonical)`).all().map(r => r.name);
+        const hasCashAmt = stcCols.includes('cash_amount');
+        const hasCardAmt = stcCols.includes('card_amount');
+        const hasPresaleId = stcCols.includes('presale_id');
+
+        if (hasCashAmt && hasCardAmt && hasPresaleId && hasGs && hasBs) {
+          // Используем точный trip_date через JOIN
+          const pendingRow = db
+            .prepare(
+              `WITH paid AS (
+                 SELECT presale_id, COALESCE(SUM(cash_amount + card_amount),0) AS paid_sum
+                 FROM sales_transactions_canonical
+                 WHERE status='VALID'
+                 GROUP BY presale_id
+               )
+               SELECT
+                 COALESCE(SUM(CASE
+                   WHEN (p.total_price - COALESCE(paid.paid_sum,0)) > 0 THEN (p.total_price - COALESCE(paid.paid_sum,0))
+                   ELSE 0
+                 END),0) AS sum_pending
+               FROM presales p
+               LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+               LEFT JOIN generated_slots gs ON (
+                 p.slot_uid LIKE 'generated:%' 
+                 AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER)
+               )
+               LEFT JOIN paid ON paid.presale_id = p.id
+               WHERE p.status='ACTIVE'
+                 AND COALESCE(gs.trip_date, bs.trip_date, DATE(p.created_at)) BETWEEN ${fromExpr} AND ${toExpr}`
+            )
+            .get();
+          pendingAmount = Number(pendingRow?.sum_pending || 0);
+        } else if (hasCashAmt && hasCardAmt && hasPresaleId) {
+          // Fallback: старая логика через getTripDayExpr
+          const tripDayExpr = getTripDayExpr();
+          const pendingRow = db
+            .prepare(
+              `WITH paid AS (
+                 SELECT presale_id, COALESCE(SUM(cash_amount + card_amount),0) AS paid_sum
+                 FROM sales_transactions_canonical
+                 WHERE status='VALID'
+                 GROUP BY presale_id
+               )
+               SELECT
+                 COALESCE(SUM(CASE
+                   WHEN (p.total_price - COALESCE(paid.paid_sum,0)) > 0 THEN (p.total_price - COALESCE(paid.paid_sum,0))
+                   ELSE 0
+                 END),0) AS sum_pending
+               FROM presales p
+               LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+               LEFT JOIN paid ON paid.presale_id = p.id
+               WHERE p.status='ACTIVE'
+                 AND ${tripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}`
+            )
+            .get();
+          pendingAmount = Number(pendingRow?.sum_pending || 0);
+        }
+      }
+    } catch {
+      // Fallback below
+    }
+
+    // Fallback: если stc недоступна, используем money_ledger
+    if (pendingAmount === 0) {
+      try {
+        const tripDayExpr = getTripDayExpr();
+        const pendingRow = db
+          .prepare(
+            `WITH paid AS (
+               SELECT presale_id, COALESCE(SUM(amount),0) AS paid_sum
+               FROM money_ledger ml
+               WHERE ml.status='POSTED'
+                 AND ${salesLedgerWhere()}
+               GROUP BY presale_id
+             )
+             SELECT
+               COALESCE(SUM(CASE
+                 WHEN (p.total_price - COALESCE(paid.paid_sum,0)) > 0 THEN (p.total_price - COALESCE(paid.paid_sum,0))
+                 ELSE 0
+               END),0) AS sum_pending
+             FROM presales p
+             LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+             LEFT JOIN paid ON paid.presale_id = p.id
+             WHERE p.status='ACTIVE'
+               AND ${tripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}`
+          )
+          .get();
+        pendingAmount = Number(pendingRow?.sum_pending || 0);
+      } catch {
+        // ignore
+      }
+    }
+
+    // === PAID BY TRIP DAY: оплачено за рейсы по ДАТЕ РЕЙСА ===
+    // revenue/cash/card из sales_transactions_canonical, привязка к trip_date через presales
+    let paidByTripDay = { revenue: 0, cash: 0, card: 0 };
+    try {
+      const stcExists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`).get();
+      if (stcExists) {
+        const stcCols = db.prepare(`PRAGMA table_info(sales_transactions_canonical)`).all().map(r => r.name);
+        const hasCashAmt = stcCols.includes('cash_amount');
+        const hasCardAmt = stcCols.includes('card_amount');
+        const hasPresaleId = stcCols.includes('presale_id');
+
+        if (hasCashAmt && hasCardAmt && hasPresaleId && hasGs && hasBs) {
+          // Используем точный trip_date через JOIN
+          const paidRow = db
+            .prepare(
+              `SELECT
+                 COALESCE(SUM(stc.cash_amount + stc.card_amount), 0) AS revenue,
+                 COALESCE(SUM(stc.cash_amount), 0) AS cash,
+                 COALESCE(SUM(stc.card_amount), 0) AS card
+               FROM sales_transactions_canonical stc
+               JOIN presales p ON p.id = stc.presale_id
+               LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+               LEFT JOIN generated_slots gs ON (
+                 p.slot_uid LIKE 'generated:%' 
+                 AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER)
+               )
+               WHERE stc.status = 'VALID'
+                 AND COALESCE(gs.trip_date, bs.trip_date, DATE(p.created_at)) BETWEEN ${fromExpr} AND ${toExpr}`
+            )
+            .get();
+          paidByTripDay = {
+            revenue: Number(paidRow?.revenue || 0),
+            cash: Number(paidRow?.cash || 0),
+            card: Number(paidRow?.card || 0),
+          };
+        } else if (hasCashAmt && hasCardAmt && hasPresaleId) {
+          // Fallback: старая логика через getTripDayExpr
+          const tripDayExpr = getTripDayExpr();
+          const paidRow = db
+            .prepare(
+              `SELECT
+                 COALESCE(SUM(stc.cash_amount + stc.card_amount), 0) AS revenue,
+                 COALESCE(SUM(stc.cash_amount), 0) AS cash,
+                 COALESCE(SUM(stc.card_amount), 0) AS card
+               FROM sales_transactions_canonical stc
+               JOIN presales p ON p.id = stc.presale_id
+               LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+               WHERE stc.status = 'VALID'
+                 AND ${tripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}`
+            )
+            .get();
+          paidByTripDay = {
+            revenue: Number(paidRow?.revenue || 0),
+            cash: Number(paidRow?.cash || 0),
+            card: Number(paidRow?.card || 0),
+          };
+        }
+      }
+    } catch {
+      // Fallback below
+    }
+
+    // Fallback: если stc недоступна, используем money_ledger
+    if (paidByTripDay.revenue === 0 && paidByTripDay.cash === 0 && paidByTripDay.card === 0) {
+      try {
+        const tripDayExpr = getTripDayExpr();
+        const cashCardExpr = getCashCardCaseExprs();
+        const paidRow = db
+          .prepare(
+            `SELECT
+               COALESCE(SUM(ml.amount), 0) AS revenue,
+               COALESCE(SUM(${cashCardExpr.cash}), 0) AS cash,
+               COALESCE(SUM(${cashCardExpr.card}), 0) AS card
+             FROM money_ledger ml
+             JOIN presales p ON p.id = ml.presale_id
+             LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+             WHERE ml.status = 'POSTED'
+               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+               AND ${tripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}`
+          )
+          .get();
+        paidByTripDay = {
+          revenue: Number(paidRow?.revenue || 0),
+          cash: Number(paidRow?.cash || 0),
+          card: Number(paidRow?.card || 0),
+        };
+      } catch {
+        // ignore
+      }
+    }
+
     const tickets = Number(statsRow?.tickets || 0);
     const trips = Number(statsRow?.trips || 0);
 
@@ -214,10 +575,12 @@ router.get('/money/summary', (req, res) => {
           collected_total: collectedTotal,
           collected_cash: collectedCash,
           collected_card: collectedCard,
+          pending_amount: pendingAmount,
           tickets,
           trips,
           fillPercent,
         },
+        paid_by_trip_day: paidByTripDay,
       },
       meta: { warnings: [] },
     });
@@ -229,6 +592,7 @@ router.get('/money/summary', (req, res) => {
 // =====================
 // GET /api/owner/money/pending-by-day?day=today|tomorrow|day2
 // pending is grouped by TRIP DAY (same trip day expression)
+// paid из sales_transactions_canonical, fallback на money_ledger
 // =====================
 function handlePendingByDay(req, res) {
   try {
@@ -243,30 +607,76 @@ function handlePendingByDay(req, res) {
     const seatsCol = pickFirstExisting('presales', ['number_of_seats', 'qty', 'seats'], null);
     const ticketsAgg = seatsCol ? `COALESCE(SUM(p.${seatsCol}),0)` : `COUNT(*)`;
 
-    const row = db
-      .prepare(
-        `WITH paid AS (
-           SELECT presale_id, COALESCE(SUM(amount),0) AS paid_sum
-           FROM money_ledger ml
-           WHERE ml.status='POSTED'
-             AND ${salesLedgerWhere()}
-           GROUP BY presale_id
-         )
-         SELECT
-           COALESCE(SUM(CASE
-             WHEN (p.total_price - COALESCE(paid.paid_sum,0)) > 0 THEN (p.total_price - COALESCE(paid.paid_sum,0))
-             ELSE 0
-           END),0) AS sum_pending,
-           ${ticketsAgg} AS tickets,
-           COUNT(DISTINCT COALESCE(p.slot_uid, p.boat_slot_id)) AS trips
-         FROM presales p
-         LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
-         LEFT JOIN paid ON paid.presale_id = p.id
-         WHERE p.status='ACTIVE'
-           AND ${tripDayExpr} = ${targetExpr}
-           AND (p.total_price - COALESCE(paid.paid_sum,0)) > 0`
-      )
-      .get();
+    // Попробовать использовать sales_transactions_canonical для paid
+    let usedStc = false;
+    let row;
+
+    try {
+      const stcExists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`).get();
+      if (stcExists) {
+        const stcCols = db.prepare(`PRAGMA table_info(sales_transactions_canonical)`).all().map(r => r.name);
+        const hasCashAmt = stcCols.includes('cash_amount');
+        const hasCardAmt = stcCols.includes('card_amount');
+        const hasPresaleId = stcCols.includes('presale_id');
+
+        if (hasCashAmt && hasCardAmt && hasPresaleId) {
+          row = db
+            .prepare(
+              `WITH paid AS (
+                 SELECT presale_id, COALESCE(SUM(cash_amount + card_amount),0) AS paid_sum
+                 FROM sales_transactions_canonical
+                 WHERE status='VALID'
+                 GROUP BY presale_id
+               )
+               SELECT
+                 COALESCE(SUM(CASE
+                   WHEN (p.total_price - COALESCE(paid.paid_sum,0)) > 0 THEN (p.total_price - COALESCE(paid.paid_sum,0))
+                   ELSE 0
+                 END),0) AS sum_pending,
+                 ${ticketsAgg} AS tickets,
+                 COUNT(DISTINCT COALESCE(p.slot_uid, p.boat_slot_id)) AS trips
+               FROM presales p
+               LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+               LEFT JOIN paid ON paid.presale_id = p.id
+               WHERE p.status='ACTIVE'
+                 AND ${tripDayExpr} = ${targetExpr}
+                 AND (p.total_price - COALESCE(paid.paid_sum,0)) > 0`
+            )
+            .get();
+          usedStc = true;
+        }
+      }
+    } catch {
+      // Fallback below
+    }
+
+    // Fallback: если stc недоступна, используем money_ledger (старая логика)
+    if (!usedStc) {
+      row = db
+        .prepare(
+          `WITH paid AS (
+             SELECT presale_id, COALESCE(SUM(amount),0) AS paid_sum
+             FROM money_ledger ml
+             WHERE ml.status='POSTED'
+               AND ${salesLedgerWhere()}
+             GROUP BY presale_id
+           )
+           SELECT
+             COALESCE(SUM(CASE
+               WHEN (p.total_price - COALESCE(paid.paid_sum,0)) > 0 THEN (p.total_price - COALESCE(paid.paid_sum,0))
+               ELSE 0
+             END),0) AS sum_pending,
+             ${ticketsAgg} AS tickets,
+             COUNT(DISTINCT COALESCE(p.slot_uid, p.boat_slot_id)) AS trips
+           FROM presales p
+           LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+           LEFT JOIN paid ON paid.presale_id = p.id
+           WHERE p.status='ACTIVE'
+             AND ${tripDayExpr} = ${targetExpr}
+             AND (p.total_price - COALESCE(paid.paid_sum,0)) > 0`
+        )
+        .get();
+    }
 
     return res.json({
       ok: true,
@@ -293,30 +703,88 @@ router.get('/money/pending-by-day/:day', handlePendingByDay);
 
 // =====================
 // GET /api/owner/money/compare-days?preset=7d|30d|90d
-// График "Собрано по дням" — по ДАТЕ ОПЛАТЫ из money_ledger
+// График "Собрано по дням" — revenue из money_ledger, cash/card из sales_transactions_canonical
 // =====================
 router.get('/money/compare-days', (req, res) => {
   try {
     const preset = String(req.query.preset || '7d');
     const r = presetRange(preset);
 
-    // Данные из money_ledger по ДАТЕ ОПЛАТЫ (business_day)
-    const rows = db
+    // Revenue из money_ledger по ДАТЕ ОПЛАТЫ (business_day)
+    const revenueRows = db
       .prepare(
         `SELECT
            DATE(business_day) AS day,
-           COALESCE(SUM(amount), 0) AS revenue,
-           COALESCE(SUM(CASE WHEN method = 'CASH' THEN amount ELSE 0 END), 0) AS cash,
-           COALESCE(SUM(CASE WHEN method = 'CARD' THEN amount ELSE 0 END), 0) AS card
+           COALESCE(SUM(amount), 0) AS revenue
          FROM money_ledger
          WHERE status = 'POSTED'
            AND kind = 'SELLER_SHIFT'
-           AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+           AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
            AND DATE(business_day) BETWEEN ${r.from} AND ${r.to}
          GROUP BY DATE(business_day)
          ORDER BY day ASC`
       )
       .all();
+
+    // Cash/Card из money_ledger + presales JOIN для MIXED split
+    // NOTE: Do NOT use STC here! STC.business_day = trip_date, but we need payment date.
+    const cashCardByDay = new Map();
+    {
+      const cashCardExpr = getCashCardCaseExprs();
+      const hasCashAmt = hasColumn('money_ledger', 'cash_amount');
+      const hasCardAmt = hasColumn('money_ledger', 'card_amount');
+      
+      let mlRows;
+      if (hasCashAmt && hasCardAmt) {
+        // money_ledger has cash_amount/card_amount - no JOIN needed
+        mlRows = db
+          .prepare(
+            `SELECT
+               DATE(ml.business_day) AS day,
+               COALESCE(SUM(${cashCardExpr.cash}), 0) AS cash,
+               COALESCE(SUM(${cashCardExpr.card}), 0) AS card
+             FROM money_ledger ml
+             WHERE ml.status = 'POSTED'
+               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+               AND DATE(ml.business_day) BETWEEN ${r.from} AND ${r.to}
+             GROUP BY DATE(ml.business_day)`
+          )
+          .all();
+      } else {
+        // money_ledger lacks cash_amount/card_amount - JOIN with presales for MIXED split
+        mlRows = db
+          .prepare(
+            `SELECT
+               DATE(ml.business_day) AS day,
+               COALESCE(SUM(${cashCardExpr.cash}), 0) AS cash,
+               COALESCE(SUM(${cashCardExpr.card}), 0) AS card
+             FROM money_ledger ml
+             LEFT JOIN presales p ON p.id = ml.presale_id
+             WHERE ml.status = 'POSTED'
+               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+               AND DATE(ml.business_day) BETWEEN ${r.from} AND ${r.to}
+             GROUP BY DATE(ml.business_day)`
+          )
+          .all();
+      }
+      for (const row of mlRows) {
+        cashCardByDay.set(row.day, { cash: Number(row.cash || 0), card: Number(row.card || 0) });
+      }
+    }
+
+    // Merge revenue + cash/card by day
+    const rows = revenueRows.map(row => {
+      const day = row.day;
+      const cc = cashCardByDay.get(day) || { cash: 0, card: 0 };
+      return {
+        day,
+        revenue: Number(row.revenue || 0),
+        cash: cc.cash,
+        card: cc.card,
+      };
+    });
 
     return res.json({ ok: true, data: { preset, range: null, rows }, meta: { warnings: [] } });
   } catch (e) {
@@ -356,19 +824,20 @@ router.get('/money/compare-periods', (req, res) => {
     }
 
     // Helper to compute metrics for a period
+    const cashCardExpr = getCashCardCaseExprs();
     const computePeriodMetrics = (fromExpr, toExpr) => {
       // Payments: SALE_PREPAYMENT_CASH, SALE_ACCEPTED_CASH, SALE_ACCEPTED_CARD, SALE_ACCEPTED_MIXED
       const paymentsRow = db
         .prepare(
           `SELECT
              COALESCE(SUM(amount), 0) AS revenue_gross,
-             COALESCE(SUM(CASE WHEN method = 'CASH' THEN amount ELSE 0 END), 0) AS cash,
-             COALESCE(SUM(CASE WHEN method = 'CARD' THEN amount ELSE 0 END), 0) AS card,
+             COALESCE(SUM(${cashCardExpr.cash}), 0) AS cash,
+             COALESCE(SUM(${cashCardExpr.card}), 0) AS card,
              COALESCE(SUM(CASE WHEN method = 'MIXED' THEN amount ELSE 0 END), 0) AS mixed
            FROM money_ledger
            WHERE status = 'POSTED'
              AND kind = 'SELLER_SHIFT'
-             AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+             AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
              AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
         )
         .get();
@@ -500,12 +969,12 @@ router.get('/money/compare-periods-daily', (req, res) => {
       const rows = db.prepare(`
         SELECT
           DATE(business_day) AS day,
-          COALESCE(SUM(CASE WHEN type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN amount ELSE 0 END), 0) AS revenue_gross,
+          COALESCE(SUM(CASE WHEN type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN amount ELSE 0 END), 0) AS revenue_gross,
           COALESCE(SUM(CASE WHEN type = 'SALE_CANCEL_REVERSE' THEN ABS(amount) ELSE 0 END), 0) AS refund
         FROM money_ledger
         WHERE status = 'POSTED'
           AND kind = 'SELLER_SHIFT'
-          AND type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
+          AND type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
           AND DATE(business_day) BETWEEN '${fromExpr}' AND '${toExpr}'
         GROUP BY DATE(business_day)
         ORDER BY day ASC
@@ -616,14 +1085,14 @@ router.get('/money/compare-boat-daily', (req, res) => {
       const rows = db.prepare(`
         SELECT
           DATE(ml.business_day) AS day,
-          COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
+          COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
           COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refund
         FROM money_ledger ml
         LEFT JOIN presales p ON p.id = ml.presale_id
         LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
         WHERE ml.status = 'POSTED'
           AND ml.kind = 'SELLER_SHIFT'
-          AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
+          AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
           AND bs.boat_id = ${boatId}
           AND DATE(ml.business_day) BETWEEN '${fromExpr}' AND '${toExpr}'
         GROUP BY DATE(ml.business_day)
@@ -736,12 +1205,12 @@ router.get('/money/compare-seller-daily', (req, res) => {
       const rows = db.prepare(`
         SELECT
           DATE(ml.business_day) AS day,
-          COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
+          COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
           COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refund
         FROM money_ledger ml
         WHERE ml.status = 'POSTED'
           AND ml.kind = 'SELLER_SHIFT'
-          AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
+          AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
           AND ml.seller_id = ${sellerId}
           AND DATE(ml.business_day) BETWEEN '${fromExpr}' AND '${toExpr}'
         GROUP BY DATE(ml.business_day)
@@ -851,7 +1320,7 @@ router.get('/money/compare-boats', (req, res) => {
         SELECT
           COALESCE(b.id, 0) AS boat_id,
           COALESCE(b.name, 'Неизвестно') AS boat_name,
-          COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
+          COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
           COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refund
         FROM money_ledger ml
         LEFT JOIN presales p ON p.id = ml.presale_id
@@ -859,7 +1328,7 @@ router.get('/money/compare-boats', (req, res) => {
         LEFT JOIN boats b ON b.id = bs.boat_id
         WHERE ml.status = 'POSTED'
           AND ml.kind = 'SELLER_SHIFT'
-          AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
+          AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
           AND DATE(ml.business_day) BETWEEN '${fromExpr}' AND '${toExpr}'
         GROUP BY b.id
       `).all();
@@ -980,13 +1449,13 @@ router.get('/money/compare-sellers', (req, res) => {
         SELECT
           COALESCE(u.id, 0) AS seller_id,
           COALESCE(u.username, 'Неизвестно') AS username,
-          COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
+          COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
           COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refund
         FROM money_ledger ml
         LEFT JOIN users u ON u.id = ml.seller_id
         WHERE ml.status = 'POSTED'
           AND ml.kind = 'SELLER_SHIFT'
-          AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
+          AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
           AND DATE(ml.business_day) BETWEEN '${fromExpr}' AND '${toExpr}'
         GROUP BY u.id
       `).all();
@@ -1125,7 +1594,7 @@ router.get('/motivation/day', (req, res) => {
     // ====================
     const revenueRow = db.prepare(`
       SELECT
-        COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
+        COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
         COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
       FROM money_ledger ml
       WHERE ml.status = 'POSTED'
@@ -1151,7 +1620,7 @@ router.get('/motivation/day', (req, res) => {
         AND DATE(ml.business_day) = ?
         AND ml.seller_id IS NOT NULL
         AND ml.seller_id > 0
-        AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED')
+        AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED')
       GROUP BY ml.seller_id
     `).all(day);
     
@@ -1665,7 +2134,7 @@ router.get('/sellers', (req, res) => {
         -- PAID (SELLER_SHIFT)
         COALESCE(SUM(CASE 
           WHEN ml.kind = 'SELLER_SHIFT' 
-            AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED')
+            AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED')
           THEN ml.amount 
           ELSE 0 
         END), 0) AS revenue_paid_raw,
@@ -1701,7 +2170,7 @@ router.get('/sellers', (req, res) => {
         AND ml.seller_id > 0
       GROUP BY u.id
       ORDER BY 
-        (COALESCE(SUM(CASE WHEN ml.kind = 'SELLER_SHIFT' AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0)
+        (COALESCE(SUM(CASE WHEN ml.kind = 'SELLER_SHIFT' AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0)
          - COALESCE(SUM(CASE WHEN ml.kind = 'SELLER_SHIFT' AND ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0)
          + COALESCE(SUM(CASE WHEN ml.kind = 'EXPECT_PAYMENT' THEN ml.amount ELSE 0 END), 0)) DESC
     `).all();
@@ -1835,44 +2304,105 @@ router.put('/sellers/:id/zone', (req, res) => {
 // =====================
 // GET /api/owner/money/collected-today-by-tripday
 // "Собрано сегодня" (по ДАТЕ ОПЛАТЫ), сгруппировано по ДАТЕ РЕЙСА (presales.business_day)
+// total_* из money_ledger, cash/card_* из sales_transactions_canonical
 // =====================
 router.get('/money/collected-today-by-tripday', (req, res) => {
   try {
     const todayExpr = "DATE('now','localtime')";
     const tomorrowExpr = "DATE('now','localtime','+1 day')";
     const day2Expr = "DATE('now','localtime','+2 day')";
+    const tripDayExpr = getTripDayExpr();
 
-    // Из money_ledger по ДАТЕ ОПЛАТЫ = сегодня, группируем по presales.business_day (дата рейса)
-    const row = db
+    // Total из money_ledger (по ДАТЕ ОПЛАТЫ = сегодня, группируем по tripDayExpr)
+    const totalRow = db
       .prepare(
         `SELECT
-           COALESCE(SUM(CASE WHEN p.business_day = ${todayExpr} THEN ml.amount ELSE 0 END), 0) AS total_today,
-           COALESCE(SUM(CASE WHEN p.business_day = ${todayExpr} AND ml.method = 'CASH' THEN ml.amount ELSE 0 END), 0) AS cash_today,
-           COALESCE(SUM(CASE WHEN p.business_day = ${todayExpr} AND ml.method = 'CARD' THEN ml.amount ELSE 0 END), 0) AS card_today,
-           COALESCE(SUM(CASE WHEN p.business_day = ${tomorrowExpr} THEN ml.amount ELSE 0 END), 0) AS total_tomorrow,
-           COALESCE(SUM(CASE WHEN p.business_day = ${tomorrowExpr} AND ml.method = 'CASH' THEN ml.amount ELSE 0 END), 0) AS cash_tomorrow,
-           COALESCE(SUM(CASE WHEN p.business_day = ${tomorrowExpr} AND ml.method = 'CARD' THEN ml.amount ELSE 0 END), 0) AS card_tomorrow,
-           COALESCE(SUM(CASE WHEN p.business_day = ${day2Expr} THEN ml.amount ELSE 0 END), 0) AS total_day2,
-           COALESCE(SUM(CASE WHEN p.business_day = ${day2Expr} AND ml.method = 'CASH' THEN ml.amount ELSE 0 END), 0) AS cash_day2,
-           COALESCE(SUM(CASE WHEN p.business_day = ${day2Expr} AND ml.method = 'CARD' THEN ml.amount ELSE 0 END), 0) AS card_day2
+           COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${todayExpr} THEN ml.amount ELSE 0 END), 0) AS total_today,
+           COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${tomorrowExpr} THEN ml.amount ELSE 0 END), 0) AS total_tomorrow,
+           COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${day2Expr} THEN ml.amount ELSE 0 END), 0) AS total_day2
          FROM money_ledger ml
          JOIN presales p ON p.id = ml.presale_id
          WHERE ml.status = 'POSTED'
            AND ml.kind = 'SELLER_SHIFT'
-           AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+           AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
            AND DATE(ml.business_day) = ${todayExpr}`
       )
       .get();
 
-    const totalToday = Number(row?.total_today || 0);
-    const cashToday = Number(row?.cash_today || 0);
-    const cardToday = Number(row?.card_today || 0);
-    const totalTomorrow = Number(row?.total_tomorrow || 0);
-    const cashTomorrow = Number(row?.cash_tomorrow || 0);
-    const cardTomorrow = Number(row?.card_tomorrow || 0);
-    const totalDay2 = Number(row?.total_day2 || 0);
-    const cashDay2 = Number(row?.cash_day2 || 0);
-    const cardDay2 = Number(row?.card_day2 || 0);
+    // Cash/Card из sales_transactions_canonical (MIXED уже разнесён)
+    let usedStc = false;
+    let cashToday = 0, cardToday = 0;
+    let cashTomorrow = 0, cardTomorrow = 0;
+    let cashDay2 = 0, cardDay2 = 0;
+
+    try {
+      const stcExists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`).get();
+      if (stcExists) {
+        const stcCols = db.prepare(`PRAGMA table_info(sales_transactions_canonical)`).all().map(r => r.name);
+        const hasCashAmt = stcCols.includes('cash_amount');
+        const hasCardAmt = stcCols.includes('card_amount');
+        const hasBusinessDay = stcCols.includes('business_day');
+
+        if (hasCashAmt && hasCardAmt && hasBusinessDay) {
+          const stcRow = db
+            .prepare(
+              `SELECT
+                 COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${todayExpr} THEN stc.cash_amount ELSE 0 END), 0) AS cash_today,
+                 COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${todayExpr} THEN stc.card_amount ELSE 0 END), 0) AS card_today,
+                 COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${tomorrowExpr} THEN stc.cash_amount ELSE 0 END), 0) AS cash_tomorrow,
+                 COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${tomorrowExpr} THEN stc.card_amount ELSE 0 END), 0) AS card_tomorrow,
+                 COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${day2Expr} THEN stc.cash_amount ELSE 0 END), 0) AS cash_day2,
+                 COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${day2Expr} THEN stc.card_amount ELSE 0 END), 0) AS card_day2
+               FROM sales_transactions_canonical stc
+               JOIN presales p ON p.id = stc.presale_id
+               WHERE stc.status = 'VALID'
+                 AND DATE(stc.business_day) = ${todayExpr}`
+            )
+            .get();
+          cashToday = Number(stcRow?.cash_today || 0);
+          cardToday = Number(stcRow?.card_today || 0);
+          cashTomorrow = Number(stcRow?.cash_tomorrow || 0);
+          cardTomorrow = Number(stcRow?.card_tomorrow || 0);
+          cashDay2 = Number(stcRow?.cash_day2 || 0);
+          cardDay2 = Number(stcRow?.card_day2 || 0);
+          usedStc = true;
+        }
+      }
+    } catch {
+      // Fallback below
+    }
+
+    // Fallback: если stc недоступна, читаем cash/card из money_ledger (старая логика)
+    if (!usedStc) {
+      const cashCardExpr = getCashCardCaseExprs();
+      const mlRow = db
+        .prepare(
+          `SELECT
+             COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${todayExpr} THEN ${cashCardExpr.cash} ELSE 0 END), 0) AS cash_today,
+             COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${todayExpr} THEN ${cashCardExpr.card} ELSE 0 END), 0) AS card_today,
+             COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${tomorrowExpr} THEN ${cashCardExpr.cash} ELSE 0 END), 0) AS cash_tomorrow,
+             COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${tomorrowExpr} THEN ${cashCardExpr.card} ELSE 0 END), 0) AS card_tomorrow,
+             COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${day2Expr} THEN ${cashCardExpr.cash} ELSE 0 END), 0) AS cash_day2,
+             COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${day2Expr} THEN ${cashCardExpr.card} ELSE 0 END), 0) AS card_day2
+           FROM money_ledger ml
+           JOIN presales p ON p.id = ml.presale_id
+           WHERE ml.status = 'POSTED'
+             AND ml.kind = 'SELLER_SHIFT'
+             AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+             AND DATE(ml.business_day) = ${todayExpr}`
+        )
+        .get();
+      cashToday = Number(mlRow?.cash_today || 0);
+      cardToday = Number(mlRow?.card_today || 0);
+      cashTomorrow = Number(mlRow?.cash_tomorrow || 0);
+      cardTomorrow = Number(mlRow?.card_tomorrow || 0);
+      cashDay2 = Number(mlRow?.cash_day2 || 0);
+      cardDay2 = Number(mlRow?.card_day2 || 0);
+    }
+
+    const totalToday = Number(totalRow?.total_today || 0);
+    const totalTomorrow = Number(totalRow?.total_tomorrow || 0);
+    const totalDay2 = Number(totalRow?.total_day2 || 0);
 
     return res.json({
       ok: true,
