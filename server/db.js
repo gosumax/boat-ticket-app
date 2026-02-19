@@ -409,6 +409,103 @@ if (presalesSlotUidCheck.count === 0) {
     console.log('[PRESALES_PAYMENT] Payment columns check/add skipped (table may not exist yet):', e?.message || e);
   }
 
+  // ONE-TIME PRESALES BUSINESS_DAY COLUMN ADDITION - RUN ONLY ONCE
+  // Add business_day column to presales table for correct Owner "Money" pending-by-trip-day calculation
+  // This ensures pending presales are grouped by trip date, not by creation date
+  const presalesBusinessDayCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'presales_business_day_v1'").get();
+  if (presalesBusinessDayCheck.count === 0) {
+    console.log('[PRESALES_BUSINESS_DAY] Running one-time presales business_day column addition...');
+    
+    try {
+      const presalesCols = db.prepare("PRAGMA table_info(presales)").all().map(r => r.name);
+      if (!presalesCols.includes('business_day')) {
+        db.prepare("ALTER TABLE presales ADD COLUMN business_day TEXT NULL").run();
+        console.log('[PRESALES_BUSINESS_DAY] Added business_day column to presales table');
+      } else {
+        console.log('[PRESALES_BUSINESS_DAY] business_day column already exists in presales table');
+      }
+      
+      // Mark that we've run this migration
+      db.prepare("INSERT INTO settings (key, value) VALUES ('presales_business_day_v1', 'true')").run();
+      console.log('[PRESALES_BUSINESS_DAY] Column addition completed and marked as done');
+    } catch (error) {
+      console.log('[PRESALES_BUSINESS_DAY] Column addition failed:', error.message);
+    }
+  } else {
+    console.log('[PRESALES_BUSINESS_DAY] business_day column addition already ran, skipping...');
+  }
+
+  // ONE-TIME PRESALES BUSINESS_DAY BACKFILL - RUN ONLY ONCE
+  // Fill business_day for existing presales based on slot trip_date
+  const presalesBusinessDayBackfillCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'presales_business_day_backfill_v1'").get();
+  if (presalesBusinessDayBackfillCheck.count === 0) {
+    console.log('[PRESALES_BUSINESS_DAY_BACKFILL] Running one-time presales business_day backfill...');
+    
+    try {
+      // Step 1: Update presales with generated slots (slot_uid = 'generated:N')
+      // Set business_day = generated_slots.trip_date
+      const updateGeneratedResult = db.prepare(`
+        UPDATE presales
+        SET business_day = (
+          SELECT gs.trip_date
+          FROM generated_slots gs
+          WHERE ('generated:' || gs.id) = presales.slot_uid
+        )
+        WHERE (business_day IS NULL OR business_day = '')
+          AND slot_uid LIKE 'generated:%'
+          AND EXISTS (
+            SELECT 1 FROM generated_slots gs 
+            WHERE ('generated:' || gs.id) = presales.slot_uid
+          )
+      `).run();
+      console.log(`[PRESALES_BUSINESS_DAY_BACKFILL] updated_generated=${updateGeneratedResult.changes}`);
+
+      // Step 2: Update presales with manual slots (boat_slots with trip_date)
+      // Note: boat_slots may not have trip_date, so we check both boat_slot_id FK and manual: slot_uid
+      try {
+        const updateManualResult = db.prepare(`
+          UPDATE presales
+          SET business_day = (
+            SELECT COALESCE(bs.trip_date, DATE(presales.created_at))
+            FROM boat_slots bs
+            WHERE bs.id = presales.boat_slot_id
+          )
+          WHERE (business_day IS NULL OR business_day = '')
+            AND presales.boat_slot_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM boat_slots bs 
+              WHERE bs.id = presales.boat_slot_id
+            )
+        `).run();
+        console.log(`[PRESALES_BUSINESS_DAY_BACKFILL] updated_manual=${updateManualResult.changes}`);
+      } catch (manualErr) {
+        console.log('[PRESALES_BUSINESS_DAY_BACKFILL] manual slot update skipped:', manualErr.message);
+      }
+
+      // Step 3: Fallback - set business_day = DATE(created_at) for remaining rows
+      const fallbackResult = db.prepare(`
+        UPDATE presales
+        SET business_day = DATE(created_at)
+        WHERE (business_day IS NULL OR business_day = '')
+      `).run();
+      console.log(`[PRESALES_BUSINESS_DAY_BACKFILL] fallback_created_at=${fallbackResult.changes}`);
+
+      // Step 4: Diagnostic - count rows still missing business_day
+      const missingCount = db.prepare(`
+        SELECT COUNT(1) as cnt FROM presales WHERE business_day IS NULL OR business_day = ''
+      `).get();
+      console.log(`[PRESALES_BUSINESS_DAY] missing_after_backfill=${missingCount.cnt}`);
+
+      // Mark that we've run this backfill
+      db.prepare("INSERT INTO settings (key, value) VALUES ('presales_business_day_backfill_v1', 'true')").run();
+      console.log('[PRESALES_BUSINESS_DAY_BACKFILL] Backfill completed and marked as done');
+    } catch (error) {
+      console.log('[PRESALES_BUSINESS_DAY_BACKFILL] Backfill failed:', error.message);
+    }
+  } else {
+    console.log('[PRESALES_BUSINESS_DAY_BACKFILL] business_day backfill already ran, skipping...');
+  }
+
   // ONE-TIME BOAT TYPE COLUMN ADDITION - RUN ONLY ONCE
   // Add type column to boats table to support different boat types including 'banana'
   const boatTypeCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'boat_type_column_v1'").get();
