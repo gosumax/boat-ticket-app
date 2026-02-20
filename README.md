@@ -147,4 +147,4 @@ This command will:
 - Big buttons for easy touch interaction
 - Minimal text with clear visual hierarchy
 - Clean and readable UI
-- No authentication or complex validation
+- No authentication or complex validation// trigger  
