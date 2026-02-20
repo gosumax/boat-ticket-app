@@ -50,7 +50,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerName: 'Test Client',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow // Use tomorrow since slots are created with tomorrow's date
+          tripDate: testData.today // Use today (which equals slot's trip_date)
         });
       
       expect(saleRes.status).toBe(201);
@@ -66,7 +66,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
       const dispatcherSlotsRes = await request(app)
         .get('/api/selling/dispatcher/slots')
         .set('Authorization', `Bearer ${dispatcherToken}`)
-        .query({ tripDate: testData.tomorrow });
+        .query({ tripDate: testData.today });
       
       expect(dispatcherSlotsRes.status).toBe(200);
       const slots = Array.isArray(dispatcherSlotsRes.body) ? dispatcherSlotsRes.body : [];
@@ -83,7 +83,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerName: 'Test Client 2',
           customerPhone: '79991234568',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -110,7 +110,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerName: 'Test Client 3',
           customerPhone: '79991234569',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -137,7 +137,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerName: 'Adult Only',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -164,7 +164,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerName: 'Child Only',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -189,7 +189,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerName: 'Teen Only',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -217,7 +217,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerName: 'Group Client',
           customerPhone: '79991234567',
           numberOfSeats: 3,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -251,7 +251,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerPhone: '79991234567',
           numberOfSeats: 1,
           prepaymentAmount: 500,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -280,7 +280,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerPhone: '79991234567',
           numberOfSeats: 1,
           prepaymentAmount: 0,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -310,7 +310,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerPhone: '79991234567',
           numberOfSeats: 1,
           prepaymentAmount: 0,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -343,7 +343,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerName: 'Instant Sync',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -370,7 +370,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerName: 'First Client',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(sale1Res.status).toBe(201);
@@ -384,7 +384,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerName: 'Second Client',
           customerPhone: '79991234568',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(sale2Res.status).toBe(201);
@@ -410,7 +410,7 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerName: 'Slot 1 Client',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       // Sale in slot 3
@@ -422,14 +422,14 @@ describe('Seller-Dispatcher Sync: Sales API', () => {
           customerName: 'Slot 3 Client',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       // Dispatcher active trips shows both slots
       const dispatcherSlotsRes = await request(app)
         .get('/api/selling/dispatcher/slots')
         .set('Authorization', `Bearer ${dispatcherToken}`)
-        .query({ tripDate: testData.tomorrow });
+        .query({ tripDate: testData.today });
       
       expect(dispatcherSlotsRes.status).toBe(200);
       

@@ -1,61 +1,54 @@
 // 04-presale-payment-update.test.js — Update presale payment
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { getTestDb, getTableCounts } from '../_helpers/dbReset.js';
-import { loadSeedData } from '../_helpers/loadSeedData.js';
+import { resetTestDb, getTestDb, getTableCounts } from '../_helpers/dbReset.js';
+import { seedBasicData } from '../_helpers/seedBasic.js';
 import { makeApp } from '../_helpers/makeApp.js';
 import { httpLog } from '../_helpers/httpLog.js';
 
 let app, db, seedData, token, presaleId;
 
 beforeAll(async () => {
-  try {
-    httpLog.clear();
-    db = getTestDb();
-    seedData = loadSeedData();
-    app = await makeApp();
-    
-    // Login sellerA
-    const loginRes = await request(app)
-      .post('/api/auth/login')
-      .send({ username: 'sellerA', password: 'password123' });
-    token = loginRes.body.token;
-    
-    console.log('[BEFOREALL DEBUG] Token:', token ? 'OK' : 'MISSING');
-    
-    // Create a presale to test payment update
-    const presalePayload = {
-      slotUid: `manual:${seedData.slots.manual.slot2}`,
-      customerName: 'Payment Test Customer',
-      customerPhone: '+79991234567',
-      numberOfSeats: 1,
-      prepaymentAmount: 500
-    };
-    
-    console.log('[BEFOREALL DEBUG] Creating presale with payload:', JSON.stringify(presalePayload, null, 2));
-    
-    const presaleRes = await request(app)
-      .post('/api/selling/presales')
-      .set('Authorization', `Bearer ${token}`)
-      .send(presalePayload);
-    
-    console.log('[BEFOREALL DEBUG] Presale creation status:', presaleRes.status);
-    console.log('[BEFOREALL DEBUG] Presale response body:', JSON.stringify(presaleRes.body, null, 2));
-    
-    if (presaleRes.status !== 201) {
-      console.log('\n[SETUP FAIL] Create presale for payment update test');
-      console.log('Payload:', JSON.stringify(presalePayload, null, 2));
-      console.log('Response:', JSON.stringify(presaleRes.body, null, 2));
-      throw new Error(`Presale creation failed with status ${presaleRes.status}`);
-    }
-    
-    presaleId = presaleRes.body.presale.id;
-    console.log('[BEFOREALL DEBUG] Presale ID:', presaleId);
-  } catch (e) {
-    console.error('[BEFOREALL ERROR]', e.message);
-    console.error('[BEFOREALL STACK]', e.stack);
-    throw e;
+  httpLog.clear();
+  
+  // STEP 1: Reset test DB (delete + recreate from schema_prod.sql)
+  resetTestDb();
+  
+  // STEP 2: Initialize app (imports server/db.js which will create tables)
+  app = await makeApp();
+  
+  // STEP 3: Get DB connection and seed test data
+  db = getTestDb();
+  seedData = await seedBasicData(db);
+  
+  // Login sellerA
+  const loginRes = await request(app)
+    .post('/api/auth/login')
+    .send({ username: 'sellerA', password: 'password123' });
+  token = loginRes.body.token;
+  
+  // Create a presale to test payment update
+  const presalePayload = {
+    slotUid: `manual:${seedData.slots.manual.slot2}`,
+    customerName: 'Payment Test Customer',
+    customerPhone: '+79991234567',
+    numberOfSeats: 1,
+    prepaymentAmount: 500
+  };
+  
+  const presaleRes = await request(app)
+    .post('/api/selling/presales')
+    .set('Authorization', `Bearer ${token}`)
+    .send(presalePayload);
+  
+  if (presaleRes.status !== 201) {
+    console.log('\n[SETUP FAIL] Create presale for payment update test');
+    console.log('Payload:', JSON.stringify(presalePayload, null, 2));
+    console.log('Response:', JSON.stringify(presaleRes.body, null, 2));
+    throw new Error(`Presale creation failed with status ${presaleRes.status}`);
   }
+  
+  presaleId = presaleRes.body.presale.id;
 });
 
 describe('SELLER PRESALE PAYMENT UPDATE', () => {

@@ -547,20 +547,14 @@ router.delete('/schedule-template-items/:id', authenticateToken, canDispatchMana
 // Generate slots from schedule template items for a date range
 router.post('/schedule-template-items/generate', authenticateToken, canDispatchManageSlots, (req, res) => {
   try {
-    const { date_from, date_to } = req.body;
+    let { date_from, date_to } = req.body;
     
+    // Auto-default dates if not provided: today .. today+30
     if (!date_from || !date_to) {
-      return res.status(400).json({ 
-        ok: false, 
-        code: 'VALIDATION_ERROR', 
-        message: 'date_from and date_to are required',
-        details: {
-          missing_fields: [
-            !date_from && 'date_from',
-            !date_to && 'date_to'
-          ].filter(Boolean)
-        }
-      });
+      const defaultDates = db.prepare("SELECT DATE('now','localtime') as today, DATE('now','localtime','+30 day') as today_plus_30").get();
+      if (!date_from) date_from = defaultDates.today;
+      if (!date_to) date_to = defaultDates.today_plus_30;
+      console.log(`[GENERATE_SLOTS] Auto-defaulted dates: ${date_from} to ${date_to}`);
     }
     
     // Validate date format (YYYY-MM-DD)
@@ -670,7 +664,7 @@ router.post('/schedule-template-items/generate', authenticateToken, canDispatchM
               seller_cutoff_minutes, dispatcher_cutoff_minutes
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
-            item.id, // Use the item ID as schedule_template_id
+            item.schedule_template_id, // FK to schedule_templates.id
             tripDate,
             item.boat_id,
             item.departure_time,
@@ -823,3 +817,4 @@ router.delete('/trips-for-deleted-boats', authenticateToken, isAdmin, (req, res)
 });
 
 export default router;
+

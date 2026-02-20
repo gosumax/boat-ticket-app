@@ -1,7 +1,8 @@
 // seller-dispatcher-sync.test.js — Integration test: seller sale syncs to dispatcher view via DB
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import request from 'supertest';
-import { getTestDb } from '../_helpers/dbReset.js';
+import { resetTestDb, getTestDb } from '../_helpers/dbReset.js';
+import { seedBasicData } from '../_helpers/seedBasic.js';
 import { loadSeedData } from '../_helpers/loadSeedData.js';
 import { makeApp } from '../_helpers/makeApp.js';
 
@@ -9,30 +10,53 @@ describe('INTEGRATION: seller → dispatcher sync', () => {
   let app, db, seedData;
   let sellerToken, dispatcherToken;
   let slotUid, initialSeatsLeft;
+  let sellerAId, dispatcherId; // Actual IDs from DB
 
   beforeAll(async () => {
+    // Reset DB and re-seed for clean state
+    resetTestDb();
+    db = getTestDb();
+    const freshSeedData = await seedBasicData(db);
+    db.close();
+    
+    // Reopen after seed
     db = getTestDb();
     seedData = loadSeedData();
+    
+    // Get actual IDs from fresh seed data
+    sellerAId = freshSeedData.users.sellerA.id;
+    dispatcherId = freshSeedData.users.dispatcher.id;
+    console.log('[TEST] Fresh IDs - sellerA:', sellerAId, 'dispatcher:', dispatcherId);
+    
     app = await makeApp();
+    
+    // Verify slot capacity
+    const slotRow = db.prepare('SELECT seats_left, capacity FROM boat_slots WHERE id = ?').get(seedData.slots.manual.slot9);
+    console.log('[TEST] Slot9 state - seats_left:', slotRow.seats_left, 'capacity:', slotRow.capacity);
+    initialSeatsLeft = slotRow.seats_left;
 
     // 1. Login seller
     const sellerLogin = await request(app)
       .post('/api/auth/login')
       .send({ username: 'sellerA', password: 'password123' });
     sellerToken = sellerLogin.body.token;
+    
+    if (!sellerToken) {
+      throw new Error('Failed to login sellerA: ' + JSON.stringify(sellerLogin.body));
+    }
 
     // 2. Login dispatcher
     const dispatcherLogin = await request(app)
       .post('/api/auth/login')
       .send({ username: 'dispatcher1', password: 'password123' });
     dispatcherToken = dispatcherLogin.body.token;
-
-    // 3. Use manual slot9 (capacity 15, from seedBasic.js)
-    slotUid = `manual:${seedData.slots.manual.slot9}`;
     
-    // Get initial seats_left from DB
-    const slotRow = db.prepare('SELECT seats_left FROM boat_slots WHERE id = ?').get(seedData.slots.manual.slot9);
-    initialSeatsLeft = slotRow.seats_left;
+    if (!dispatcherToken) {
+      throw new Error('Failed to login dispatcher1: ' + JSON.stringify(dispatcherLogin.body));
+    }
+
+    // 3. Use manual slot9 (capacity 15)
+    slotUid = `manual:${seedData.slots.manual.slot9}`;
   });
 
   it('Seller sale must reflect in DB (presales, tickets, slot inventory)', async () => {
@@ -48,7 +72,8 @@ describe('INTEGRATION: seller → dispatcher sync', () => {
         customerPhone: '+79990000099',
         numberOfSeats: 4,
         tickets: { adult: 2, teen: 0, child: 2 },
-        prepaymentAmount: 1000
+        prepaymentAmount: 1000,
+        tripDate: new Date().toISOString().split('T')[0] // Add tripDate for manual slot
       });
 
     expect(create.status).toBe(201);
@@ -75,7 +100,7 @@ describe('INTEGRATION: seller → dispatcher sync', () => {
     expect(presaleRow.total_price).toBe(totalPrice);
     expect(presaleRow.prepayment_amount).toBe(prepaymentAmount);
     expect(presaleRow.status).toBe('ACTIVE');
-    expect(presaleRow.seller_id).toBe(1); // sellerA id
+    expect(presaleRow.seller_id).toBe(sellerAId); // sellerA id
 
     // Compute remaining from DB
     const dbRemaining = presaleRow.total_price - presaleRow.prepayment_amount;
@@ -193,7 +218,10 @@ describe('INTEGRATION: seller → dispatcher sync', () => {
   });
 
   it('Dispatcher sale with sellerId must set presales.seller_id correctly', async () => {
-    // Create presale as dispatcher with sellerId = 1 (sellerA)
+    // Reset slot capacity before this test
+    db.prepare('UPDATE boat_slots SET seats_left = capacity WHERE id = ?').run(seedData.slots.manual.slot9);
+    
+    // Create presale as dispatcher with sellerId = sellerA
     const create = await request(app)
       .post('/api/selling/presales')
       .set('Authorization', `Bearer ${dispatcherToken}`)
@@ -204,7 +232,8 @@ describe('INTEGRATION: seller → dispatcher sync', () => {
         numberOfSeats: 2,
         tickets: { adult: 2, teen: 0, child: 0 },
         prepaymentAmount: 500,
-        sellerId: 1  // sellerA id
+        sellerId: sellerAId,  // sellerA id
+        tripDate: new Date().toISOString().split('T')[0] // Add tripDate for manual slot
       });
 
     expect(create.status).toBe(201);
@@ -221,7 +250,7 @@ describe('INTEGRATION: seller → dispatcher sync', () => {
     `).get(presaleId);
 
     expect(presaleRow).toBeDefined();
-    expect(presaleRow.seller_id).toBe(1); // sellerA id
+    expect(presaleRow.seller_id).toBe(sellerAId); // sellerA id
     expect(presaleRow.customer_name).toBe('Dispatcher Test Customer');
     expect(presaleRow.number_of_seats).toBe(2);
 
@@ -253,6 +282,9 @@ describe('INTEGRATION: seller → dispatcher sync', () => {
   });
 
   it('Dispatcher sale WITHOUT sellerId must use dispatcher id as fallback', async () => {
+    // Reset slot capacity before this test
+    db.prepare('UPDATE boat_slots SET seats_left = capacity WHERE id = ?').run(seedData.slots.manual.slot9);
+    
     // Create presale as dispatcher WITHOUT sellerId param
     const create = await request(app)
       .post('/api/selling/presales')
@@ -263,7 +295,8 @@ describe('INTEGRATION: seller → dispatcher sync', () => {
         customerPhone: '+79990000066',
         numberOfSeats: 1,
         tickets: { adult: 1, teen: 0, child: 0 },
-        prepaymentAmount: 0
+        prepaymentAmount: 0,
+        tripDate: new Date().toISOString().split('T')[0] // Add tripDate for manual slot
         // NO sellerId field
       });
 
@@ -281,11 +314,11 @@ describe('INTEGRATION: seller → dispatcher sync', () => {
     `).get(presaleId);
 
     expect(presaleRow).toBeDefined();
-    expect(presaleRow.seller_id).toBe(3); // dispatcher1 id from seed
+    expect(presaleRow.seller_id).toBe(dispatcherId); // dispatcher1 id from seed
     expect(presaleRow.customer_name).toBe('Dispatcher Fallback Test');
 
     console.log('\n[DISPATCHER SALE WITHOUT SELLER_ID TEST]');
     console.log('Presale ID:', presaleId);
-    console.log('Seller ID (DB):', presaleRow.seller_id, '(expected: dispatcher1 id = 3)');
+    console.log('Seller ID (DB):', presaleRow.seller_id, '(expected: dispatcher1 id =', dispatcherId, ')');
   });
 });

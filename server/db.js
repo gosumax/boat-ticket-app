@@ -165,6 +165,20 @@ try {
     }
   }
 
+  // Check if users table needs migration (add zone column for seller motivation)
+  const usersColumns = db.prepare("PRAGMA table_info(users)").all();
+  const hasZoneColumn = usersColumns.some(column => column.name === 'zone');
+
+  if (!hasZoneColumn) {
+    try {
+      db.exec('ALTER TABLE users ADD COLUMN zone TEXT NULL');
+      console.log('Added zone column to users table');
+    } catch (error) {
+      // Column might already exist, ignore error
+      console.log('zone column may already exist in users table');
+    }
+  }
+
   // ONE-TIME DATA NORMALIZATION - RUN ONLY ONCE
   // Check if we need to normalize existing data
   const normalizationCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'data_normalized_v1'").get();
@@ -504,6 +518,111 @@ if (presalesSlotUidCheck.count === 0) {
     }
   } else {
     console.log('[PRESALES_BUSINESS_DAY_BACKFILL] business_day backfill already ran, skipping...');
+  }
+
+  // ONE-TIME PRESALES ZONE/GPS COLUMNS ADDITION - for motivation analytics
+  // zone_at_sale: seller's zone at sale time (historical for correct points)
+  // lat_at_sale, lng_at_sale: GPS coordinates at sale time (for map)
+  try {
+    const presalesCols = db.prepare("PRAGMA table_info(presales)").all().map(r => r.name);
+    const needsZone = !presalesCols.includes('zone_at_sale');
+    const needsLat = !presalesCols.includes('lat_at_sale');
+    const needsLng = !presalesCols.includes('lng_at_sale');
+
+    if (needsZone) {
+      db.prepare("ALTER TABLE presales ADD COLUMN zone_at_sale TEXT NULL").run();
+      console.log('[PRESALES_ZONE_GPS] Added zone_at_sale column');
+    }
+    if (needsLat) {
+      db.prepare("ALTER TABLE presales ADD COLUMN lat_at_sale REAL NULL").run();
+      console.log('[PRESALES_ZONE_GPS] Added lat_at_sale column');
+    }
+    if (needsLng) {
+      db.prepare("ALTER TABLE presales ADD COLUMN lng_at_sale REAL NULL").run();
+      console.log('[PRESALES_ZONE_GPS] Added lng_at_sale column');
+    }
+  } catch (e) {
+    console.log('[PRESALES_ZONE_GPS] Zone/GPS columns check/add skipped:', e?.message || e);
+  }
+
+  // ONE-TIME SELLER MOTIVATION STATE TABLE - for calibration, level, streak tracking
+  try {
+    const tableExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='seller_motivation_state'").get();
+    if (!tableExists) {
+      db.exec(`
+        CREATE TABLE seller_motivation_state (
+          seller_id INTEGER PRIMARY KEY,
+          calibrated INTEGER NOT NULL DEFAULT 0,
+          calibration_worked_days INTEGER NOT NULL DEFAULT 0,
+          calibration_revenue_sum INTEGER NOT NULL DEFAULT 0,
+          current_level TEXT NOT NULL DEFAULT 'NONE',
+          streak_days INTEGER NOT NULL DEFAULT 0,
+          last_eval_day TEXT NULL,
+          week_id TEXT NULL,
+          week_worked_days INTEGER NOT NULL DEFAULT 0,
+          week_revenue_sum INTEGER NOT NULL DEFAULT 0
+        )
+      `);
+      console.log('[SELLER_MOTIVATION_STATE] Created seller_motivation_state table');
+    }
+  } catch (e) {
+    console.log('[SELLER_MOTIVATION_STATE] Table creation skipped:', e?.message || e);
+  }
+
+  // ONE-TIME SELLER SEASON STATS TABLE - for seasonal points accumulation
+  try {
+    const seasonTableExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='seller_season_stats'").get();
+    if (!seasonTableExists) {
+      db.exec(`
+        CREATE TABLE seller_season_stats (
+          seller_id INTEGER NOT NULL,
+          season_id TEXT NOT NULL,
+          revenue_total INTEGER NOT NULL DEFAULT 0,
+          points_total REAL NOT NULL DEFAULT 0,
+          PRIMARY KEY (seller_id, season_id)
+        )
+      `);
+      console.log('[SELLER_SEASON_STATS] Created seller_season_stats table');
+    }
+  } catch (e) {
+    console.log('[SELLER_SEASON_STATS] Table creation skipped:', e?.message || e);
+  }
+
+  // ONE-TIME SELLER DAY STATS TABLE - daily snapshot for deterministic season accumulation
+  try {
+    const dayStatsTableExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='seller_day_stats'").get();
+    if (!dayStatsTableExists) {
+      db.exec(`
+        CREATE TABLE seller_day_stats (
+          business_day TEXT NOT NULL,
+          seller_id INTEGER NOT NULL,
+          revenue_day INTEGER NOT NULL DEFAULT 0,
+          points_day_total REAL NOT NULL DEFAULT 0,
+          PRIMARY KEY (business_day, seller_id)
+        )
+      `);
+      console.log('[SELLER_DAY_STATS] Created seller_day_stats table');
+    }
+  } catch (e) {
+    console.log('[SELLER_DAY_STATS] Table creation skipped:', e?.message || e);
+  }
+
+  // ONE-TIME SELLER SEASON APPLIED DAYS TABLE - idempotency tracking for season accumulation
+  try {
+    const appliedDaysTableExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='seller_season_applied_days'").get();
+    if (!appliedDaysTableExists) {
+      db.exec(`
+        CREATE TABLE seller_season_applied_days (
+          season_id TEXT NOT NULL,
+          business_day TEXT NOT NULL,
+          seller_id INTEGER NOT NULL,
+          PRIMARY KEY (season_id, business_day, seller_id)
+        )
+      `);
+      console.log('[SELLER_SEASON_APPLIED_DAYS] Created seller_season_applied_days table');
+    }
+  } catch (e) {
+    console.log('[SELLER_SEASON_APPLIED_DAYS] Table creation skipped:', e?.message || e);
   }
 
   // ONE-TIME BOAT TYPE COLUMN ADDITION - RUN ONLY ONCE
@@ -1711,4 +1830,91 @@ try {
   }
 } catch (e) {
   console.log('[OWNER_SETTINGS] init failed:', e?.message || e);
+}
+
+/* =========================
+   SHIFT CLOSURES: dispatcher shift close snapshots
+   Stores immutable financial snapshot when dispatcher closes shift.
+========================= */
+try {
+  const shiftClosuresCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'shift_closures_table_v1'").get();
+  if (shiftClosuresCheck.count === 0) {
+    console.log('[SHIFT_CLOSURES] Creating shift_closures table...');
+    
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS shift_closures (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        business_day TEXT NOT NULL UNIQUE,
+        closed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        closed_by INTEGER NOT NULL,
+
+        total_revenue INTEGER NOT NULL DEFAULT 0,
+        collected_total INTEGER NOT NULL DEFAULT 0,
+        collected_cash INTEGER NOT NULL DEFAULT 0,
+        collected_card INTEGER NOT NULL DEFAULT 0,
+
+        refund_total INTEGER NOT NULL DEFAULT 0,
+        refund_cash INTEGER NOT NULL DEFAULT 0,
+        refund_card INTEGER NOT NULL DEFAULT 0,
+
+        net_total INTEGER NOT NULL DEFAULT 0,
+        net_cash INTEGER NOT NULL DEFAULT 0,
+        net_card INTEGER NOT NULL DEFAULT 0,
+
+        deposit_cash INTEGER NOT NULL DEFAULT 0,
+        deposit_card INTEGER NOT NULL DEFAULT 0,
+
+        sellers_json TEXT NULL
+      )
+    `);
+    
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_shift_closures_business_day ON shift_closures(business_day)"); } catch {}
+    try { db.exec("CREATE INDEX IF NOT EXISTS idx_shift_closures_closed_by ON shift_closures(closed_by)"); } catch {}
+    
+    console.log('[SHIFT_CLOSURES] Created shift_closures table');
+    
+    db.prepare("INSERT INTO settings (key, value) VALUES ('shift_closures_table_v1', 'true')").run();
+    console.log('[SHIFT_CLOSURES] Table creation marked as done');
+  } else {
+    console.log('[SHIFT_CLOSURES] shift_closures table already exists, skipping...');
+  }
+} catch (e) {
+  console.log('[SHIFT_CLOSURES] init failed:', e?.message || e);
+}
+
+/* =========================
+   SHIFT CLOSURES V2: add salary columns
+   Salary payout tracking for dispatcher shift close.
+========================= */
+try {
+  const shiftClosuresV2Check = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'shift_closures_v2_salary_columns'").get();
+  if (shiftClosuresV2Check.count === 0) {
+    console.log('[SHIFT_CLOSURES_V2] Adding salary columns to shift_closures table...');
+    
+    const scCols = db.prepare("PRAGMA table_info(shift_closures)").all().map(r => r.name);
+    
+    if (!scCols.includes('salary_due')) {
+      db.exec("ALTER TABLE shift_closures ADD COLUMN salary_due INTEGER NOT NULL DEFAULT 0");
+      console.log('[SHIFT_CLOSURES_V2] Added salary_due column');
+    }
+    if (!scCols.includes('salary_paid_cash')) {
+      db.exec("ALTER TABLE shift_closures ADD COLUMN salary_paid_cash INTEGER NOT NULL DEFAULT 0");
+      console.log('[SHIFT_CLOSURES_V2] Added salary_paid_cash column');
+    }
+    if (!scCols.includes('salary_paid_card')) {
+      db.exec("ALTER TABLE shift_closures ADD COLUMN salary_paid_card INTEGER NOT NULL DEFAULT 0");
+      console.log('[SHIFT_CLOSURES_V2] Added salary_paid_card column');
+    }
+    if (!scCols.includes('salary_paid_total')) {
+      db.exec("ALTER TABLE shift_closures ADD COLUMN salary_paid_total INTEGER NOT NULL DEFAULT 0");
+      console.log('[SHIFT_CLOSURES_V2] Added salary_paid_total column');
+    }
+    
+    db.prepare("INSERT INTO settings (key, value) VALUES ('shift_closures_v2_salary_columns', 'true')").run();
+    console.log('[SHIFT_CLOSURES_V2] Salary columns added and marked as done');
+  } else {
+    console.log('[SHIFT_CLOSURES_V2] Salary columns already exist, skipping...');
+  }
+} catch (e) {
+  console.log('[SHIFT_CLOSURES_V2] migration failed:', e?.message || e);
 }

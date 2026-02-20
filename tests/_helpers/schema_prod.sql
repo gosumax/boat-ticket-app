@@ -1,3 +1,25 @@
+-- Base tables (no FK dependencies)
+CREATE TABLE boats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      is_active INTEGER NOT NULL DEFAULT 1
+    , type TEXT, price_adult REAL NOT NULL DEFAULT 0, price_teen REAL NULL, price_child REAL NOT NULL DEFAULT 0);
+
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('seller', 'dispatcher', 'admin', 'owner')),
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
+CREATE TABLE settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
+-- Tables with FK to boats/users
 CREATE TABLE boat_settings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       boat_id INTEGER NOT NULL UNIQUE REFERENCES boats(id) ON DELETE CASCADE,
@@ -14,15 +36,46 @@ CREATE TABLE boat_slots (
       UNIQUE(boat_id, time)
     );
 
-CREATE TABLE boats (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      is_active INTEGER NOT NULL DEFAULT 1
-    , type TEXT, price_adult REAL NOT NULL DEFAULT 0, price_teen REAL NULL, price_child REAL NOT NULL DEFAULT 0);
+CREATE TABLE schedule_template_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT,
+          boat_id INTEGER REFERENCES boats(id),
+          boat_type TEXT,
+          type TEXT NOT NULL CHECK(type IN ('speed', 'cruise', 'banana')),
+          departure_time TEXT NOT NULL,
+          duration_minutes INTEGER NOT NULL,
+          capacity INTEGER NOT NULL,
+          price_adult INTEGER NOT NULL,
+          price_child INTEGER NOT NULL,
+          price_teen INTEGER,
+          weekdays_mask INTEGER NOT NULL DEFAULT 0,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          schedule_template_id INTEGER REFERENCES schedule_templates(id),
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
 
+CREATE TABLE schedule_templates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          weekday INTEGER NOT NULL CHECK(weekday >= 1 AND weekday <= 7),
+          time TEXT NOT NULL,
+          product_type TEXT NOT NULL CHECK(product_type IN ('speed', 'cruise', 'banana')),
+          boat_id INTEGER REFERENCES boats(id),
+          boat_type TEXT,
+          capacity INTEGER NOT NULL,
+          price_adult INTEGER NOT NULL,
+          price_child INTEGER NOT NULL,
+          price_teen INTEGER,
+          duration_minutes INTEGER NOT NULL,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+-- Tables with FK to schedule_template_items
 CREATE TABLE "generated_slots" (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      schedule_template_id INTEGER NOT NULL REFERENCES schedule_template_items(id),
+      schedule_template_id INTEGER NOT NULL REFERENCES schedule_templates(id),
       trip_date TEXT NOT NULL CHECK(length(trip_date) = 10),
       boat_id INTEGER NOT NULL REFERENCES boats(id),
       time TEXT NOT NULL CHECK(length(time) = 5),
@@ -157,46 +210,6 @@ CREATE TABLE sales_transactions_canonical (
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
       );
 
-CREATE TABLE schedule_template_items (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT,
-          boat_id INTEGER REFERENCES boats(id),
-          boat_type TEXT,
-          type TEXT NOT NULL CHECK(type IN ('speed', 'cruise', 'banana')),
-          departure_time TEXT NOT NULL,
-          duration_minutes INTEGER NOT NULL,
-          capacity INTEGER NOT NULL,
-          price_adult INTEGER NOT NULL,
-          price_child INTEGER NOT NULL,
-          price_teen INTEGER,
-          weekdays_mask INTEGER NOT NULL DEFAULT 0, -- bitmask for weekdays (mon=1, tue=2, wed=4, thu=8, fri=16, sat=32, sun=64)
-          is_active INTEGER NOT NULL DEFAULT 1,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-CREATE TABLE schedule_templates (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          weekday INTEGER NOT NULL CHECK(weekday >= 1 AND weekday <= 7),
-          time TEXT NOT NULL,
-          product_type TEXT NOT NULL CHECK(product_type IN ('speed', 'cruise', 'banana')),
-          boat_id INTEGER REFERENCES boats(id),
-          boat_type TEXT,
-          capacity INTEGER NOT NULL,
-          price_adult INTEGER NOT NULL,
-          price_child INTEGER NOT NULL,
-          price_teen INTEGER,
-          duration_minutes INTEGER NOT NULL,
-          is_active INTEGER NOT NULL DEFAULT 1,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-CREATE TABLE settings (
-      key TEXT PRIMARY KEY,
-      value TEXT
-    );
-
 CREATE TABLE tickets (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           presale_id INTEGER NOT NULL REFERENCES presales(id),
@@ -230,15 +243,6 @@ CREATE TABLE trip_templates (
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
           );
-
-CREATE TABLE users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('seller', 'dispatcher', 'admin', 'owner')),
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
 
 ;
 
@@ -379,6 +383,32 @@ CREATE TRIGGER validate_generated_slots_insert
           RAISE(ABORT, 'price_teen must be greater than or equal to 0')
       END;
     END;
+
+-- Shift closures for dispatcher shift close snapshot
+CREATE TABLE IF NOT EXISTS shift_closures (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  business_day TEXT NOT NULL UNIQUE,
+  closed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  closed_by INTEGER NOT NULL,
+
+  total_revenue INTEGER NOT NULL DEFAULT 0,
+  collected_total INTEGER NOT NULL DEFAULT 0,
+  collected_cash INTEGER NOT NULL DEFAULT 0,
+  collected_card INTEGER NOT NULL DEFAULT 0,
+
+  refund_total INTEGER NOT NULL DEFAULT 0,
+  refund_cash INTEGER NOT NULL DEFAULT 0,
+  refund_card INTEGER NOT NULL DEFAULT 0,
+
+  net_total INTEGER NOT NULL DEFAULT 0,
+  net_cash INTEGER NOT NULL DEFAULT 0,
+  net_card INTEGER NOT NULL DEFAULT 0,
+
+  deposit_cash INTEGER NOT NULL DEFAULT 0,
+  deposit_card INTEGER NOT NULL DEFAULT 0,
+
+  sellers_json TEXT NULL
+);
 
 CREATE TRIGGER validate_generated_slots_update 
     BEFORE UPDATE ON generated_slots

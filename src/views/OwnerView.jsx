@@ -41,6 +41,10 @@ function OwnerComparePeriodsView() {
   const [boats, setBoats] = useState([]);
   const [sellers, setSellers] = useState([]);
 
+  // Period summary state (for revenue mode)
+  const [periodSummary, setPeriodSummary] = useState(null);
+  const [periodSummaryBusy, setPeriodSummaryBusy] = useState(false);
+
   // Load boats list
   useEffect(() => {
     const loadBoats = async () => {
@@ -71,6 +75,25 @@ function OwnerComparePeriodsView() {
     if (compareMode === 'sellers') loadSellers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compareMode]);
+
+  // Load period summary (for revenue mode)
+  useEffect(() => {
+    const loadPeriodSummary = async () => {
+      if (compareMode !== 'revenue') return;
+      if (!fromA || !toA || !fromB || !toB) return;
+      setPeriodSummaryBusy(true);
+      try {
+        const url = `/owner/money/compare-periods?fromA=${encodeURIComponent(fromA)}&toA=${encodeURIComponent(toA)}&fromB=${encodeURIComponent(fromB)}&toB=${encodeURIComponent(toB)}`;
+        const json = await apiClient.request(url, { method: 'GET' });
+        setPeriodSummary(json?.data || null);
+      } catch {
+        setPeriodSummary(null);
+      } finally {
+        setPeriodSummaryBusy(false);
+      }
+    };
+    loadPeriodSummary();
+  }, [compareMode, fromA, toA, fromB, toB]);
 
   return (
     <div className="p-4 pb-24 space-y-4">
@@ -141,6 +164,14 @@ function OwnerComparePeriodsView() {
         boatId={selectedBoatId}
         sellerId={selectedSellerId}
       />
+
+      {/* Period Summary Cards (revenue mode only) */}
+      {compareMode === 'revenue' && (
+        <PeriodSummaryCards
+          data={periodSummary}
+          busy={periodSummaryBusy}
+        />
+      )}
     </div>
   );
 }
@@ -390,6 +421,178 @@ function formatRUB(v) {
   } catch {
     return `${Math.round(n)} ₽`;
   }
+}
+
+/**
+ * Period Summary Cards — shows cash/card breakdown for each period
+ */
+function PeriodSummaryCards({ data, busy }) {
+  if (busy) {
+    return (
+      <div className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-500">
+        Загрузка сводки...
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  const periodA = data.periodA || {};
+  const periodB = data.periodB || {};
+  const delta = data.delta || {};
+
+  // Delta display helper
+  const renderDelta = (abs, percent) => {
+    const isPositive = abs >= 0;
+    const cls = isPositive ? "text-emerald-400" : "text-red-400";
+    const pctStr = percent !== null ? `${isPositive ? '+' : ''}${percent.toFixed(1)}%` : '0%';
+    return (
+      <span className={cls}>
+        {isPositive ? '+' : ''}{formatRUB(abs)} ({pctStr})
+      </span>
+    );
+  };
+
+  return (
+    <div className="space-y-3 mt-4">
+      <div className="text-sm font-semibold text-neutral-300">Сводка по периодам</div>
+
+      {/* Period Cards Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {/* Period A */}
+        <PeriodCard
+          title="Период A"
+          from={periodA.from}
+          to={periodA.to}
+          collected_total={periodA.collected_total}
+          collected_cash={periodA.collected_cash}
+          collected_card={periodA.collected_card}
+          refund_total={periodA.refund_total}
+          refund_cash={periodA.refund_cash}
+          refund_card={periodA.refund_card}
+          net_total={periodA.net_total}
+          net_cash={periodA.net_cash}
+          net_card={periodA.net_card}
+          accent="blue"
+        />
+
+        {/* Period B */}
+        <PeriodCard
+          title="Период B"
+          from={periodB.from}
+          to={periodB.to}
+          collected_total={periodB.collected_total}
+          collected_cash={periodB.collected_cash}
+          collected_card={periodB.collected_card}
+          refund_total={periodB.refund_total}
+          refund_cash={periodB.refund_cash}
+          refund_card={periodB.refund_card}
+          net_total={periodB.net_total}
+          net_cash={periodB.net_cash}
+          net_card={periodB.net_card}
+          accent="amber"
+        />
+      </div>
+
+      {/* Delta Block */}
+      <div className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3">
+        <div className="text-xs text-neutral-500 mb-3">Изменение (A − B)</div>
+        <div className="space-y-2">
+          <DeltaRow label="Δ Выручка" abs={delta.revenue_gross_abs} percent={delta.revenue_gross_percent} />
+          <DeltaRow label="Δ Возвраты" abs={delta.refund_abs} percent={delta.refund_percent} invertColors />
+          <DeltaRow label="Δ Чистые" abs={delta.net_total_abs} percent={delta.net_total_percent} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Single Period Card
+ */
+function PeriodCard({
+  title, from, to,
+  collected_total, collected_cash, collected_card,
+  refund_total, refund_cash, refund_card,
+  net_total, net_cash, net_card,
+  accent
+}) {
+  const borderCls = accent === 'blue' ? 'border-blue-900/50' : 'border-amber-900/50';
+  const titleCls = accent === 'blue' ? 'text-blue-300' : 'text-amber-300';
+  const hasRefunds = refund_total > 0;
+
+  return (
+    <div className={`rounded-2xl border ${borderCls} bg-neutral-950/40 p-3 space-y-3`}>
+      <div className="flex items-center justify-between">
+        <span className={`text-sm font-semibold ${titleCls}`}>{title}</span>
+        <span className="text-xs text-neutral-500">{from} → {to}</span>
+      </div>
+
+      {/* Collected */}
+      <div>
+        <div className="text-[11px] text-neutral-500">Выручка (собрано)</div>
+        <div className="text-lg font-bold">{formatRUB(collected_total)}</div>
+        <div className="grid grid-cols-2 gap-2 mt-1">
+          <MoneySubRow label="Нал" value={formatRUB(collected_cash)} />
+          <MoneySubRow label="Карта" value={formatRUB(collected_card)} />
+        </div>
+      </div>
+
+      {/* Refunds */}
+      {hasRefunds && (
+        <div>
+          <div className="text-[11px] text-neutral-500">Возвраты</div>
+          <div className="text-lg font-bold text-red-400">{formatRUB(refund_total)}</div>
+          <div className="grid grid-cols-2 gap-2 mt-1">
+            <MoneySubRow label="Нал" value={formatRUB(refund_cash)} />
+            <MoneySubRow label="Карта" value={formatRUB(refund_card)} />
+          </div>
+        </div>
+      )}
+
+      {/* Net */}
+      <div className={`rounded-xl p-2 ${hasRefunds ? 'bg-emerald-950/30 border border-emerald-900/40' : ''}`}>
+        <div className="text-[11px] text-neutral-500">Чистые деньги {hasRefunds ? '(собрано − возвраты)' : ''}</div>
+        <div className="text-lg font-bold text-emerald-400">{formatRUB(net_total)}</div>
+        <div className="grid grid-cols-2 gap-2 mt-1">
+          <MoneySubRow label="Нал" value={formatRUB(net_cash)} />
+          <MoneySubRow label="Карта" value={formatRUB(net_card)} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Money sub-row for cash/card breakdown
+ */
+function MoneySubRow({ label, value }) {
+  return (
+    <div className="text-xs">
+      <span className="text-neutral-500">{label}: </span>
+      <span className="text-neutral-300">{value}</span>
+    </div>
+  );
+}
+
+/**
+ * Delta row for comparison
+ */
+function DeltaRow({ label, abs, percent, invertColors }) {
+  const isPositive = abs >= 0;
+  // For refunds: positive delta means more refunds in A, which is BAD
+  const displayPositive = invertColors ? !isPositive : isPositive;
+  const cls = displayPositive ? "text-emerald-400" : "text-red-400";
+  const pctStr = percent !== null && percent !== undefined ? `${isPositive ? '+' : ''}${percent.toFixed(1)}%` : '0%';
+
+  return (
+    <div className="flex items-center justify-between text-xs">
+      <span className="text-neutral-400">{label}</span>
+      <span className={cls}>
+        {isPositive ? '+' : ''}{formatRUB(abs)} ({pctStr})
+      </span>
+    </div>
+  );
 }
 
 function PresetChip({ active, onClick, label }) {

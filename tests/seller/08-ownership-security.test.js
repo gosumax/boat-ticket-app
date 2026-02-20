@@ -1,8 +1,8 @@
 // 08-ownership-security.test.js — Test presale ownership security
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { getTestDb } from '../_helpers/dbReset.js';
-import { loadSeedData } from '../_helpers/loadSeedData.js';
+import { resetTestDb, getTestDb } from '../_helpers/dbReset.js';
+import { seedBasicData } from '../_helpers/seedBasic.js';
 import { makeApp } from '../_helpers/makeApp.js';
 import { httpLog } from '../_helpers/httpLog.js';
 
@@ -10,9 +10,16 @@ let app, db, seedData, tokenA, tokenB, presaleIdA;
 
 beforeAll(async () => {
   httpLog.clear();
-  db = getTestDb();
-  seedData = loadSeedData();
+  
+  // STEP 1: Reset test DB (delete + recreate from schema_prod.sql)
+  resetTestDb();
+  
+  // STEP 2: Initialize app (imports server/db.js which will create tables)
   app = await makeApp();
+  
+  // STEP 3: Get DB connection and seed test data
+  db = getTestDb();
+  seedData = await seedBasicData(db);
   
   // Login sellerA
   const loginResA = await request(app)
@@ -40,8 +47,6 @@ beforeAll(async () => {
     .set('Authorization', `Bearer ${tokenA}`)
     .send(presalePayload);
   
-  console.log('[A] presale create', presaleRes.status, presaleRes.body);
-  
   if (presaleRes.status !== 201) {
     console.log('\n[SETUP FAIL] Create presale for security test');
     console.log('Payload:', JSON.stringify(presalePayload, null, 2));
@@ -49,10 +54,6 @@ beforeAll(async () => {
   }
   
   presaleIdA = presaleRes.body.presale.id;
-  
-  // Check DB state after creation
-  const rowAfterCreate = db.prepare('SELECT id, seller_id, slot_uid FROM presales WHERE id = ?').get(presaleIdA);
-  console.log('[DB presale after create]', rowAfterCreate);
 });
 
 describe('SELLER OWNERSHIP SECURITY', () => {

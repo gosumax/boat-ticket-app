@@ -57,7 +57,7 @@ describe('Money Ledger Consistency', () => {
           customerPhone: '79991234567',
           numberOfSeats: 2,
           prepaymentAmount: 1000,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -78,7 +78,7 @@ describe('Money Ledger Consistency', () => {
           customerName: 'Accept Ledger Test',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -130,7 +130,7 @@ describe('Money Ledger Consistency', () => {
             customerPhone: '79991234567',
             numberOfSeats: 1,
             prepaymentAmount: op.prepay,
-            tripDate: testData.tomorrow
+            tripDate: testData.today
           });
         
         expect(saleRes.status).toBe(201);
@@ -159,7 +159,7 @@ describe('Money Ledger Consistency', () => {
           customerName: 'Partial Bounds Test',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -193,7 +193,7 @@ describe('Money Ledger Consistency', () => {
           customerPhone: '79991234567',
           numberOfSeats: 1,
           prepaymentAmount: 500,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -225,7 +225,7 @@ describe('Money Ledger Consistency', () => {
               customerName: 'Op Test 1',
               customerPhone: '79991234567',
               numberOfSeats: 1,
-              tripDate: data.tomorrow
+              tripDate: data.today
             });
         }
       },
@@ -241,7 +241,7 @@ describe('Money Ledger Consistency', () => {
               customerPhone: '79991234567',
               numberOfSeats: 2,
               prepaymentAmount: 1000,
-              tripDate: data.tomorrow
+              tripDate: data.today
             });
         }
       },
@@ -256,7 +256,7 @@ describe('Money Ledger Consistency', () => {
               customerName: 'Op Test 3',
               customerPhone: '79991234567',
               numberOfSeats: 1,
-              tripDate: data.tomorrow
+              tripDate: data.today
             });
           
           if (saleRes.status === 201) {
@@ -280,7 +280,7 @@ describe('Money Ledger Consistency', () => {
               customerName: 'Op Test 4',
               customerPhone: '79991234567',
               numberOfSeats: 1,
-              tripDate: data.tomorrow
+              tripDate: data.today
             });
           
           if (saleRes.status === 201) {
@@ -304,7 +304,7 @@ describe('Money Ledger Consistency', () => {
               customerName: 'Op Test 5',
               customerPhone: '79991234567',
               numberOfSeats: 1,
-              tripDate: data.tomorrow
+              tripDate: data.today
             });
           
           if (saleRes.status === 201) {
@@ -348,7 +348,7 @@ describe('Money Ledger Consistency', () => {
           customerName: 'Ticket Integrity Test',
           customerPhone: '79991234567',
           numberOfSeats: 3,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -370,7 +370,7 @@ describe('Money Ledger Consistency', () => {
           customerName: 'Cancel Integrity Test',
           customerPhone: '79991234567',
           numberOfSeats: 2,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);

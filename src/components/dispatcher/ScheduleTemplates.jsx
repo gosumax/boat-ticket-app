@@ -340,13 +340,21 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
     setFormError('');
     setSuccessMessage('');
 
-    if (!generationForm.date_from || !generationForm.date_to) {
-      setFormError('Даты начала и окончания обязательны');
-      return;
+    // Auto-default dates if not provided
+    let payload = { ...generationForm };
+    if (!payload.date_from || !payload.date_to) {
+      const today = new Date();
+      const todayStr = today.toISOString().split('T')[0];
+      const plus30 = new Date(today);
+      plus30.setDate(plus30.getDate() + 30);
+      const plus30Str = plus30.toISOString().split('T')[0];
+      
+      if (!payload.date_from) payload.date_from = todayStr;
+      if (!payload.date_to) payload.date_to = plus30Str;
     }
 
     try {
-      const result = await apiClient.generateSlotsFromTemplateItems(generationForm);
+      const result = await apiClient.generateSlotsFromTemplateItems(payload);
       setSuccessMessage(`Сгенерировано ${result.generated} рейсов, пропущено ${result.skipped} рейсов`);
       setShowGenerationForm(false);
       setGenerationForm({ date_from: '', date_to: '' });
@@ -406,7 +414,18 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
         <h3 className="text-lg font-bold text-neutral-100">Шаблоны расписания</h3>
         <div className="space-x-2">
           <button
-            onClick={() => setShowGenerationForm(!showGenerationForm)}
+            onClick={() => {
+              // Pre-fill dates when opening the form
+              if (!showGenerationForm) {
+                const today = new Date();
+                const todayStr = today.toISOString().split('T')[0];
+                const plus30 = new Date(today);
+                plus30.setDate(plus30.getDate() + 30);
+                const plus30Str = plus30.toISOString().split('T')[0];
+                setGenerationForm({ date_from: todayStr, date_to: plus30Str });
+              }
+              setShowGenerationForm(!showGenerationForm);
+            }}
             className="bg-purple-600 text-white px-4 py-2 rounded-2xl font-semibold hover:bg-purple-700 active:bg-purple-800 transition-colors"
           >
             Сгенерировать рейсы
@@ -428,7 +447,7 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block text-sm font-semibold text-neutral-300 mb-1">
-                  Дата начала
+                  Дата начала (необязательно)
                 </label>
                 <input
                   type="date"
@@ -436,12 +455,12 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
                   value={generationForm.date_from}
                   onChange={(e) => setGenerationForm(prev => ({ ...prev, date_from: e.target.value }))}
                   className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
-                  required
+                  placeholder="По умолчанию: сегодня"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-neutral-300 mb-1">
-                  Дата окончания
+                  Дата окончания (необязательно)
                 </label>
                 <input
                   type="date"
@@ -449,9 +468,12 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
                   value={generationForm.date_to}
                   onChange={(e) => setGenerationForm(prev => ({ ...prev, date_to: e.target.value }))}
                   className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
-                  required
+                  placeholder="По умолчанию: сегодня + 30 дней"
                 />
               </div>
+            </div>
+            <div className="text-xs text-neutral-500 mb-3">
+              Если даты не указаны, генерация выполнится на ближайшие 30 дней.
             </div>
             <div className="flex space-x-3">
               <button

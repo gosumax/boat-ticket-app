@@ -11,7 +11,7 @@ export async function makeApp() {
   process.env.DB_FILE = testDbPath;
   process.env.NODE_ENV = 'test'; // Disable auto-migrations
   
-  // Dynamic import to ensure DB_FILE_TEST is set before db.js initializes
+  // Dynamic import to ensure DB_FILE is set before db.js initializes
   const express = (await import('express')).default;
   const sellingRoutes = (await import('../../server/selling.mjs')).default;
   const authRoutes = (await import('../../server/auth.js')).default;

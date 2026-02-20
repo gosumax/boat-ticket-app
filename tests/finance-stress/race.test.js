@@ -44,7 +44,7 @@ describe('Race Condition Tests', () => {
 
   describe('RC-1: Concurrent sales on limited capacity', () => {
     it('should handle two simultaneous sales when only 1 seat left', async () => {
-      // Create slot with capacity 2
+      // Create slot with capacity 2 (use testData.today to match tripDate in requests)
       const smallSlotRes = db.prepare(`
         INSERT INTO generated_slots (
           schedule_template_id, trip_date, boat_id, time, capacity, seats_left, 
@@ -53,7 +53,7 @@ describe('Race Condition Tests', () => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         testData.templateId1, 
-        testData.tomorrow, 
+        testData.today, 
         testData.speedBoatId, 
         '15:00', 
         2,  // capacity
@@ -71,7 +71,7 @@ describe('Race Condition Tests', () => {
           customerName: 'First Buyer',
           customerPhone: '79991111111',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(sale1Res.status).toBe(201);
@@ -91,7 +91,7 @@ describe('Race Condition Tests', () => {
             customerName: 'Concurrent A',
             customerPhone: '79992222222',
             numberOfSeats: 1,
-            tripDate: testData.tomorrow
+            tripDate: testData.today
           }),
         request(app)
           .post('/api/selling/presales')
@@ -101,7 +101,7 @@ describe('Race Condition Tests', () => {
             customerName: 'Concurrent B',
             customerPhone: '79993333333',
             numberOfSeats: 1,
-            tripDate: testData.tomorrow
+            tripDate: testData.today
           })
       ]);
       
@@ -130,7 +130,7 @@ describe('Race Condition Tests', () => {
     });
 
     it('should handle concurrent multi-seat sale exceeding capacity', async () => {
-      // Create slot with capacity 3
+      // Create slot with capacity 3 (use testData.today to match tripDate in requests)
       const smallSlotRes = db.prepare(`
         INSERT INTO generated_slots (
           schedule_template_id, trip_date, boat_id, time, capacity, seats_left,
@@ -139,7 +139,7 @@ describe('Race Condition Tests', () => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         testData.templateId1, 
-        testData.tomorrow, 
+        testData.today, 
         testData.speedBoatId, 
         '16:00', 
         3, 3, 60, 1, 1500, 800, 1200
@@ -156,7 +156,7 @@ describe('Race Condition Tests', () => {
             customerName: 'Group A',
             customerPhone: '79994444444',
             numberOfSeats: 2,
-            tripDate: testData.tomorrow
+            tripDate: testData.today
           }),
         request(app)
           .post('/api/selling/presales')
@@ -166,7 +166,7 @@ describe('Race Condition Tests', () => {
             customerName: 'Group B',
             customerPhone: '79995555555',
             numberOfSeats: 2,
-            tripDate: testData.tomorrow
+            tripDate: testData.today
           })
       ]);
       
@@ -204,7 +204,7 @@ describe('Race Condition Tests', () => {
           customerName: 'Overpay Race Test',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -252,7 +252,7 @@ describe('Race Condition Tests', () => {
           customerName: 'Transfer Delete Race',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -302,7 +302,7 @@ describe('Race Condition Tests', () => {
           customerName: 'Multi Pay Race',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);

@@ -1,5 +1,7 @@
 import express from 'express';
 import db from './db.js';
+import { getStreakMultiplier, getSellerState } from './seller-motivation-state.mjs';
+import { roundDownTo50 } from './utils/money-rounding.mjs';
 
 const router = express.Router();
 
@@ -563,6 +565,95 @@ router.get('/money/summary', (req, res) => {
     const tickets = Number(statsRow?.tickets || 0);
     const trips = Number(statsRow?.trips || 0);
 
+    // === REFUNDS: из money_ledger (SALE_CANCEL_REVERSE) ===
+    // Возвраты по ДАТЕ ОПЛАТЫ (business_day) - отрицательные суммы
+    let refundTotal = 0;
+    let refundCash = 0;
+    let refundCard = 0;
+
+    // Check if money_ledger has cash_amount/card_amount columns
+    const mlHasCashAmt = hasColumn('money_ledger', 'cash_amount');
+    const mlHasCardAmt = hasColumn('money_ledger', 'card_amount');
+
+    if (mlHasCashAmt && mlHasCardAmt) {
+      // money_ledger has split columns - direct query
+      const refundRow = db
+        .prepare(
+          `SELECT
+             COALESCE(SUM(ABS(amount)), 0) AS refund_total,
+             COALESCE(SUM(ABS(cash_amount)), 0) AS refund_cash,
+             COALESCE(SUM(ABS(card_amount)), 0) AS refund_card
+           FROM money_ledger
+           WHERE status = 'POSTED'
+             AND kind = 'SELLER_SHIFT'
+             AND type = 'SALE_CANCEL_REVERSE'
+             AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+        )
+        .get();
+      refundTotal = Number(refundRow?.refund_total || 0);
+      refundCash = Number(refundRow?.refund_cash || 0);
+      refundCard = Number(refundRow?.refund_card || 0);
+    } else {
+      // money_ledger lacks split columns - use method field + JOIN with presales for MIXED
+      // refund_total
+      refundTotal = Number(
+        db
+          .prepare(
+            `SELECT COALESCE(SUM(ABS(amount)), 0) AS refund_total
+             FROM money_ledger
+             WHERE status = 'POSTED'
+               AND kind = 'SELLER_SHIFT'
+               AND type = 'SALE_CANCEL_REVERSE'
+               AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+          )
+          .get()?.refund_total || 0
+      );
+
+      // refund_cash / refund_card: use method for CASH/CARD, JOIN presales for MIXED
+      const refundSplitRow = db
+        .prepare(
+          `SELECT
+             COALESCE(SUM(CASE WHEN ml.method = 'CASH' THEN ABS(ml.amount) ELSE 0 END), 0) AS refund_cash,
+             COALESCE(SUM(CASE WHEN ml.method = 'CARD' THEN ABS(ml.amount) ELSE 0 END), 0) AS refund_card,
+             COALESCE(SUM(CASE WHEN ml.method = 'MIXED' THEN ABS(ml.amount) ELSE 0 END), 0) AS refund_mixed
+           FROM money_ledger ml
+           WHERE ml.status = 'POSTED'
+             AND ml.kind = 'SELLER_SHIFT'
+             AND ml.type = 'SALE_CANCEL_REVERSE'
+             AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+        )
+        .get();
+
+      refundCash = Number(refundSplitRow?.refund_cash || 0);
+      refundCard = Number(refundSplitRow?.refund_card || 0);
+
+      // For MIXED refunds, get split from presales.payment_cash_amount/payment_card_amount
+      const refundMixed = Number(refundSplitRow?.refund_mixed || 0);
+      if (refundMixed > 0) {
+        const mixedSplitRow = db
+          .prepare(
+            `SELECT
+               COALESCE(SUM(p.payment_cash_amount), 0) AS mixed_cash,
+               COALESCE(SUM(p.payment_card_amount), 0) AS mixed_card
+             FROM money_ledger ml
+             JOIN presales p ON p.id = ml.presale_id
+             WHERE ml.status = 'POSTED'
+               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.type = 'SALE_CANCEL_REVERSE'
+               AND ml.method = 'MIXED'
+               AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+          )
+          .get();
+        refundCash += Number(mixedSplitRow?.mixed_cash || 0);
+        refundCard += Number(mixedSplitRow?.mixed_card || 0);
+      }
+    }
+
+    // === NET: collected - refunds ===
+    const netTotal = collectedTotal - refundTotal;
+    const netCash = collectedCash - refundCash;
+    const netCard = collectedCard - refundCard;
+
     return res.json({
       ok: true,
       data: {
@@ -575,6 +666,14 @@ router.get('/money/summary', (req, res) => {
           collected_total: collectedTotal,
           collected_cash: collectedCash,
           collected_card: collectedCard,
+          // Refund metrics
+          refund_total: refundTotal,
+          refund_cash: refundCash,
+          refund_card: refundCard,
+          // Net metrics
+          net_total: netTotal,
+          net_cash: netCash,
+          net_card: netCard,
           pending_amount: pendingAmount,
           tickets,
           trips,
@@ -774,15 +873,127 @@ router.get('/money/compare-days', (req, res) => {
       }
     }
 
-    // Merge revenue + cash/card by day
+    // === REFUNDS BY DAY: из money_ledger (SALE_CANCEL_REVERSE) ===
+    const refundsByDay = new Map();
+    {
+      const refundRows = db
+        .prepare(
+          `SELECT
+             DATE(business_day) AS day,
+             COALESCE(SUM(ABS(amount)), 0) AS refund_total
+           FROM money_ledger
+           WHERE status = 'POSTED'
+             AND kind = 'SELLER_SHIFT'
+             AND type = 'SALE_CANCEL_REVERSE'
+             AND DATE(business_day) BETWEEN ${r.from} AND ${r.to}
+           GROUP BY DATE(business_day)`
+        )
+        .all();
+
+      // Get refund cash/card split by day
+      const hasCashAmt = hasColumn('money_ledger', 'cash_amount');
+      const hasCardAmt = hasColumn('money_ledger', 'card_amount');
+
+      if (hasCashAmt && hasCardAmt) {
+        // money_ledger has split columns
+        const refundSplitRows = db
+          .prepare(
+            `SELECT
+               DATE(business_day) AS day,
+               COALESCE(SUM(ABS(cash_amount)), 0) AS refund_cash,
+               COALESCE(SUM(ABS(card_amount)), 0) AS refund_card
+             FROM money_ledger
+             WHERE status = 'POSTED'
+               AND kind = 'SELLER_SHIFT'
+               AND type = 'SALE_CANCEL_REVERSE'
+               AND DATE(business_day) BETWEEN ${r.from} AND ${r.to}
+             GROUP BY DATE(business_day)`
+          )
+          .all();
+        for (const row of refundSplitRows) {
+          refundsByDay.set(row.day, {
+            refund_total: Number(refundRows.find(r => r.day === row.day)?.refund_total || 0),
+            refund_cash: Number(row.refund_cash || 0),
+            refund_card: Number(row.refund_card || 0),
+          });
+        }
+      } else {
+        // Use method field for split
+        const refundSplitRows = db
+          .prepare(
+            `SELECT
+               DATE(ml.business_day) AS day,
+               COALESCE(SUM(CASE WHEN ml.method = 'CASH' THEN ABS(ml.amount) ELSE 0 END), 0) AS refund_cash,
+               COALESCE(SUM(CASE WHEN ml.method = 'CARD' THEN ABS(ml.amount) ELSE 0 END), 0) AS refund_card
+             FROM money_ledger ml
+             WHERE ml.status = 'POSTED'
+               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.type = 'SALE_CANCEL_REVERSE'
+               AND DATE(ml.business_day) BETWEEN ${r.from} AND ${r.to}
+             GROUP BY DATE(ml.business_day)`
+          )
+          .all();
+        for (const row of refundSplitRows) {
+          refundsByDay.set(row.day, {
+            refund_total: Number(refundRows.find(r => r.day === row.day)?.refund_total || 0),
+            refund_cash: Number(row.refund_cash || 0),
+            refund_card: Number(row.refund_card || 0),
+          });
+        }
+        // Handle MIXED refunds
+        const mixedRefundRows = db
+          .prepare(
+            `SELECT
+               DATE(ml.business_day) AS day,
+               COALESCE(SUM(p.payment_cash_amount), 0) AS mixed_cash,
+               COALESCE(SUM(p.payment_card_amount), 0) AS mixed_card
+             FROM money_ledger ml
+             JOIN presales p ON p.id = ml.presale_id
+             WHERE ml.status = 'POSTED'
+               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.type = 'SALE_CANCEL_REVERSE'
+               AND ml.method = 'MIXED'
+               AND DATE(ml.business_day) BETWEEN ${r.from} AND ${r.to}
+             GROUP BY DATE(ml.business_day)`
+          )
+          .all();
+        for (const row of mixedRefundRows) {
+          const existing = refundsByDay.get(row.day) || { refund_total: 0, refund_cash: 0, refund_card: 0 };
+          existing.refund_cash += Number(row.mixed_cash || 0);
+          existing.refund_card += Number(row.mixed_card || 0);
+          refundsByDay.set(row.day, existing);
+        }
+      }
+
+      // Add refund_total entries without split
+      for (const row of refundRows) {
+        if (!refundsByDay.has(row.day)) {
+          refundsByDay.set(row.day, {
+            refund_total: Number(row.refund_total || 0),
+            refund_cash: 0,
+            refund_card: 0,
+          });
+        }
+      }
+    }
+
+    // Merge revenue + cash/card + refunds by day
     const rows = revenueRows.map(row => {
       const day = row.day;
       const cc = cashCardByDay.get(day) || { cash: 0, card: 0 };
+      const ref = refundsByDay.get(day) || { refund_total: 0, refund_cash: 0, refund_card: 0 };
+      const revenue = Number(row.revenue || 0);
       return {
         day,
-        revenue: Number(row.revenue || 0),
+        revenue,
         cash: cc.cash,
         card: cc.card,
+        refund_total: ref.refund_total,
+        refund_cash: ref.refund_cash,
+        refund_card: ref.refund_card,
+        net_total: revenue - ref.refund_total,
+        net_cash: cc.cash - ref.refund_cash,
+        net_card: cc.card - ref.refund_card,
       };
     });
 
@@ -830,36 +1041,102 @@ router.get('/money/compare-periods', (req, res) => {
       const paymentsRow = db
         .prepare(
           `SELECT
-             COALESCE(SUM(amount), 0) AS revenue_gross,
+             COALESCE(SUM(ml.amount), 0) AS revenue_gross,
              COALESCE(SUM(${cashCardExpr.cash}), 0) AS cash,
              COALESCE(SUM(${cashCardExpr.card}), 0) AS card,
-             COALESCE(SUM(CASE WHEN method = 'MIXED' THEN amount ELSE 0 END), 0) AS mixed
-           FROM money_ledger
-           WHERE status = 'POSTED'
-             AND kind = 'SELLER_SHIFT'
-             AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
-             AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+             COALESCE(SUM(CASE WHEN ml.method = 'MIXED' THEN ml.amount ELSE 0 END), 0) AS mixed
+           FROM money_ledger ml
+           LEFT JOIN presales p ON p.id = ml.presale_id
+           WHERE ml.status = 'POSTED'
+             AND ml.kind = 'SELLER_SHIFT'
+             AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+             AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
         )
         .get();
 
-      // Refunds: SALE_CANCEL_REVERSE
-      const refundsRow = db
-        .prepare(
-          `SELECT COALESCE(SUM(ABS(amount)), 0) AS refund
-           FROM money_ledger
-           WHERE status = 'POSTED'
-             AND kind = 'SELLER_SHIFT'
-             AND type = 'SALE_CANCEL_REVERSE'
-             AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
-        )
-        .get();
+      // Refunds: SALE_CANCEL_REVERSE with cash/card split
+      const hasCashAmt = hasColumn('money_ledger', 'cash_amount');
+      const hasCardAmt = hasColumn('money_ledger', 'card_amount');
+
+      let refund = 0, refundCash = 0, refundCard = 0;
+      if (hasCashAmt && hasCardAmt) {
+        // money_ledger has split columns
+        const refundsRow = db
+          .prepare(
+            `SELECT
+               COALESCE(SUM(ABS(amount)), 0) AS refund_total,
+               COALESCE(SUM(ABS(cash_amount)), 0) AS refund_cash,
+               COALESCE(SUM(ABS(card_amount)), 0) AS refund_card
+             FROM money_ledger
+             WHERE status = 'POSTED'
+               AND kind = 'SELLER_SHIFT'
+               AND type = 'SALE_CANCEL_REVERSE'
+               AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+          )
+          .get();
+        refund = Number(refundsRow?.refund_total || 0);
+        refundCash = Number(refundsRow?.refund_cash || 0);
+        refundCard = Number(refundsRow?.refund_card || 0);
+      } else {
+        // Fallback: use method field + JOIN presales for MIXED
+        refund = Number(
+          db
+            .prepare(
+              `SELECT COALESCE(SUM(ABS(amount)), 0) AS refund_total
+               FROM money_ledger
+               WHERE status = 'POSTED'
+                 AND kind = 'SELLER_SHIFT'
+                 AND type = 'SALE_CANCEL_REVERSE'
+                 AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+            )
+            .get()?.refund_total || 0
+        );
+
+        const refundSplitRow = db
+          .prepare(
+            `SELECT
+               COALESCE(SUM(CASE WHEN method = 'CASH' THEN ABS(amount) ELSE 0 END), 0) AS refund_cash,
+               COALESCE(SUM(CASE WHEN method = 'CARD' THEN ABS(amount) ELSE 0 END), 0) AS refund_card,
+               COALESCE(SUM(CASE WHEN method = 'MIXED' THEN ABS(amount) ELSE 0 END), 0) AS refund_mixed
+             FROM money_ledger
+             WHERE status = 'POSTED'
+               AND kind = 'SELLER_SHIFT'
+               AND type = 'SALE_CANCEL_REVERSE'
+               AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+          )
+          .get();
+        refundCash = Number(refundSplitRow?.refund_cash || 0);
+        refundCard = Number(refundSplitRow?.refund_card || 0);
+
+        // MIXED refunds: get split from presales
+        const refundMixed = Number(refundSplitRow?.refund_mixed || 0);
+        if (refundMixed > 0) {
+          const mixedSplitRow = db
+            .prepare(
+              `SELECT
+                 COALESCE(SUM(p.payment_cash_amount), 0) AS mixed_cash,
+                 COALESCE(SUM(p.payment_card_amount), 0) AS mixed_card
+               FROM money_ledger ml
+               JOIN presales p ON p.id = ml.presale_id
+               WHERE ml.status = 'POSTED'
+                 AND ml.kind = 'SELLER_SHIFT'
+                 AND ml.type = 'SALE_CANCEL_REVERSE'
+                 AND ml.method = 'MIXED'
+                 AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+            )
+            .get();
+          refundCash += Number(mixedSplitRow?.mixed_cash || 0);
+          refundCard += Number(mixedSplitRow?.mixed_card || 0);
+        }
+      }
 
       const revenueGross = Number(paymentsRow?.revenue_gross || 0);
       const cash = Number(paymentsRow?.cash || 0);
       const card = Number(paymentsRow?.card || 0);
       const mixed = Number(paymentsRow?.mixed || 0);
-      const refund = Number(refundsRow?.refund || 0);
       const revenueNet = revenueGross - refund;
+      const netCash = cash - refundCash;
+      const netCard = card - refundCard;
 
       // Share percentages
       const cashShare = revenueGross > 0 ? (cash / revenueGross) * 100 : 0;
@@ -868,6 +1145,19 @@ router.get('/money/compare-periods', (req, res) => {
 
       return {
         revenue_gross: revenueGross,
+        // Collected
+        collected_total: revenueGross,
+        collected_cash: cash,
+        collected_card: card,
+        // Refunds
+        refund_total: refund,
+        refund_cash: refundCash,
+        refund_card: refundCard,
+        // Net
+        net_total: revenueNet,
+        net_cash: netCash,
+        net_card: netCard,
+        // Legacy fields (backward compat)
         refund,
         revenue_net: revenueNet,
         cash,
@@ -901,8 +1191,11 @@ router.get('/money/compare-periods', (req, res) => {
       card_percent: computeDelta(metricsA.card, metricsB.card).percent,
       mixed_abs: computeDelta(metricsA.mixed, metricsB.mixed).abs,
       mixed_percent: computeDelta(metricsA.mixed, metricsB.mixed).percent,
-      refund_abs: computeDelta(metricsA.refund, metricsB.refund).abs,
-      refund_percent: computeDelta(metricsA.refund, metricsB.refund).percent,
+      refund_abs: computeDelta(metricsA.refund_total, metricsB.refund_total).abs,
+      refund_percent: computeDelta(metricsA.refund_total, metricsB.refund_total).percent,
+      // Net deltas
+      net_total_abs: computeDelta(metricsA.net_total, metricsB.net_total).abs,
+      net_total_percent: computeDelta(metricsA.net_total, metricsB.net_total).percent,
     };
 
     // Sanity checks
@@ -1649,6 +1942,14 @@ router.get('/motivation/day', (req, res) => {
     let active_sellers = activeSellersList.length;
     
     // ====================
+    // STEP 4.5: Build revenue map from activeSellersList (single source of truth for personal_revenue_day)
+    // ====================
+    const personalRevenueMap = new Map();
+    for (const seller of activeSellersList) {
+      personalRevenueMap.set(seller.user_id, seller.revenue);
+    }
+    
+    // ====================
     // STEP 5: Build payouts based on mode
     // ====================
     let payouts = [];
@@ -1855,6 +2156,272 @@ router.get('/motivation/day', (req, res) => {
     }
     
     // ====================
+    // STEP 5.5: Calculate POINTS (v2: zone_at_sale from presales, fallback to users.zone)
+    // ====================
+    // Points formula:
+    //   speed/cruise: points = (revenue_net / 1000) * k_product * k_zone(zone)
+    //   banana:       points = (revenue_net / 1000) * k_banana_zone(zone)
+    // Zone is taken from presales.zone_at_sale (historical) with fallback to users.zone
+    
+    // Get revenue by seller and boat_type, with zone_at_sale for historical accuracy
+    const revenueBySellerAndType = db.prepare(`
+      SELECT
+        ml.seller_id,
+        COALESCE(b.type, gb.type) AS boat_type,
+        p.zone_at_sale,
+        COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
+        COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
+      FROM money_ledger ml
+      LEFT JOIN presales p ON p.id = ml.presale_id
+      LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+      LEFT JOIN generated_slots gs ON (p.slot_uid LIKE 'generated:%' AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER))
+      LEFT JOIN boats b ON b.id = bs.boat_id
+      LEFT JOIN boats gb ON gb.id = gs.boat_id
+      WHERE ml.status = 'POSTED'
+        AND ml.kind = 'SELLER_SHIFT'
+        AND DATE(ml.business_day) = ?
+        AND ml.seller_id IS NOT NULL
+        AND ml.seller_id > 0
+        AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
+      GROUP BY ml.seller_id, COALESCE(b.type, gb.type), p.zone_at_sale
+    `).all(day);
+    
+    // Get seller zones from users table (fallback for old data without zone_at_sale)
+    const sellerZones = db.prepare(`
+      SELECT id, zone FROM users WHERE role = 'seller'
+    `).all();
+    const sellerZoneMap = new Map((sellerZones || []).map(r => [Number(r.id), r.zone]));
+    
+    // Coefficients from settings
+    const k_speed = Number(settings.k_speed ?? 1.2);
+    const k_cruise = Number(settings.k_cruise ?? 3.0);
+    
+    // Zone coefficients for speed/cruise
+    const k_zone_hedgehog = Number(settings.k_zone_hedgehog ?? 1.3);
+    const k_zone_center = Number(settings.k_zone_center ?? 1.0);
+    const k_zone_sanatorium = Number(settings.k_zone_sanatorium ?? 0.8);
+    const k_zone_stationary = Number(settings.k_zone_stationary ?? 0.7);
+    
+    // Helper to get zone coefficient for speed/cruise
+    const getZoneK = (zone) => {
+      if (zone === 'hedgehog') return k_zone_hedgehog;
+      if (zone === 'center') return k_zone_center;
+      if (zone === 'sanatorium') return k_zone_sanatorium;
+      if (zone === 'stationary') return k_zone_stationary;
+      return 1.0; // fallback if no zone assigned
+    };
+    
+    // Banana zone coefficients
+    const k_banana_hedgehog = Number(settings.k_banana_hedgehog ?? 2.7);
+    const k_banana_center = Number(settings.k_banana_center ?? 2.2);
+    const k_banana_sanatorium = Number(settings.k_banana_sanatorium ?? 1.2);
+    const k_banana_stationary = Number(settings.k_banana_stationary ?? 1.0);
+    
+    // Helper to get banana coefficient by zone
+    const getBananaK = (zone) => {
+      if (zone === 'hedgehog') return k_banana_hedgehog;
+      if (zone === 'center') return k_banana_center;
+      if (zone === 'sanatorium') return k_banana_sanatorium;
+      if (zone === 'stationary') return k_banana_stationary;
+      return 1.0; // fallback if no zone assigned
+    };
+    
+    // Build points_by_user
+    const pointsByUserMap = new Map();
+    
+    // Initialize all active sellers with zero points
+    activeSellersList.forEach(s => {
+      const zone = sellerZoneMap.get(s.user_id) || null;
+      // Get seller motivation state for streak
+      const state = getSellerState(s.user_id);
+      const streakDays = state?.calibrated ? (state.streak_days || 0) : 0;
+      const kStreak = getStreakMultiplier(streakDays);
+      pointsByUserMap.set(s.user_id, {
+        user_id: s.user_id,
+        role: 'seller',
+        name: s.name,
+        zone,
+        revenue_total: s.revenue,
+        revenue_by_type: { speed: 0, cruise: 0, banana: 0 },
+        points_by_type: { speed: 0, cruise: 0, banana: 0 },
+        points_base: 0, // Before streak multiplier
+        points_total: 0, // After streak multiplier
+        calibrated: state?.calibrated || 0,
+        current_level: state?.current_level || 'NONE',
+        streak_days: streakDays,
+        k_streak: kStreak
+      });
+    });
+    
+    // Fill in revenue and calculate points by boat type
+    for (const row of (revenueBySellerAndType || [])) {
+      const sellerId = Number(row.seller_id);
+      const boatType = row.boat_type || null;
+      const zoneAtSale = row.zone_at_sale || null;  // Historical zone from presale
+      const revenueGross = Number(row.revenue_gross || 0);
+      const refunds = Number(row.refunds || 0);
+      const revenueNet = Math.max(0, revenueGross - refunds);
+      
+      if (!boatType || !['speed', 'cruise', 'banana'].includes(boatType)) continue;
+      
+      let entry = pointsByUserMap.get(sellerId);
+      if (!entry) {
+        // Seller not in activeSellersList but has revenue - add anyway
+        const zone = sellerZoneMap.get(sellerId) || null;
+        const state = getSellerState(sellerId);
+        const streakDays = state?.calibrated ? (state.streak_days || 0) : 0;
+        const kStreak = getStreakMultiplier(streakDays);
+        entry = {
+          user_id: sellerId,
+          role: 'seller',
+          name: `Seller #${sellerId}`,
+          zone,
+          revenue_total: 0,
+          revenue_by_type: { speed: 0, cruise: 0, banana: 0 },
+          points_by_type: { speed: 0, cruise: 0, banana: 0 },
+          points_base: 0,
+          points_total: 0,
+          calibrated: state?.calibrated || 0,
+          current_level: state?.current_level || 'NONE',
+          streak_days: streakDays,
+          k_streak: kStreak
+        };
+        pointsByUserMap.set(sellerId, entry);
+      }
+      
+      // Update revenue by type
+      entry.revenue_by_type[boatType] += revenueNet;
+      entry.revenue_total += revenueNet;
+      
+      // Use zone_at_sale if available, otherwise fallback to users.zone
+      const effectiveZone = zoneAtSale || entry.zone;
+      
+      // Calculate points (base, before streak multiplier)
+      const revenueInK = revenueNet / 1000;
+      let pointsBase = 0;
+      
+      if (boatType === 'speed') {
+        pointsBase = revenueInK * k_speed * getZoneK(effectiveZone);
+      } else if (boatType === 'cruise') {
+        pointsBase = revenueInK * k_cruise * getZoneK(effectiveZone);
+      } else if (boatType === 'banana') {
+        const kBanana = getBananaK(effectiveZone);
+        pointsBase = revenueInK * kBanana;
+      }
+      
+      entry.points_by_type[boatType] += pointsBase;
+      entry.points_base += pointsBase;
+    }
+    
+    // Apply streak multiplier to points_total for each seller
+    for (const [sellerId, entry] of pointsByUserMap) {
+      if (entry.role === 'seller') {
+        entry.points_total = Math.round(entry.points_base * entry.k_streak * 100) / 100; // 2 decimal places
+      }
+    }
+    
+    // Add dispatchers to points_by_user (they have 0 revenue/points but are participants)
+    for (const d of (dispatchersList || [])) {
+      const uid = Number(d.id);
+      if (!pointsByUserMap.has(uid)) {
+        pointsByUserMap.set(uid, {
+          user_id: uid,
+          role: 'dispatcher',
+          name: d.username,
+          zone: null,
+          revenue_total: 0,
+          revenue_by_type: { speed: 0, cruise: 0, banana: 0 },
+          points_by_type: { speed: 0, cruise: 0, banana: 0 },
+          points_base: 0,
+          points_total: 0,
+          calibrated: 0,
+          current_level: 'NONE',
+          streak_days: 0,
+          k_streak: 1.0
+        });
+      }
+    }
+    
+    const points_by_user = Array.from(pointsByUserMap.values());
+    
+    // ====================
+    // STEP 5.6: Build sales_points for map (lat/lng from presales)
+    // ====================
+    const salesPoints = db.prepare(`
+      SELECT
+        p.id AS presale_id,
+        p.seller_id,
+        p.created_at AS sold_at,
+        p.zone_at_sale,
+        COALESCE(b.type, gb.type) AS boat_type,
+        ml.amount,
+        p.lat_at_sale AS lat,
+        p.lng_at_sale AS lng
+      FROM money_ledger ml
+      JOIN presales p ON p.id = ml.presale_id
+      LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+      LEFT JOIN generated_slots gs ON (p.slot_uid LIKE 'generated:%' AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER))
+      LEFT JOIN boats b ON b.id = bs.boat_id
+      LEFT JOIN boats gb ON gb.id = gs.boat_id
+      WHERE ml.status = 'POSTED'
+        AND ml.kind = 'SELLER_SHIFT'
+        AND DATE(ml.business_day) = ?
+        AND ml.seller_id IS NOT NULL
+        AND ml.seller_id > 0
+        AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED')
+      ORDER BY p.created_at DESC
+      LIMIT 5000
+    `).all(day);
+    
+    // ====================
+    // STEP 5.6: Dispatcher Daily Bonus (0.1% of T for active dispatchers)
+    // Active dispatcher = has personal_revenue_day > 0 (from same source as sellers)
+    // Note: a dispatcher who sells is counted as both seller (for fund) AND active dispatcher (for bonus)
+    // ====================
+    const DISPATCHER_DAILY_PERCENT = 0.001; // 0.1%
+    
+    // Find active dispatchers (those with personal_revenue_day > 0 from personalRevenueMap)
+    // Check ALL dispatchers, not just pureDispatchersList
+    const activeDispatchersWithRevenue = (dispatchersList || []).filter(d => {
+      const dispatcherId = Number(d.id);
+      const personalRevenue = personalRevenueMap.get(dispatcherId) || 0;
+      return personalRevenue > 0;
+    });
+    
+    const activeDispatchersCount = activeDispatchersWithRevenue.length;
+    const dispatcherDailyBonus = activeDispatchersCount > 0 ? roundDownTo50(revenue_total * DISPATCHER_DAILY_PERCENT) : 0;
+    const dispatcherDailyBonusTotal = activeDispatchersCount * dispatcherDailyBonus;
+    
+    // Build set of active dispatcher user_ids for efficient lookup
+    const activeDispatcherUserIds = new Set(activeDispatchersWithRevenue.map(d => Number(d.id)));
+    
+    // Add dispatcher_daily_bonus and personal_revenue_day to all payouts
+    // Check if user is an active dispatcher (in dispatchersList with revenue > 0), regardless of payout role
+    const payoutsWithDispatcherBonus = (Array.isArray(payouts) ? payouts : []).map(payout => {
+      const personalRevenue = personalRevenueMap.get(payout.user_id) || 0;
+      const isActiveDispatcher = activeDispatcherUserIds.has(payout.user_id);
+      return {
+        ...payout,
+        dispatcher_daily_bonus: isActiveDispatcher ? dispatcherDailyBonus : 0,
+        personal_revenue_day: personalRevenue
+      };
+    });
+    
+    // Replace payouts with enriched version
+    payouts = payoutsWithDispatcherBonus;
+    
+    // ====================
+    // STEP 5.7: Apply rounding to payouts (down to 50 RUB)
+    // ====================
+    payouts = payouts.map(p => ({
+      ...p,
+      total: roundDownTo50(p.total),
+      individual_part: roundDownTo50(p.individual_part),
+      team_part: roundDownTo50(p.team_part),
+      dispatcher_daily_bonus: roundDownTo50(p.dispatcher_daily_bonus)
+    }));
+    
+    // ====================
     // STEP 6: Build response
     // ====================
     
@@ -1867,6 +2434,16 @@ router.get('/motivation/day', (req, res) => {
     // Filter payouts: exclude zero-total entries (no meaningful payout)
     const meaningfulPayouts = (Array.isArray(payouts) ? payouts : [])
       .filter(p => safeNum(p?.total) > 0);
+    
+    // Enrich payouts with points_total and zone
+    const payoutsWithPoints = meaningfulPayouts.map(payout => {
+      const pointsEntry = pointsByUserMap.get(payout.user_id);
+      return {
+        ...payout,
+        points_total: pointsEntry?.points_total ?? 0,
+        zone: pointsEntry?.zone ?? null
+      };
+    });
     
     // Safe numeric fields for response
     const safeRevenueTotal = safeNum(revenue_total);
@@ -1896,7 +2473,17 @@ router.get('/motivation/day', (req, res) => {
         participants: finalParticipants,
         active_sellers: finalActiveSellers,
         active_dispatchers: finalActiveDispatchers,
-        payouts: meaningfulPayouts
+        // Dispatcher daily bonus fields
+        dispatcher_daily_percent: DISPATCHER_DAILY_PERCENT,
+        active_dispatchers_count: activeDispatchersCount,
+        dispatcher_daily_bonus_total: dispatcherDailyBonusTotal,
+        payouts: payoutsWithPoints,
+        // Points calculation (v3: with streak multiplier)
+        points_enabled: true,
+        points_rule: 'v3_zone_at_sale_fallback_user_zone_streak_multiplier',
+        points_by_user,
+        // Sales points for map visualization
+        sales_points: salesPoints || []
       },
       meta: { warnings: safeWarnings }
     };
@@ -1931,6 +2518,460 @@ router.get('/motivation/day', (req, res) => {
   } catch (e) {
     console.error('[owner/motivation/day] Error:', e);
     return res.status(500).json({ ok: false, error: e?.message || 'motivation calculation failed' });
+  }
+});
+
+// =====================
+// GET /api/owner/motivation/weekly?week=YYYY-Www
+// Weekly leaderboard by points (sellers only, no payouts)
+// =====================
+router.get('/motivation/weekly', (req, res) => {
+  try {
+    // Parse week parameter or use current week
+    let weekId = req.query.week;
+    if (!weekId) {
+      // Calculate current ISO week
+      const now = new Date();
+      const year = now.getFullYear();
+      const oneJan = new Date(year, 0, 1);
+      const days = Math.floor((now - oneJan) / 86400000);
+      const weekNum = Math.ceil((days + oneJan.getDay() + 1) / 7);
+      weekId = `${year}-W${String(weekNum).padStart(2, '0')}`;
+    }
+    
+    // Validate week format
+    if (!/^\d{4}-W\d{2}$/.test(weekId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid week format. Use YYYY-Www (e.g., 2026-W07)' });
+    }
+    
+    // Parse week to get date range
+    const [yearStr, weekStr] = weekId.split('-W');
+    const year = parseInt(yearStr, 10);
+    const weekNum = parseInt(weekStr, 10);
+    
+    // Calculate Monday of the week (ISO week: Monday = day 1)
+    const simple = new Date(year, 0, 1 + (weekNum - 1) * 7);
+    const dow = simple.getDay();
+    const ISOweekStart = simple;
+    if (dow <= 4) {
+      ISOweekStart.setDate(simple.getDate() - simple.getDay() + 1);
+    } else {
+      ISOweekStart.setDate(simple.getDate() + 8 - simple.getDay());
+    }
+    
+    const dateFrom = ISOweekStart.toISOString().split('T')[0];
+    const dateToObj = new Date(ISOweekStart);
+    dateToObj.setDate(dateToObj.getDate() + 6);
+    const dateTo = dateToObj.toISOString().split('T')[0];
+    
+    // Get settings for coefficients (load from owner_settings table)
+    const ownerRow = db.prepare("SELECT settings_json FROM owner_settings WHERE id = 1").get();
+    const savedSettings = ownerRow?.settings_json ? JSON.parse(ownerRow.settings_json) : {};
+    const settings = { ...OWNER_SETTINGS_DEFAULTS, ...savedSettings };
+    const k_speed = Number(settings.k_speed ?? 1.2);
+    const weekly_percent = Number(settings.weekly_percent ?? 0.01);
+    const k_cruise = Number(settings.k_cruise ?? 3.0);
+    const k_zone_hedgehog = Number(settings.k_zone_hedgehog ?? 1.3);
+    const k_zone_center = Number(settings.k_zone_center ?? 1.0);
+    const k_zone_sanatorium = Number(settings.k_zone_sanatorium ?? 0.8);
+    const k_zone_stationary = Number(settings.k_zone_stationary ?? 0.7);
+    const k_banana_hedgehog = Number(settings.k_banana_hedgehog ?? 2.7);
+    const k_banana_center = Number(settings.k_banana_center ?? 2.2);
+    const k_banana_sanatorium = Number(settings.k_banana_sanatorium ?? 1.2);
+    const k_banana_stationary = Number(settings.k_banana_stationary ?? 1.0);
+    
+    // ====================
+    // Calculate revenue_total_week from money_ledger (same source as day endpoint)
+    // ====================
+    const weeklyRevenueTotalRow = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
+        COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
+      FROM money_ledger ml
+      WHERE ml.status = 'POSTED'
+        AND ml.kind = 'SELLER_SHIFT'
+        AND DATE(ml.business_day) BETWEEN ? AND ?
+    `).get(dateFrom, dateTo);
+    
+    const revenue_total_week = Math.max(0, Number(weeklyRevenueTotalRow?.revenue_gross || 0) - Number(weeklyRevenueTotalRow?.refunds || 0));
+    
+    const getZoneK = (zone) => {
+      if (zone === 'hedgehog') return k_zone_hedgehog;
+      if (zone === 'center') return k_zone_center;
+      if (zone === 'sanatorium') return k_zone_sanatorium;
+      if (zone === 'stationary') return k_zone_stationary;
+      return 1.0;
+    };
+    
+    const getBananaK = (zone) => {
+      if (zone === 'hedgehog') return k_banana_hedgehog;
+      if (zone === 'center') return k_banana_center;
+      if (zone === 'sanatorium') return k_banana_sanatorium;
+      if (zone === 'stationary') return k_banana_stationary;
+      return 1.0;
+    };
+    
+    // Get all active sellers
+    const sellersRows = db.prepare(`
+      SELECT id, username, zone FROM users WHERE role = 'seller' AND is_active = 1
+    `).all();
+    
+    // Get seller zones map
+    const sellerZoneMap = new Map((sellersRows || []).map(r => [Number(r.id), { name: r.username, zone: r.zone }]));
+    
+    // Get weekly revenue by seller and boat type (same logic as motivation/day)
+    const weeklyRevenue = db.prepare(`
+      SELECT
+        ml.seller_id,
+        COALESCE(b.type, gb.type) AS boat_type,
+        p.zone_at_sale,
+        COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
+        COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
+      FROM money_ledger ml
+      LEFT JOIN presales p ON p.id = ml.presale_id
+      LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+      LEFT JOIN generated_slots gs ON (p.slot_uid LIKE 'generated:%' AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER))
+      LEFT JOIN boats b ON b.id = bs.boat_id
+      LEFT JOIN boats gb ON gb.id = gs.boat_id
+      WHERE ml.status = 'POSTED'
+        AND ml.kind = 'SELLER_SHIFT'
+        AND DATE(ml.business_day) BETWEEN ? AND ?
+        AND ml.seller_id IS NOT NULL
+        AND ml.seller_id > 0
+      GROUP BY ml.seller_id, COALESCE(b.type, gb.type), p.zone_at_sale
+    `).all(dateFrom, dateTo);
+    
+    // Build weekly points by seller
+    const weeklyPointsMap = new Map();
+    
+    // Initialize all sellers with zero
+    for (const [sellerId, info] of sellerZoneMap) {
+      weeklyPointsMap.set(sellerId, {
+        user_id: sellerId,
+        name: info.name,
+        zone: info.zone,
+        revenue_total_week: 0,
+        points_week_base: 0
+      });
+    }
+    
+    // Calculate points_base for each revenue row
+    for (const row of (weeklyRevenue || [])) {
+      const sellerId = Number(row.seller_id);
+      const boatType = row.boat_type || null;
+      const zoneAtSale = row.zone_at_sale || null;
+      const revenueGross = Number(row.revenue_gross || 0);
+      const refunds = Number(row.refunds || 0);
+      const revenueNet = Math.max(0, revenueGross - refunds);
+      
+      if (!boatType || !['speed', 'cruise', 'banana'].includes(boatType)) continue;
+      
+      let entry = weeklyPointsMap.get(sellerId);
+      if (!entry) {
+        entry = {
+          user_id: sellerId,
+          name: `Seller #${sellerId}`,
+          zone: null,
+          revenue_total_week: 0,
+          points_week_base: 0
+        };
+        weeklyPointsMap.set(sellerId, entry);
+      }
+      
+      const effectiveZone = zoneAtSale || entry.zone;
+      const revenueInK = revenueNet / 1000;
+      let pointsBase = 0;
+      
+      if (boatType === 'speed') {
+        pointsBase = revenueInK * k_speed * getZoneK(effectiveZone);
+      } else if (boatType === 'cruise') {
+        pointsBase = revenueInK * k_cruise * getZoneK(effectiveZone);
+      } else if (boatType === 'banana') {
+        pointsBase = revenueInK * getBananaK(effectiveZone);
+      }
+      
+      entry.revenue_total_week += revenueNet;
+      entry.points_week_base += pointsBase;
+    }
+    
+    // Apply current streak multiplier to each seller
+    const sellers = [];
+    for (const [sellerId, entry] of weeklyPointsMap) {
+      const state = getSellerState(sellerId);
+      const streakDays = state?.calibrated ? (state.streak_days || 0) : 0;
+      const kStreak = getStreakMultiplier(streakDays);
+      const pointsWeekTotal = Math.round(entry.points_week_base * kStreak * 100) / 100;
+      
+      sellers.push({
+        ...entry,
+        streak_days: streakDays,
+        k_streak: kStreak,
+        points_week_total: pointsWeekTotal
+      });
+    }
+    
+    // Sort: points desc, revenue desc, name asc
+    sellers.sort((a, b) => {
+      if (b.points_week_total !== a.points_week_total) return b.points_week_total - a.points_week_total;
+      if (b.revenue_total_week !== a.revenue_total_week) return b.revenue_total_week - a.revenue_total_week;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+    
+    // Assign ranks
+    sellers.forEach((s, i) => { s.rank = i + 1; });
+    
+    // Top 3
+    const top3 = sellers.slice(0, 3);
+    
+    // ====================
+    // STEP 8: Weekly Payout Distribution (50/30/20)
+    // ====================
+    
+    // Calculate weekly pool from SQL-calculated revenue_total_week
+    const weekly_pool_total = Math.floor(revenue_total_week * weekly_percent);
+    
+    // Distribution percentages based on number of sellers
+    let weekly_distribution = { first: 0.5, second: 0.3, third: 0.2 };
+    
+    if (sellers.length === 1) {
+      // Only 1 seller gets 100%
+      weekly_distribution = { first: 1.0, second: 0, third: 0 };
+    } else if (sellers.length === 2) {
+      // 2 sellers: 60/40
+      weekly_distribution = { first: 0.6, second: 0.4, third: 0 };
+    }
+    
+    // Assign weekly_payout to each seller (rounded down to 50 RUB)
+    sellers.forEach((s, idx) => {
+      let weekly_payout = 0;
+      if (idx === 0) {
+        weekly_payout = roundDownTo50(weekly_pool_total * weekly_distribution.first);
+      } else if (idx === 1) {
+        weekly_payout = roundDownTo50(weekly_pool_total * weekly_distribution.second);
+      } else if (idx === 2) {
+        weekly_payout = roundDownTo50(weekly_pool_total * weekly_distribution.third);
+      }
+      s.weekly_payout = weekly_payout;
+    });
+    
+    return res.json({
+      ok: true,
+      data: {
+        week_id: weekId,
+        date_from: dateFrom,
+        date_to: dateTo,
+        revenue_total_week,
+        weekly_pool_total,
+        weekly_distribution,
+        sellers,
+        top3
+      },
+      meta: {
+        points_rule: 'v3_zone_at_sale_fallback_user_zone_streak_multiplier',
+        streak_mode: 'current_state_multiplier'
+      }
+    });
+  } catch (e) {
+    console.error('[owner/motivation/weekly] Error:', e);
+    return res.status(500).json({ ok: false, error: e?.message || 'weekly motivation calculation failed' });
+  }
+});
+
+// =====================
+// GET /api/owner/motivation/season?season_id=YYYY
+// Seasonal leaderboard by accumulated points with payouts for eligible sellers
+// =====================
+router.get('/motivation/season', (req, res) => {
+  try {
+    // Parse season_id parameter or use current year
+    let seasonId = req.query.season_id;
+    if (!seasonId) {
+      // Use current year
+      const now = new Date();
+      seasonId = String(now.getFullYear());
+    }
+    
+    // Validate season_id format (4-digit year)
+    if (!/^\d{4}$/.test(seasonId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid season_id format. Use YYYY (e.g., 2026)' });
+    }
+    
+    // Season date range
+    const seasonFrom = `${seasonId}-01-01`;
+    const seasonTo = `${seasonId}-12-31`;
+    
+    // End of September window (last 7 days of September)
+    const endSepFrom = `${seasonId}-09-24`;
+    const endSepTo = `${seasonId}-09-30`;
+    const sepFrom = `${seasonId}-09-01`;
+    const sepTo = `${seasonId}-09-30`;
+    
+    // Eligibility constants
+    const MIN_WORKED_DAYS_SEASON = 75;
+    const MIN_WORKED_DAYS_SEP = 20;
+    const END_SEP_WINDOW_DAYS = 7;
+    
+    // Get settings for season_percent
+    const ownerRow = db.prepare("SELECT settings_json FROM owner_settings WHERE id = 1").get();
+    const savedSettings = ownerRow?.settings_json ? JSON.parse(ownerRow.settings_json) : {};
+    const season_percent = Number(savedSettings.season_percent ?? savedSettings.seasonal_percent ?? 0);
+    
+    // Get all active sellers
+    const sellersRows = db.prepare(`
+      SELECT id, username, zone FROM users WHERE role = 'seller' AND is_active = 1
+    `).all();
+    
+    // Get season stats from seller_season_stats
+    const seasonStats = db.prepare(`
+      SELECT seller_id, revenue_total, points_total
+      FROM seller_season_stats
+      WHERE season_id = ?
+    `).all(seasonId);
+    
+    // Build stats map
+    const statsMap = new Map();
+    for (const stat of (seasonStats || [])) {
+      statsMap.set(Number(stat.seller_id), {
+        revenue_total: Number(stat.revenue_total || 0),
+        points_total: Number(stat.points_total || 0)
+      });
+    }
+    
+    // Calculate eligibility for each seller
+    const eligibilityMap = new Map();
+    for (const seller of (sellersRows || [])) {
+      const sellerId = Number(seller.id);
+      
+      // Worked days in season
+      const workedDaysSeasonRow = db.prepare(`
+        SELECT COUNT(*) AS cnt FROM seller_day_stats
+        WHERE seller_id = ? AND business_day BETWEEN ? AND ? AND revenue_day > 0
+      `).get(sellerId, seasonFrom, seasonTo);
+      const worked_days_season = Number(workedDaysSeasonRow?.cnt || 0);
+      
+      // Worked days in September
+      const workedDaysSepRow = db.prepare(`
+        SELECT COUNT(*) AS cnt FROM seller_day_stats
+        WHERE seller_id = ? AND business_day BETWEEN ? AND ? AND revenue_day > 0
+      `).get(sellerId, sepFrom, sepTo);
+      const worked_days_sep = Number(workedDaysSepRow?.cnt || 0);
+      
+      // Worked days in end-September window
+      const workedDaysEndSepRow = db.prepare(`
+        SELECT COUNT(*) AS cnt FROM seller_day_stats
+        WHERE seller_id = ? AND business_day BETWEEN ? AND ? AND revenue_day > 0
+      `).get(sellerId, endSepFrom, endSepTo);
+      const worked_days_end_sep = Number(workedDaysEndSepRow?.cnt || 0);
+      
+      // Eligibility check
+      const is_eligible = (worked_days_season >= MIN_WORKED_DAYS_SEASON) && 
+                          (worked_days_sep >= MIN_WORKED_DAYS_SEP) && 
+                          (worked_days_end_sep >= 1) ? 1 : 0;
+      
+      eligibilityMap.set(sellerId, {
+        worked_days_season,
+        worked_days_sep,
+        worked_days_end_sep,
+        is_eligible
+      });
+    }
+    
+    // Calculate revenue_total_season from money_ledger (same source as weekly)
+    const seasonRevenueRow = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
+        COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
+      FROM money_ledger ml
+      WHERE ml.status = 'POSTED'
+        AND ml.kind = 'SELLER_SHIFT'
+        AND DATE(ml.business_day) BETWEEN ? AND ?
+    `).get(seasonFrom, seasonTo);
+    
+    const revenue_total_season = Math.max(0, Number(seasonRevenueRow?.revenue_gross || 0) - Number(seasonRevenueRow?.refunds || 0));
+    const season_pool_total = Math.floor(revenue_total_season * season_percent);
+    
+    // Build sellers list with eligibility
+    const sellers = (sellersRows || []).map(r => {
+      const sellerId = Number(r.id);
+      const stats = statsMap.get(sellerId) || { revenue_total: 0, points_total: 0 };
+      const eligibility = eligibilityMap.get(sellerId) || { worked_days_season: 0, worked_days_sep: 0, worked_days_end_sep: 0, is_eligible: 0 };
+      return {
+        user_id: sellerId,
+        name: r.username,
+        zone: r.zone,
+        revenue_total: stats.revenue_total,
+        points_total: stats.points_total,
+        worked_days_season: eligibility.worked_days_season,
+        worked_days_sep: eligibility.worked_days_sep,
+        worked_days_end_sep: eligibility.worked_days_end_sep,
+        is_eligible: eligibility.is_eligible,
+        season_payout: 0,
+        season_share: 0
+      };
+    });
+    
+    // Calculate sum of points for eligible sellers
+    const eligibleSellers = sellers.filter(s => s.is_eligible === 1);
+    const eligible_count = eligibleSellers.length;
+    const sum_points_eligible = eligibleSellers.reduce((sum, s) => sum + s.points_total, 0);
+    
+    // Calculate payouts for eligible sellers (proportional by points)
+    let season_payouts_sum = 0;
+    if (sum_points_eligible > 0 && eligible_count > 0) {
+      for (const seller of sellers) {
+        if (seller.is_eligible === 1 && seller.points_total > 0) {
+          const rawPayout = season_pool_total * (seller.points_total / sum_points_eligible);
+          seller.season_payout = roundDownTo50(Math.floor(rawPayout));
+          seller.season_share = seller.points_total / sum_points_eligible;
+          season_payouts_sum += seller.season_payout;
+        }
+      }
+    }
+    
+    const season_payouts_remainder = season_pool_total - season_payouts_sum;
+    
+    // Sort: points_total desc, revenue_total desc, name asc
+    sellers.sort((a, b) => {
+      if (b.points_total !== a.points_total) return b.points_total - a.points_total;
+      if (b.revenue_total !== a.revenue_total) return b.revenue_total - a.revenue_total;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+    
+    // Assign ranks
+    sellers.forEach((s, i) => { s.rank = i + 1; });
+    
+    // Top 3 (by points_total, not payouts)
+    const top3 = sellers.slice(0, 3);
+    
+    return res.json({
+      ok: true,
+      data: {
+        season_id: seasonId,
+        season_from: seasonFrom,
+        season_to: seasonTo,
+        revenue_total_season,
+        season_percent,
+        season_pool_total,
+        eligible_count,
+        sum_points_eligible,
+        season_payouts_sum,
+        season_payouts_remainder,
+        sellers,
+        top3
+      },
+      meta: {
+        season_payout_mode: 'eligible_all_proportional_by_points',
+        eligibility_rules: {
+          min_worked_days_season: MIN_WORKED_DAYS_SEASON,
+          min_worked_days_sep: MIN_WORKED_DAYS_SEP,
+          end_sep_window_days: END_SEP_WINDOW_DAYS
+        },
+        rounding: 'roundDownTo50'
+      }
+    });
+  } catch (e) {
+    console.error('[owner/motivation/season] Error:', e);
+    return res.status(500).json({ ok: false, error: e?.message || 'season motivation calculation failed' });
   }
 });
 
@@ -2837,6 +3878,12 @@ const OWNER_SETTINGS_DEFAULTS = {
   k_speed: 1.2,
   k_cruise: 3.0,
   k_fishing: 5.0,
+  // Zone coefficients for speed/cruise (motivation v1)
+  k_zone_hedgehog: 1.3,
+  k_zone_center: 1.0,
+  k_zone_sanatorium: 0.8,
+  k_zone_stationary: 0.7,
+  // Banana zone coefficients
   k_banana_hedgehog: 2.7,
   k_banana_center: 2.2,
   k_banana_sanatorium: 1.2,
@@ -2942,7 +3989,8 @@ function buildFullSettings(body, defaults) {
   
   // === DIRECT k_* FIELDS (override legacy) ===
   ['k_speed', 'k_cruise', 'k_fishing', 'k_banana_hedgehog', 'k_banana_center', 
-   'k_banana_sanatorium', 'k_banana_stationary', 'k_dispatchers'].forEach(k => {
+   'k_banana_sanatorium', 'k_banana_stationary', 'k_dispatchers',
+   'k_zone_hedgehog', 'k_zone_center', 'k_zone_sanatorium', 'k_zone_stationary'].forEach(k => {
     if (body[k] !== undefined) normalized[k] = clampMin(body[k], 0.0001);
   });
   

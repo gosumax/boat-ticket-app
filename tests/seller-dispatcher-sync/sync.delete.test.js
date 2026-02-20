@@ -50,7 +50,7 @@ describe('Seller-Dispatcher Sync: Delete Operations', () => {
           customerName: 'Delete Me',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -193,7 +193,7 @@ describe('Seller-Dispatcher Sync: Delete Operations', () => {
           customerName: 'Instant Refund',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -238,7 +238,7 @@ describe('Seller-Dispatcher Sync: Delete Operations', () => {
           customerName: 'Seat Restore Test',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);

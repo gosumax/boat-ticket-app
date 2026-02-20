@@ -239,6 +239,18 @@ export default function OwnerMoneyView() {
   const cash = Number(money.totals?.collected_cash || money.totals?.cash || 0);
   const card = Number(money.totals?.collected_card || money.totals?.card || 0);
 
+  // Новые поля: pending_amount и paid_by_trip_day
+  const pendingAmount = Number(money.totals?.pending_amount || 0);
+  const paidByTripDay = money.paid_by_trip_day || { revenue: 0, cash: 0, card: 0 };
+
+  // Refund and net metrics
+  const refundTotal = Number(money.totals?.refund_total || 0);
+  const refundCash = Number(money.totals?.refund_cash || 0);
+  const refundCard = Number(money.totals?.refund_card || 0);
+  const netTotal = Number(money.totals?.net_total || revenue);
+  const netCash = Number(money.totals?.net_cash || cash);
+  const netCard = Number(money.totals?.net_card || card);
+
   const tickets = Number(money.totals?.tickets || boats.totals?.tickets || 0);
   const trips = Number(money.totals?.trips || boats.totals?.trips || 0);
   const fillPercent = Number(money.totals?.fillPercent || boats.totals?.fillPercent || 0);
@@ -300,12 +312,13 @@ export default function OwnerMoneyView() {
 
       {/* Top stats */}
       <div className="grid grid-cols-2 gap-2">
+        {/* 1️⃣ Чистый результат — ГЛАВНЫЙ БЛОК */}
         <Card className="col-span-2">
           <div className="flex items-start justify-between gap-2">
             <div>
-              <div className="text-[11px] text-neutral-500">Собрано денег</div>
-              <div className="mt-1 text-3xl font-extrabold tracking-tight">{formatRUB(revenue)}</div>
-              <div className="mt-1 text-sm text-neutral-400">Средний чек: {formatRUB(avgCheck)}</div>
+              <div className="text-[11px] text-neutral-500">Чистый результат</div>
+              <div className="text-[10px] text-neutral-600">Собрано минус возвраты за выбранный период</div>
+              <div className="mt-1 text-4xl font-extrabold tracking-tight text-emerald-400">{formatRUB(netTotal)}</div>
             </div>
             <div className="text-[11px] text-neutral-500 text-right">
               {money.range?.from && money.range?.to ? (
@@ -319,16 +332,49 @@ export default function OwnerMoneyView() {
             </div>
           </div>
 
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            <Pill label="Билетов" value={formatInt(tickets)} />
-            <Pill label="Рейсов" value={formatInt(trips)} />
-            <Pill label="Загрузка" value={fillPercent ? `${formatInt(fillPercent)}%` : "—"} accent="amber" />
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <MiniCard label="Наличные" value={formatRUB(netCash)} />
+            <MiniCard label="Карта" value={formatRUB(netCard)} />
           </div>
+        </Card>
 
+        {/* 2️⃣ Оборот (до возвратов) */}
+        <Card>
+          <div className="text-[11px] text-neutral-500">Оборот</div>
+          <div className="text-[10px] text-neutral-600">Все деньги до возвратов</div>
+          <div className="mt-1 text-2xl font-extrabold tracking-tight">{formatRUB(revenue)}</div>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <MiniCard label="Наличные" value={formatRUB(cash)} />
             <MiniCard label="Карта" value={formatRUB(card)} />
           </div>
+        </Card>
+
+        {/* 3️⃣ Возвраты */}
+        <Card>
+          <div className="text-[11px] text-neutral-500">Возвраты за период</div>
+          <div className="mt-1 text-2xl font-extrabold tracking-tight text-red-400">{formatRUB(refundTotal)}</div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <MiniCard label="Наличные" value={formatRUB(refundCash)} />
+            <MiniCard label="Карта" value={formatRUB(refundCard)} />
+          </div>
+        </Card>
+
+        {/* 4️⃣ Trip-метрики */}
+        <Card>
+          <div className="text-[11px] text-neutral-500">Билеты и рейсы</div>
+          <div className="mt-1 text-2xl font-extrabold tracking-tight">{formatInt(tickets)} билетов</div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Pill label="Рейсов" value={formatInt(trips)} />
+            <Pill label="Загрузка" value={fillPercent ? `${formatInt(fillPercent)}%` : "—"} accent="amber" />
+          </div>
+        </Card>
+
+        {/* Ожидает оплаты по дате рейса */}
+        <Card>
+          <div className="text-[11px] text-neutral-500">Ожидает оплаты</div>
+          <div className="text-[10px] text-neutral-600">По дате рейса</div>
+          <div className="mt-1 text-2xl font-extrabold tracking-tight text-amber-300">{formatRUB(pendingAmount)}</div>
+          <div className="mt-1 text-[10px] text-neutral-500">За рейсы в "{preset}"</div>
         </Card>
       </div>
 
@@ -374,6 +420,15 @@ export default function OwnerMoneyView() {
               />
               <MiniCard label="Билетов" value={formatInt(pendingData.tickets ?? pendingData.tickets_count ?? 0)} />
               <MiniCard label="Рейсов" value={formatInt(pendingData.trips ?? pendingData.trips_count ?? 0)} />
+            </div>
+            {/* Оплачено за рейсы (по дате рейса, для выбранного preset) */}
+            <div className="mt-3 rounded-2xl border border-emerald-900/50 bg-emerald-950/20 p-3">
+              <div className="text-[11px] text-neutral-500 mb-2">Оплачено за рейсы (по дате рейса)</div>
+              <div className="grid grid-cols-3 gap-2">
+                <MiniCard label="Итого" value={formatRUB(paidByTripDay.revenue || 0)} />
+                <MiniCard label="Наличные" value={formatRUB(paidByTripDay.cash || 0)} />
+                <MiniCard label="Карта" value={formatRUB(paidByTripDay.card || 0)} />
+              </div>
             </div>
             {/* Оплачено на завтра (собрано сегодня) */}
             {pendingDay === 'tomorrow' && (

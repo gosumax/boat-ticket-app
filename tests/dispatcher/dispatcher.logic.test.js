@@ -185,7 +185,7 @@ describe('Dispatcher Business Logic Tests (Real Backend)', () => {
       expect(presaleId).toBeGreaterThan(0);
       
       const seats = db.prepare('SELECT seats_left FROM generated_slots WHERE id = ?').get(testData.genSlotId1).seats_left;
-      expect(seats).toBe(10); // 12 - 2
+      expect(seats).toBe(98); // 100 - 2
     });
     
     it('should rollback on capacity exceeded', () => {
@@ -203,11 +203,11 @@ describe('Dispatcher Business Logic Tests (Real Backend)', () => {
         `).run(testData.slotId1, `generated:${testData.genSlotId1}`, 'Test', '79991234567', seats, 1500 * seats).lastInsertRowid;
       });
       
-      expect(() => transaction(20)).toThrow('NO_SEATS');
+      expect(() => transaction(150)).toThrow('NO_SEATS'); // 150 > 100 capacity
       
       // Verify rollback - seats should be unchanged
       const seats = db.prepare('SELECT seats_left FROM generated_slots WHERE id = ?').get(testData.genSlotId1).seats_left;
-      expect(seats).toBe(12);
+      expect(seats).toBe(100);
     });
   });
   

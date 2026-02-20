@@ -1,9 +1,22 @@
 // seedBasic.js — seed minimal data for seller tests
 import bcrypt from 'bcrypt';
+import { getTomorrowLocal } from './testDates.js';
 
 const SALT_ROUNDS = 10;
 
 export async function seedBasicData(db) {
+  // Clear existing data first (in case server/db.js auto-seeded)
+  try { db.exec('DELETE FROM generated_slots'); } catch (e) {}
+  try { db.exec('DELETE FROM schedule_template_items'); } catch (e) {}
+  try { db.exec('DELETE FROM schedule_templates'); } catch (e) {}
+  try { db.exec('DELETE FROM boat_slots'); } catch (e) {}
+  try { db.exec('DELETE FROM boats'); } catch (e) {}
+  try { db.exec('DELETE FROM users WHERE role IN ("seller", "dispatcher")'); } catch (e) {}
+  try { db.exec('DELETE FROM tickets'); } catch (e) {}
+  try { db.exec('DELETE FROM presales'); } catch (e) {}
+  try { db.exec('DELETE FROM sales_transactions_canonical'); } catch (e) {}
+  try { db.exec('DELETE FROM money_ledger'); } catch (e) {}
+  
   // Create 2 sellers
   const passwordHashSellerA = await bcrypt.hash('password123', SALT_ROUNDS);
   const passwordHashSellerB = await bcrypt.hash('password123', SALT_ROUNDS);
@@ -36,15 +49,16 @@ export async function seedBasicData(db) {
     VALUES (?, 'cruise', 1, 800, 400, 600)
   `).run('Прогулочная 1');
   
-  // Create dummy schedule_template_items for generated_slots foreign key
+  // Create schedule_templates for generated_slots foreign key
+  // FK references schedule_templates(id)
   const templateSpeed = db.prepare(`
-    INSERT INTO schedule_template_items (boat_id, type, departure_time, duration_minutes, capacity, price_adult, price_child, price_teen, is_active)
-    VALUES (?, 'speed', '10:00', 60, 12, 1000, 500, 750, 1)
+    INSERT INTO schedule_templates (weekday, time, product_type, boat_id, capacity, price_adult, price_child, price_teen, duration_minutes, is_active)
+    VALUES (1, '10:00', 'speed', ?, 12, 1000, 500, 750, 60, 1)
   `).run(boatSpeed.lastInsertRowid);
   
   const templateSpeed2 = db.prepare(`
-    INSERT INTO schedule_template_items (boat_id, type, departure_time, duration_minutes, capacity, price_adult, price_child, price_teen, is_active)
-    VALUES (?, 'speed', '12:00', 60, 12, 1000, 500, 750, 1)
+    INSERT INTO schedule_templates (weekday, time, product_type, boat_id, capacity, price_adult, price_child, price_teen, duration_minutes, is_active)
+    VALUES (1, '12:00', 'speed', ?, 12, 1000, 500, 750, 60, 1)
   `).run(boatSpeed.lastInsertRowid);
   
   // Create boat_slots (manual slots)
@@ -103,9 +117,8 @@ export async function seedBasicData(db) {
   `).run(boatSpeed.lastInsertRowid);
   
   // Create generated_slots for tomorrow
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().split('T')[0];
+  // Use centralized SQLite date utility to ensure consistency
+  const tomorrowStr = getTomorrowLocal(db);
   
   const genSlot1 = db.prepare(`
     INSERT INTO generated_slots (schedule_template_id, boat_id, time, trip_date, capacity, seats_left, price_adult, price_child, price_teen, duration_minutes, is_active, seller_cutoff_minutes)

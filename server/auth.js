@@ -136,16 +136,18 @@ const router = express.Router();
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body || {};
+    
     if (!username || !password) return res.status(400).json({ error: 'Имя пользователя и пароль обязательны' });
 
     const user = db
       .prepare('SELECT id, username, role, is_active, password_hash FROM users WHERE username = ?')
       .get(username);
-
+    
     if (!user) return res.status(401).json({ error: 'Неверное имя пользователя или пароль' });
     if (user.is_active !== 1) return res.status(401).json({ error: 'Учетная запись пользователя отключена' });
 
     const ok = await safeComparePassword(password, user.password_hash);
+    
     if (!ok) return res.status(401).json({ error: 'Неверное имя пользователя или пароль' });
 
     const token = generateToken(user);

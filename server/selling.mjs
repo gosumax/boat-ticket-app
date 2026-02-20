@@ -570,7 +570,6 @@ router.get('/boats/:type/slots', authenticateToken, canSell, (req, res) => {
       SELECT
         gs.id as slot_id,
         ('generated:' || gs.id) as slot_uid,
-        ('generated:' || gs.id) as slotUid,
         gs.id,
         gs.boat_id,
         gs.time,
@@ -586,8 +585,7 @@ router.get('/boats/:type/slots', authenticateToken, canSell, (req, res) => {
         b.type AS boat_type,
         gs.capacity AS boat_capacity,
         'generated' AS source_type,
-        gs.trip_date,
-        'generated:' || gs.id as slot_uid
+        gs.trip_date
       FROM generated_slots gs
       JOIN boats b ON gs.boat_id = b.id
       LEFT JOIN (
@@ -1167,7 +1165,9 @@ if (breakdown) {
     
 	// Use transaction to ensure atomicity: decrement seats_left AND create presale
 	// sellerId is passed explicitly so we can write money_ledger rows during presale creation
-	const transaction = db.transaction((slotId, slotType, seats, customerName, customerPhone, prepayment, prepaymentComment, ticketsJson, slotUidInput, paymentMethodUpper, paymentCashAmount, paymentCardAmount, sellerId) => {
+	// lat/lng are GPS coordinates from seller app (nullable)
+	// zoneAtSale is seller's zone at sale time (for historical motivation analytics)
+	const transaction = db.transaction((slotId, slotType, seats, customerName, customerPhone, prepayment, prepaymentComment, ticketsJson, slotUidInput, paymentMethodUpper, paymentCashAmount, paymentCardAmount, sellerId, latAtSale, lngAtSale, zoneAtSale) => {
   // 1) Decrement seats_left in the correct table
   let updateResult;
   if (slotType === 'generated') {
@@ -1275,9 +1275,40 @@ if (breakdown) {
   // Schema compatibility: check if presales has business_day column
   const presalesCols = db.prepare("PRAGMA table_info(presales)").all();
   const hasBusinessDay = presalesCols.some(c => c.name === 'business_day');
+  const hasZoneGps = presalesCols.some(c => c.name === 'zone_at_sale');
 
   let presaleStmt, presaleParams;
-  if (hasBusinessDay) {
+  if (hasBusinessDay && hasZoneGps) {
+    presaleStmt = db.prepare(`
+INSERT INTO presales (
+      boat_slot_id, slot_uid, seller_id,
+      customer_name, customer_phone, number_of_seats,
+      total_price, prepayment_amount, prepayment_comment, status, tickets_json,
+      payment_method, payment_cash_amount, payment_card_amount, business_day,
+      zone_at_sale, lat_at_sale, lng_at_sale
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+    presaleParams = [
+      boatSlotIdForFK,
+      presaleSlotUid,
+      sellerId,
+      customerName.trim(),
+      customerPhone.trim(),
+      seats,
+      calculatedTotalPrice,
+      prepayment,
+      prepaymentComment?.trim() || null,
+      'ACTIVE',
+      ticketsJson || null,
+      paymentMethodUpper,
+      Math.round(Number(paymentCashAmount || 0)),
+      Math.round(Number(paymentCardAmount || 0)),
+      presaleBusinessDay,
+      zoneAtSale,
+      latAtSale,
+      lngAtSale
+    ];
+  } else if (hasBusinessDay) {
     presaleStmt = db.prepare(`
 INSERT INTO presales (
       boat_slot_id, slot_uid, seller_id,
@@ -1601,6 +1632,25 @@ return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedT
 
     let newPresaleId;
     try {
+      // Get seller's zone at sale time for historical motivation analytics
+      const effectiveSellerId = (req.user?.role === 'seller'
+        ? req.user?.id
+        : (Number.isFinite(Number(sellerId)) ? Number(sellerId) : req.user?.id));
+      
+      let zoneAtSale = null;
+      if (effectiveSellerId) {
+        try {
+          const sellerZoneRow = db.prepare('SELECT zone FROM users WHERE id = ?').get(effectiveSellerId);
+          zoneAtSale = sellerZoneRow?.zone || null;
+        } catch (e) {
+          // zone column may not exist yet, ignore
+        }
+      }
+      
+      // Get GPS coordinates from request (nullable)
+      const latAtSale = Number(req.body?.lat) || null;
+      const lngAtSale = Number(req.body?.lng) || null;
+      
 	      const result = transaction(
         resolvedSlot.slot_id,
         resolvedSlot.source_type,
@@ -1614,10 +1664,10 @@ return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedT
         paymentMethodUpper,
         paymentCashAmount,
 	        paymentCardAmount,
-	        // seller_id logic: seller uses own id, dispatcher uses sellerId or own id as fallback
-	        (req.user?.role === 'seller'
-          ? req.user?.id
-          : (Number.isFinite(Number(sellerId)) ? Number(sellerId) : req.user?.id))
+	        effectiveSellerId,
+        latAtSale,
+        lngAtSale,
+        zoneAtSale
       );
 
       newPresaleId = result.lastInsertRowid;
@@ -1836,6 +1886,64 @@ router.get('/presales/:id', authenticateToken, canSell, (req, res) => {
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales/:id method=GET id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
     res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
+  }
+});
+
+// =====================
+// PUT /api/selling/dispatcher/sellers/:id/zone
+// Dispatcher can change seller zone (affects future sales only)
+// =====================
+router.put('/dispatcher/sellers/:id/zone', authenticateToken, canDispatchManageSlots, (req, res) => {
+  try {
+    const sellerId = Number(req.params.id);
+    let { zone } = req.body || {};
+    
+    // Validate seller ID
+    if (!sellerId || isNaN(sellerId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid seller ID' });
+    }
+    
+    // Normalize zone: trim string, empty string -> null
+    if (typeof zone === 'string') {
+      zone = zone.trim();
+      if (zone === '') zone = null;
+    }
+    
+    // Validate zone value
+    const validZones = ['hedgehog', 'center', 'sanatorium', 'stationary', null];
+    if (zone !== null && !validZones.includes(zone)) {
+      return res.status(400).json({ ok: false, error: 'Invalid zone. Must be one of: hedgehog, center, sanatorium, stationary, or null' });
+    }
+    
+    // Check if seller exists and has role='seller'
+    const seller = db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(sellerId);
+    if (!seller) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+    if (seller.role !== 'seller') {
+      return res.status(400).json({ ok: false, error: 'User is not a seller' });
+    }
+    
+    // Update zone
+    const result = db.prepare('UPDATE users SET zone = ? WHERE id = ? AND role = ?').run(zone, sellerId, 'seller');
+    
+    if (result.changes === 0) {
+      return res.status(400).json({ ok: false, error: 'Failed to update zone' });
+    }
+    
+    console.log(`[dispatcher/sellers/zone] Updated seller ${sellerId} zone to: ${zone} by dispatcher ${req.user?.id}`);
+    
+    return res.json({ 
+      ok: true, 
+      data: { 
+        seller_id: sellerId, 
+        seller_name: seller.username,
+        zone: zone 
+      } 
+    });
+  } catch (e) {
+    console.error('[dispatcher/sellers/zone] Error:', e);
+    return res.status(500).json({ ok: false, error: e?.message || 'Failed to update zone' });
   }
 });
 
@@ -2603,7 +2711,6 @@ router.patch('/presales/:id/payment', authenticateToken, canSell, (req, res) => 
         id, boat_slot_id, customer_name, customer_phone, number_of_seats,
         total_price, prepayment_amount, prepayment_comment, status, tickets_json,
         payment_method, payment_cash_amount, payment_card_amount,
-             payment_method, payment_cash_amount, payment_card_amount,
         (total_price - prepayment_amount) as remaining_amount,
         created_at, updated_at
       FROM presales 
@@ -2617,71 +2724,7 @@ router.patch('/presales/:id/payment', authenticateToken, canSell, (req, res) => 
   }
 });
 
-// Accept payment for presale (alternative endpoint)
-router.patch('/selling/presales/:id/paid', authenticateToken, canSell, (req, res) => {
-  const presaleId = Number(req.params.id);
-  const paymentMethod = req.body?.payment_method ?? null;
-  const userId = req.user?.id;
-  const userRole = req.user?.role;
-
-  if (paymentMethod && !['cash', 'card'].includes(paymentMethod)) {
-    return res.status(400).json({ message: 'Invalid payment_method' });
-  }
-
-  try {
-    // SECURITY: Check ownership before marking as paid
-    const presaleOwner = db.prepare('SELECT seller_id FROM presales WHERE id = ?').get(presaleId);
-    if (!presaleOwner) {
-      return res.status(404).json({ message: 'Presale not found' });
-    }
-    const isOwner = Number(presaleOwner.seller_id) === Number(userId);
-    const isPrivileged = userRole === 'dispatcher' || userRole === 'admin' || userRole === 'owner';
-    if (!isOwner && !isPrivileged) {
-      return res.status(403).json({ message: 'Insufficient permissions to mark another seller\'s presale as paid' });
-    }
-
-    const result = markPresaleAsPaid(presaleId);
-    // FIX (owner analytics): also persist payment split into presales columns (source for cash/card)
-    try {
-      if (paymentMethod) {
-        const pmUpper = String(paymentMethod).toUpperCase(); // 'CASH' | 'CARD'
-        const pres = db.prepare(`SELECT total_price FROM presales WHERE id = ?`).get(presaleId);
-        const total = Math.round(Number(pres?.total_price || 0));
-        const cashAmt = pmUpper === 'CASH' ? total : 0;
-        const cardAmt = pmUpper === 'CARD' ? total : 0;
-
-        db.prepare(`
-          UPDATE presales
-          SET payment_method = ?,
-              payment_cash_amount = ?,
-              payment_card_amount = ?,
-              prepayment_amount = total_price,
-              updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(pmUpper, cashAmt, cardAmt, presaleId);
-      }
-    } catch (e) {
-      console.error('[PAID_PRESALES_UPDATE] failed', e);
-    }
-
-
-    if (paymentMethod) {
-      db.prepare(`
-        UPDATE tickets
-        SET payment_method = ?
-        WHERE presale_id = ?
-      `).run(paymentMethod, presaleId);
-    }
-
-    return res.json(result);
-  } catch (e) {
-    console.error('accept payment error', e);
-    return res.status(500).json({ message: 'Payment failed' });
-  }
-});
-
-
-// Accept payment without changing status (new endpoint)
+// Accept payment without changing status (canonical endpoint)
 router.patch('/presales/:id/accept-payment', authenticateToken, canSell, (req, res) => {
   try {
     const presaleId = parseInt(req.params.id);
@@ -2918,7 +2961,6 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
         id, boat_slot_id, customer_name, customer_phone, number_of_seats,
         total_price, prepayment_amount, prepayment_comment, status, tickets_json,
         payment_method, payment_cash_amount, payment_card_amount,
-             payment_method, payment_cash_amount, payment_card_amount,
         (total_price - prepayment_amount) as remaining_amount,
         created_at, updated_at
       FROM presales 
@@ -4336,8 +4378,6 @@ router.get('/transfer-options', authenticateToken, canSellOrDispatch, (req, res)
       SELECT
         gs.id as slot_id,
         ('generated:' || gs.id) as slot_uid,
-        ('generated:' || gs.id) as slotUid,
-        'generated:' || gs.id as slot_uid,
         gs.trip_date as trip_date,
         gs.time as time,
         b.name as boat_name,
@@ -4689,35 +4729,36 @@ function doTransferPresaleToSlot(presaleId, toSlotUid) {
     console.log('[PRESALE_TRANSFER_REPRICE] skipped', e?.message || e);
   }
 
+  // === Helper functions for trip day and slot resolution (shared by SYNC and PENDING blocks) ===
+  const getGeneratedSlotIdFromUid = (slotUid) => {
+    if (!slotUid || typeof slotUid !== 'string') return null;
+    if (slotUid.startsWith('generated:')) {
+      const genId = Number(slotUid.slice('generated:'.length));
+      return Number.isFinite(genId) ? genId : null;
+    }
+    return null;
+  };
+
+  const resolveTripDayForSlot = (slotUid) => {
+    if (!slotUid) return null;
+    if (typeof slotUid === 'string' && slotUid.startsWith('generated:')) {
+      const genId = Number(slotUid.slice('generated:'.length));
+      if (Number.isFinite(genId)) {
+        const row = db.prepare('SELECT trip_date FROM generated_slots WHERE id = ?').get(genId);
+        if (row?.trip_date) return row.trip_date;
+      }
+    }
+    const baseSlotId = getBaseBoatSlotIdForSlot(slotUid);
+    if (baseSlotId) {
+      const row = db.prepare('SELECT trip_date FROM boat_slots WHERE id = ?').get(baseSlotId);
+      if (row?.trip_date) return row.trip_date;
+    }
+    return db.prepare("SELECT DATE('now','localtime') AS d").get()?.d || null;
+  };
+
   // === SYNC VALID CANONICAL to target slot ===
   // Update slot_uid, slot_id, business_day for all VALID rows of this presale
   try {
-    const getGeneratedSlotIdFromUid = (slotUid) => {
-      if (!slotUid || typeof slotUid !== 'string') return null;
-      if (slotUid.startsWith('generated:')) {
-        const genId = Number(slotUid.slice('generated:'.length));
-        return Number.isFinite(genId) ? genId : null;
-      }
-      return null;
-    };
-
-    const resolveTripDayForSlot = (slotUid) => {
-      if (!slotUid) return null;
-      if (typeof slotUid === 'string' && slotUid.startsWith('generated:')) {
-        const genId = Number(slotUid.slice('generated:'.length));
-        if (Number.isFinite(genId)) {
-          const row = db.prepare('SELECT trip_date FROM generated_slots WHERE id = ?').get(genId);
-          if (row?.trip_date) return row.trip_date;
-        }
-      }
-      const baseSlotId = getBaseBoatSlotIdForSlot(slotUid);
-      if (baseSlotId) {
-        const row = db.prepare('SELECT trip_date FROM boat_slots WHERE id = ?').get(baseSlotId);
-        if (row?.trip_date) return row.trip_date;
-      }
-      return db.prepare("SELECT DATE('now','localtime') AS d").get()?.d || null;
-    };
-
     const targetSlotId = getGeneratedSlotIdFromUid(toSlotUid) || getBaseBoatSlotIdForSlot(toSlotUid) || null;
     const targetBusinessDay = resolveTripDayForSlot(toSlotUid);
 
@@ -4736,33 +4777,7 @@ function doTransferPresaleToSlot(presaleId, toSlotUid) {
   applySeatsDelta(fromSlotUid, +movedSeats);
   applySeatsDelta(toSlotUid, -movedSeats);
 
-  // === Resolve target trip day and slot id (shared by PENDING canonical and presales update) ===
-  const resolveTripDayForSlot = (slotUid) => {
-    if (!slotUid) return null;
-    if (typeof slotUid === 'string' && slotUid.startsWith('generated:')) {
-      const genId = Number(slotUid.slice('generated:'.length));
-      if (Number.isFinite(genId)) {
-        const row = db.prepare('SELECT trip_date FROM generated_slots WHERE id = ?').get(genId);
-        if (row?.trip_date) return row.trip_date;
-      }
-    }
-    const baseSlotId = getBaseBoatSlotIdForSlot(slotUid);
-    if (baseSlotId) {
-      const row = db.prepare('SELECT trip_date FROM boat_slots WHERE id = ?').get(baseSlotId);
-      if (row?.trip_date) return row.trip_date;
-    }
-    return db.prepare("SELECT DATE('now','localtime') AS d").get()?.d || null;
-  };
-
-  const getGeneratedSlotIdFromUid = (slotUid) => {
-    if (!slotUid || typeof slotUid !== 'string') return null;
-    if (slotUid.startsWith('generated:')) {
-      const genId = Number(slotUid.slice('generated:'.length));
-      return Number.isFinite(genId) ? genId : null;
-    }
-    return null;
-  };
-
+  // Reuse helper functions defined above
   const targetBusinessDay = resolveTripDayForSlot(toSlotUid);
   const targetSlotId = getGeneratedSlotIdFromUid(toSlotUid) || getBaseBoatSlotIdForSlot(toSlotUid) || null;
 

@@ -11,6 +11,7 @@ import { resetTestDb, getTestDb, getTableCounts } from '../_helpers/dbReset.js';
 import { seedBasicData } from '../_helpers/seedBasic.js';
 import { makeApp } from '../_helpers/makeApp.js';
 import { httpLog } from '../_helpers/httpLog.js';
+import { getTodayLocal, getTomorrowLocal } from '../_helpers/testDates.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'boat_ticket_secret_key';
 
@@ -30,12 +31,9 @@ beforeAll(async () => {
   db = getTestDb();
   seedData = await seedBasicData(db);
   
-  // Get today's date from SQLite
-  const dateRow = db.prepare(`SELECT DATE('now','localtime') as d`).get();
-  today = dateRow.d;
-  
-  const tomorrowRow = db.prepare(`SELECT DATE('now','localtime','+1 day') as d`).get();
-  tomorrow = tomorrowRow.d;
+  // Get dates using centralized SQLite utility
+  today = getTodayLocal(db);
+  tomorrow = getTomorrowLocal(db);
   
   // Create owner user
   const hashedPassword = bcrypt.hashSync('password123', 10);

@@ -52,7 +52,7 @@ describe('Cash Discipline', () => {
           customerName: 'No Prepay Client',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -78,7 +78,7 @@ describe('Cash Discipline', () => {
           customerName: 'Partial Pay Client',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -121,7 +121,7 @@ describe('Cash Discipline', () => {
           customerName: 'Overpay Test',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -155,7 +155,7 @@ describe('Cash Discipline', () => {
           customerPhone: '79991234567',
           numberOfSeats: 1,
           prepaymentAmount: 500,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -181,7 +181,7 @@ describe('Cash Discipline', () => {
           customerPhone: '79991234567',
           numberOfSeats: 1,
           prepaymentAmount: 500,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -221,7 +221,7 @@ describe('Cash Discipline', () => {
           customerName: 'Cancel Client',
           customerPhone: '79991234567',
           numberOfSeats: 2,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -261,7 +261,7 @@ describe('Cash Discipline', () => {
           customerName: 'Cancelled Pay Test',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -295,7 +295,7 @@ describe('Cash Discipline', () => {
           customerName: 'Mixed Pay Client',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -343,7 +343,7 @@ describe('Cash Discipline', () => {
           customerName: 'Invalid Mix Client',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);

@@ -1,8 +1,8 @@
 // 10-seller-ui-scenarios-pricing.test.js — Test seller UI scenarios: ticket categories, totals, prepayment
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
-import { getTestDb, getTableCounts } from '../_helpers/dbReset.js';
-import { loadSeedData } from '../_helpers/loadSeedData.js';
+import { resetTestDb, getTestDb, getTableCounts } from '../_helpers/dbReset.js';
+import { seedBasicData } from '../_helpers/seedBasic.js';
 import { makeApp } from '../_helpers/makeApp.js';
 import { httpLog } from '../_helpers/httpLog.js';
 
@@ -10,9 +10,16 @@ let app, db, seedData, token, slotUid, priceAdult, priceTeen, priceChild;
 
 beforeAll(async () => {
   httpLog.clear();
-  db = getTestDb();
-  seedData = loadSeedData();
+  
+  // STEP 1: Reset test DB (delete + recreate from schema_prod.sql)
+  resetTestDb();
+  
+  // STEP 2: Initialize app (imports server/db.js which will create tables)
   app = await makeApp();
+  
+  // STEP 3: Get DB connection and seed test data
+  db = getTestDb();
+  seedData = await seedBasicData(db);
   
   // Login sellerA
   const loginRes = await request(app)
@@ -26,9 +33,6 @@ beforeAll(async () => {
   priceAdult = 1000;
   priceChild = 500;
   priceTeen = 750;
-  
-  console.log('[SETUP] Using slot:', slotUid);
-  console.log('[SETUP] Prices: adult=' + priceAdult + ' teen=' + priceTeen + ' child=' + priceChild);
 });
 
 afterAll(() => {

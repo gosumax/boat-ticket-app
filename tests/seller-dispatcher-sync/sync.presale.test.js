@@ -49,7 +49,7 @@ describe('Seller-Dispatcher Sync: Presale Operations', () => {
           customerName: 'Detailed Client',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -88,7 +88,7 @@ describe('Seller-Dispatcher Sync: Presale Operations', () => {
           customerName: 'Repeat Client',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       // Second booking
@@ -100,7 +100,7 @@ describe('Seller-Dispatcher Sync: Presale Operations', () => {
           customerName: 'Repeat Client',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       // Dispatcher sees both
@@ -126,7 +126,7 @@ describe('Seller-Dispatcher Sync: Presale Operations', () => {
           customerName: 'Active Client',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);

@@ -48,7 +48,7 @@ describe('Load / Stress Tests', () => {
       const salesPerSeller = 25;
       const errors = [];
       
-      // Create additional slots for load test
+      // Create additional slots for load test (use testData.today to match tripDate in requests)
       const additionalSlots = [];
       for (let i = 0; i < 5; i++) {
         const slotRes = db.prepare(`
@@ -59,7 +59,7 @@ describe('Load / Stress Tests', () => {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           testData.templateId1, 
-          testData.tomorrow, 
+          testData.today, 
           testData.speedBoatId, 
           `${10 + i}:30`, 
           20, 20, 60, 1, 1500, 800, 1200
@@ -82,7 +82,7 @@ describe('Load / Stress Tests', () => {
               customerName: `Load Test S1-${i}`,
               customerPhone: `799900000${i.toString().padStart(2, '0')}`,
               numberOfSeats: 1,
-              tripDate: testData.tomorrow
+              tripDate: testData.today
             })
         );
       }
@@ -100,7 +100,7 @@ describe('Load / Stress Tests', () => {
               customerName: `Load Test S2-${i}`,
               customerPhone: `799911111${i.toString().padStart(2, '0')}`,
               numberOfSeats: 1,
-              tripDate: testData.tomorrow
+              tripDate: testData.today
             })
         );
       }
@@ -133,7 +133,7 @@ describe('Load / Stress Tests', () => {
     });
 
     it('should verify tickets count equals sold count after batch sales', async () => {
-      // Create slot with known capacity
+      // Create slot with known capacity (use testData.today to match tripDate in requests)
       const slotRes = db.prepare(`
         INSERT INTO generated_slots (
           schedule_template_id, trip_date, boat_id, time, capacity, seats_left,
@@ -142,7 +142,7 @@ describe('Load / Stress Tests', () => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         testData.templateId1, 
-        testData.tomorrow, 
+        testData.today, 
         testData.speedBoatId, 
         '17:00', 
         30, 30, 60, 1, 1500, 800, 1200
@@ -161,7 +161,7 @@ describe('Load / Stress Tests', () => {
               customerName: `Batch Test ${i}`,
               customerPhone: `79992222${i.toString().padStart(2, '0')}`,
               numberOfSeats: 1,
-              tripDate: testData.tomorrow
+              tripDate: testData.today
             })
         );
       }
@@ -219,7 +219,7 @@ describe('Load / Stress Tests', () => {
             customerName: `Mixed Op ${i}`,
             customerPhone: `79993333${i.toString().padStart(2, '0')}`,
             numberOfSeats: 1,
-            tripDate: testData.tomorrow
+            tripDate: testData.today
           });
         
         if (res.status === 201) {
@@ -257,7 +257,7 @@ describe('Load / Stress Tests', () => {
             customerName: `Group Delete ${i}`,
             customerPhone: `79994444${i.toString().padStart(2, '0')}`,
             numberOfSeats: 2,
-            tripDate: testData.tomorrow
+            tripDate: testData.today
           });
         
         if (res.status === 201) {
@@ -295,7 +295,7 @@ describe('Load / Stress Tests', () => {
     });
 
     it('should verify dispatcher slots/:id/tickets returns correct count after operations', async () => {
-      // Create slot for this test
+      // Create slot for this test (use testData.today to match tripDate in requests)
       const slotRes = db.prepare(`
         INSERT INTO generated_slots (
           schedule_template_id, trip_date, boat_id, time, capacity, seats_left,
@@ -304,7 +304,7 @@ describe('Load / Stress Tests', () => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         testData.templateId1, 
-        testData.tomorrow, 
+        testData.today, 
         testData.speedBoatId, 
         '18:00', 
         20, 20, 60, 1, 1500, 800, 1200
@@ -322,7 +322,7 @@ describe('Load / Stress Tests', () => {
             customerName: `Ticket Count ${i}`,
             customerPhone: `79995555${i}`,
             numberOfSeats: 1,
-            tripDate: testData.tomorrow
+            tripDate: testData.today
           });
         
         if (res.status === 201) {
@@ -380,7 +380,7 @@ describe('Load / Stress Tests', () => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         testData.templateId1, 
-        testData.dayAfter, // Use different date
+        testData.today, // Match tripDate in requests
         testData.speedBoatId, 
         uniqueTime, 
         iterations, iterations, 60, 1, 1500, 800, 1200
@@ -398,7 +398,7 @@ describe('Load / Stress Tests', () => {
             customerName: `Perf Test ${i}`,
             customerPhone: `79996666${i.toString().padStart(2, '0')}`,
             numberOfSeats: 1,
-            tripDate: testData.tomorrow
+            tripDate: testData.today
           });
         timings.create.push(Date.now() - start);
         
@@ -453,7 +453,7 @@ describe('Load / Stress Tests', () => {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           testData.templateId1, 
-          testData.dayAfter, // Use different date
+          testData.today, // Match tripDate in requests
           testData.speedBoatId, 
           uniqueTime, 
           10, 10, 60, 1, 1500, 800, 1200
@@ -472,7 +472,7 @@ describe('Load / Stress Tests', () => {
               customerName: `Leak Test ${slotId}-${j}`,
               customerPhone: '79997777000',
               numberOfSeats: 1,
-              tripDate: testData.tomorrow
+              tripDate: testData.today
             });
         }
       }

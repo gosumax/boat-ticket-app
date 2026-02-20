@@ -43,7 +43,9 @@ app.use('/api/owner', authenticateToken, canOwnerAccess, ownerRouter);
 export { app };
 
 // Only start server when run directly (not imported)
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
+// Use import.meta.resolve for better Windows compatibility
+const isMainModule = process.argv[1] && import.meta.url.includes('server/index.js');
+if (isMainModule) {
   app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
     try { startAutoCompleteTrips(); } catch {}

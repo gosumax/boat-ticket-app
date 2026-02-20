@@ -41,6 +41,17 @@ export async function initTestDb() {
     // Table may already exist
   }
   
+  // Add business_day column to presales if missing (required for owner money sync tests)
+  try {
+    const presalesCols = db.prepare("PRAGMA table_info(presales)").all().map(r => r.name);
+    if (!presalesCols.includes('business_day')) {
+      db.exec("ALTER TABLE presales ADD COLUMN business_day TEXT NULL");
+      console.log('[INIT_TEST_DB] Added business_day column to presales table');
+    }
+  } catch (e) {
+    console.log('[INIT_TEST_DB] Could not add business_day column:', e.message);
+  }
+  
   return db;
 }
 
@@ -74,9 +85,17 @@ export function seedTestData() {
   
   // Create boat_slots (manual slots)
   // Use TOMORROW to ensure we're always in the future regardless of current UTC time
+  // IMPORTANT: Slots are created with tomorrow's date, so tests should use 'tomorrow' for tripDate
   const today = new Date().toISOString().split('T')[0];
   const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
   const dayAfter = new Date(Date.now() + 172800000).toISOString().split('T')[0];
+  const dayAfter2 = new Date(Date.now() + 259200000).toISOString().split('T')[0]; // 3 days from now
+  
+  // For tests, 'today' should be the slot's trip_date (which is tomorrow)
+  // This ensures tripDate matches the slot's trip_date
+  const testToday = tomorrow; // Slots are created with tomorrow's date
+  const testTomorrow = dayAfter;
+  const testDayAfter = dayAfter2;
   
   // Calculate slot time: 10:00 on tomorrow's date to avoid any timezone issues
   const slotTime = '10:00';
@@ -113,10 +132,10 @@ export function seedTestData() {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   
-  const genSlotId1 = insertGenSlot.run(templateId1, slotDate, speedBoatId, slotTime1, 100, 100, 60, 1, 1500, 800, 1200).lastInsertRowid;
-  const genSlotId2 = insertGenSlot.run(templateId2, slotDate, cruiseBoatId, slotTime2, 100, 100, 60, 1, 2000, 1000, 1500).lastInsertRowid;
-  const genSlotId3 = insertGenSlot.run(templateId1, tomorrow, speedBoatId, '12:00', 100, 100, 60, 1, 1500, 800, 1200).lastInsertRowid; // Different time for tomorrow
-  const genSlotId4 = insertGenSlot.run(templateId1, dayAfter, speedBoatId, '14:00', 100, 100, 60, 1, 1500, 800, 1200).lastInsertRowid; // Different time for day after
+  const genSlotId1 = insertGenSlot.run(templateId1, tomorrow, speedBoatId, slotTime1, 100, 100, 60, 1, 1500, 800, 1200).lastInsertRowid;
+  const genSlotId2 = insertGenSlot.run(templateId2, tomorrow, cruiseBoatId, slotTime2, 100, 100, 60, 1, 2000, 1000, 1500).lastInsertRowid;
+  const genSlotId3 = insertGenSlot.run(templateId1, dayAfter, speedBoatId, '12:00', 100, 100, 60, 1, 1500, 800, 1200).lastInsertRowid; // dayAfter (seed.tomorrow)
+  const genSlotId4 = insertGenSlot.run(templateId1, dayAfter2, speedBoatId, '14:00', 100, 100, 60, 1, 1500, 800, 1200).lastInsertRowid; // 3 days from now (seed.dayAfter)
   
   // Debug: verify generated_slots were created with correct dates
   const verifySlots = db.prepare('SELECT id, trip_date, time FROM generated_slots WHERE id IN (?, ?, ?, ?)').all(genSlotId1, genSlotId2, genSlotId3, genSlotId4);
@@ -132,13 +151,16 @@ export function seedTestData() {
     slotId2,
     templateId1,
     templateId2,
-    genSlotId1,
-    genSlotId2,
-    genSlotId3,
-    genSlotId4,
-    today,
-    tomorrow,
-    dayAfter
+    genSlotId1, // trip_date = tomorrow (seed.today)
+    genSlotId2, // trip_date = tomorrow (seed.today)
+    genSlotId3, // trip_date = dayAfter (seed.tomorrow) 
+    genSlotId4, // trip_date = dayAfter2 (seed.dayAfter)
+    today: testToday,      // tomorrow
+    tomorrow: testTomorrow, // dayAfter
+    dayAfter: testDayAfter, // dayAfter2
+    // Keep original dates for reference if needed
+    _realToday: today,
+    _realTomorrow: tomorrow
   };
   
   return currentSeedData;
@@ -181,8 +203,8 @@ export function clearTables() {
     'generated_slots',
     'boat_slots',
     'boat_settings',
-    'schedule_templates',
     'schedule_template_items',
+    'schedule_templates',
     'boats',
     'users',
     'seller_working_zones',
@@ -194,6 +216,7 @@ export function clearTables() {
     'manual_days',
     'manual_seller_stats',
     'motivation_day_settings',
+    'settings',
   ];
 
   for (const t of tables) {

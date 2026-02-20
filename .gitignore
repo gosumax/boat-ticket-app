@@ -34,3 +34,5 @@ database.sqlite
 database.sqlite-wal
 database.sqlite-shm
 server/database.sqlite*
+server/h.txt 
+.env 

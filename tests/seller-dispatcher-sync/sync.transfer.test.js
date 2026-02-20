@@ -59,7 +59,7 @@ describe('Seller-Dispatcher Sync: Transfer Operations', () => {
           customerName: 'Transfer Me',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);
@@ -186,7 +186,7 @@ describe('Seller-Dispatcher Sync: Transfer Operations', () => {
           customerName: 'Instant Transfer',
           customerPhone: '79991234567',
           numberOfSeats: 1,
-          tripDate: testData.tomorrow
+          tripDate: testData.today
         });
       
       expect(saleRes.status).toBe(201);

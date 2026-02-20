@@ -1,8 +1,8 @@
 // 05-presale-cancel.test.js — Cancel presale
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { getTestDb, getTableCounts } from '../_helpers/dbReset.js';
-import { loadSeedData } from '../_helpers/loadSeedData.js';
+import { resetTestDb, getTestDb, getTableCounts } from '../_helpers/dbReset.js';
+import { seedBasicData } from '../_helpers/seedBasic.js';
 import { makeApp } from '../_helpers/makeApp.js';
 import { httpLog } from '../_helpers/httpLog.js';
 
@@ -10,9 +10,16 @@ let app, db, seedData, token, presaleId;
 
 beforeAll(async () => {
   httpLog.clear();
-  db = getTestDb();
-  seedData = loadSeedData();
+  
+  // STEP 1: Reset test DB (delete + recreate from schema_prod.sql)
+  resetTestDb();
+  
+  // STEP 2: Initialize app (imports server/db.js which will create tables)
   app = await makeApp();
+  
+  // STEP 3: Get DB connection and seed test data
+  db = getTestDb();
+  seedData = await seedBasicData(db);
   
   // Login sellerA
   const loginRes = await request(app)

@@ -37,12 +37,13 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   // Раскрытие продавца (accordion)
   const [expandedSellerId, setExpandedSellerId] = useState(null);
 
-  // Заглушка ЗП (нал): сколько "к выплате" диспетчер вводит вручную
-  // salaryDueDrafts[sellerId] = string|number
-  const [salaryDueDrafts, setSalaryDueDrafts] = useState({});
-  // Заглушка факта выдачи ЗП (нал) — локально (позже будет money_ledger)
-  // salaryPaid[sellerId] = number
-  const [salaryPaid, setSalaryPaid] = useState({});
+  // Salary values from backend
+  const [salaryDue, setSalaryDue] = useState(0);
+  const [salaryPaidCash, setSalaryPaidCash] = useState(0);
+  const [salaryPaidCard, setSalaryPaidCard] = useState(0);
+  const [salaryPaidTotal, setSalaryPaidTotal] = useState(0);
+  // Input for salary payout amount
+  const [salaryPayoutDraft, setSalaryPayoutDraft] = useState('');
   
   // State for confirmation checkboxes
   const [confirmationChecks, setConfirmationChecks] = useState({
@@ -53,6 +54,10 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   
   // State to track if shift is closed
   const [shiftClosed, setShiftClosed] = useState(false);
+
+  // State for trip completion status (gate for operations)
+  const [allTripsFinished, setAllTripsFinished] = useState(true);
+  const [openTripsCount, setOpenTripsCount] = useState(0);
 
   // Function to generate mock data
   const generateMockData = () => {
@@ -97,39 +102,54 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     const day = businessDay || toLocalBusinessDay();
     const data = await apiClient.request(`/dispatcher/shift-ledger/summary?business_day=${encodeURIComponent(day)}`);
 
-    // Backend contract (current):
-    //  total_revenue, cash_total, card_total, salary_total, sellers[]
-    // IMPORTANT:
-    //  cash_total from backend may be derived as (revenue - card) and can be misleading.
-    //  For dispatcher convenience and to avoid "magic" numbers we calculate:
-    //   - cashRevenue from real cash balances + explicit cash deposits
-    //   - unassigned from deposits with method NULL
+    // Backend contract (aligned with Owner → Money):
+    //  total_revenue: revenue from canonical (trip_date semantics)
+    //  collected_cash/card: from money_ledger (payment date semantics) - SAME AS OWNER
+    //  net_cash/card: collected - refunds
+    //  sellers[]: per-seller balances
+    //
+    // IMPORTANT: No local recalculation. All values come directly from backend.
     const totalRevenue = Number(data?.total_revenue ?? data?.revenue ?? data?.sales?.revenue ?? 0);
 
+    // Collected money (from money_ledger - authoritative source, same as Owner)
+    const collectedCash = Number(data?.collected_cash ?? data?.collected?.cash ?? 0);
+    const collectedCard = Number(data?.collected_card ?? data?.collected?.card ?? 0);
+    const collectedTotal = Number(data?.collected_total ?? data?.collected?.total ?? 0);
+
+    // Refunds
+    const refundTotal = Number(data?.refund_total ?? data?.refunds?.total ?? 0);
+    const refundCash = Number(data?.refund_cash ?? data?.refunds?.cash ?? 0);
+    const refundCard = Number(data?.refund_card ?? data?.refunds?.card ?? 0);
+
+    // Net metrics (collected - refunds)
+    const netTotal = Number(data?.net_total ?? data?.net?.total ?? 0);
+    const netCash = Number(data?.net_cash ?? data?.net?.cash ?? 0);
+    const netCard = Number(data?.net_card ?? data?.net?.card ?? 0);
+
+    // Deposits (for backward compat / seller details)
     const depositTotal = Number(data?.deposit_total ?? data?.ledger?.deposit_to_owner?.total ?? 0);
     const depositCash = Number(data?.deposit_cash ?? data?.ledger?.deposit_to_owner?.cash ?? 0);
     const depositCard = Number(data?.deposit_card ?? data?.ledger?.deposit_to_owner?.card ?? 0);
 
-    // cash in hands (by sellers) + explicit cash deposited to owner
-    const cashBalancesTotal = Number(data?.sellers_balance_total ?? 0);
-    const cashRevenue = Math.max(0, cashBalancesTotal) + Math.max(0, depositCash);
-
-    // card is already explicit in backend
-    const cardRevenue = Number(data?.card_total ?? data?.card ?? data?.sales?.card ?? 0);
-
-    // deposits that are POSTED but have no method (cannot be attributed to CASH or CARD)
-    const unassigned = Math.max(0, depositTotal - depositCash - depositCard);
     const commissionPaid = Number(
       data?.salary_total ?? Math.round((totalRevenue * COMMISSION_PERCENT) / 100)
     );
 
     const summary = {
       totalRevenue,
-      cashRevenue,
-      cardRevenue,
+      // Collected money (authoritative, same as Owner)
+      cashRevenue: collectedCash,
+      cardRevenue: collectedCard,
+      collectedTotal,
       commissionPaid,
-      unassigned,
       businessDay: data?.business_day || day,
+      // Refund and net metrics
+      refundTotal,
+      refundCash,
+      refundCard,
+      netTotal,
+      netCash,
+      netCard,
     };
 
     const rawSellers = Array.isArray(data?.sellers) ? data.sellers : [];
@@ -170,20 +190,27 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
       else localStorage.removeItem('dispatcher_shiftClosed');
     } catch {}
 
+    // Extract trip completion status (gate for operations)
+    // If shift is closed, always consider all trips finished
+    const tripsFinished = closed ? true : Boolean(data?.all_trips_finished ?? true);
+    const tripsCount = closed ? 0 : Number(data?.open_trips_count ?? 0);
+    setAllTripsFinished(tripsFinished);
+    setOpenTripsCount(tripsCount);
+
+    // Extract salary values from backend
+    setSalaryDue(Number(data?.salary_due ?? 0));
+    setSalaryPaidCash(Number(data?.salary_paid_cash ?? 0));
+    setSalaryPaidCard(Number(data?.salary_paid_card ?? 0));
+    setSalaryPaidTotal(Number(data?.salary_paid_total ?? 0));
+
     const draftsInit = {};
-    const salaryDueInit = {};
-    const salaryPaidInit = {};
     for (const s of sellers) {
       draftsInit[s.id] = { cash: '', terminal: '' };
-      salaryDueInit[s.id] = salaryDueDrafts?.[s.id] ?? '';
-      salaryPaidInit[s.id] = salaryPaid?.[s.id] ?? 0;
     }
 
     setDailySummary(summary);
     setSellersData(sellers);
     setDepositDrafts(draftsInit);
-    setSalaryDueDrafts((prev) => ({ ...salaryDueInit, ...prev }));
-    setSalaryPaid((prev) => ({ ...salaryPaidInit, ...prev }));
     setLoading(false);
   };
 
@@ -242,27 +269,41 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   };
 
   const salarySummary = useMemo(() => {
-    let due = 0;
-    let paid = 0;
-    for (const s of sellersData || []) {
-      const sid = s.id;
-      due += Math.max(0, Number(salaryDueDrafts?.[sid] || 0));
-      paid += Math.max(0, Number(salaryPaid?.[sid] || 0));
-    }
+    const due = salaryDue;
+    const paid = salaryPaidTotal;
     const remaining = Math.max(0, due - paid);
     return { due, paid, remaining };
-  }, [sellersData, salaryDueDrafts, salaryPaid]);
+  }, [salaryDue, salaryPaidTotal]);
 
-  const setSalaryDueValue = (sellerId, value) => {
-    setSalaryDueDrafts((prev) => ({ ...prev, [sellerId]: value }));
-  };
+  const applySalaryPayout = async () => {
+    const amount = Math.max(0, Number(salaryPayoutDraft || 0));
+    if (!amount) return;
 
-  const paySalary = (sellerId) => {
-    const due = Math.max(0, Number(salaryDueDrafts?.[sellerId] || 0));
-    const paid = Math.max(0, Number(salaryPaid?.[sellerId] || 0));
-    const remaining = Math.max(0, due - paid);
-    if (!remaining) return;
-    setSalaryPaid((prev) => ({ ...prev, [sellerId]: paid + remaining }));
+    if (!backendDepositEnabled) {
+      // Fallback: local update only
+      setSalaryPaidTotal((prev) => prev + amount);
+      setSalaryPayoutDraft('');
+      return;
+    }
+
+    try {
+      const business_day = dailySummary?.businessDay || toLocalBusinessDay();
+      await apiClient.request('/dispatcher/shift/deposit', {
+        method: 'POST',
+        body: {
+          business_day,
+          type: 'SALARY_PAYOUT_CASH',
+          amount,
+        },
+      });
+      await loadSummaryFromBackend(business_day);
+      setSalaryPayoutDraft('');
+    } catch (e) {
+      // Fallback: backend not available
+      setBackendDepositEnabled(false);
+      setSalaryPaidTotal((prev) => prev + amount);
+      setSalaryPayoutDraft('');
+    }
   };
 
   const applyCashDeposit = async (sellerId) => {
@@ -422,10 +463,12 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
 
   const allChecked = Object.values(confirmationChecks).every(value => value);
 
-  // Guard: нельзя закрыть смену, если есть несданная наличка/долги или невыплаченная ЗП
-  const canCloseShift = allChecked && !shiftClosed && Number(salarySummary.remaining || 0) <= 0 && Number(debtSummary.total || 0) <= 0;
+  // Guard: нельзя закрыть смену, если есть несданная наличка/долги или невыплаченная ЗП или незавершённые рейсы
+  const canCloseShift = allChecked && !shiftClosed && allTripsFinished && Number(salarySummary.remaining || 0) <= 0 && Number(debtSummary.total || 0) <= 0;
   const closeBlockReason = !allChecked
     ? 'Отметь все пункты подтверждения.'
+    : !allTripsFinished
+    ? `Есть незавершённые рейсы: ${openTripsCount}`
     : Number(salarySummary.remaining || 0) > 0
     ? 'Есть невыплаченная зарплата.'
     : Number(debtSummary.total || 0) > 0
@@ -471,38 +514,90 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                 <div className="text-2xl font-bold text-blue-600">{formatRUB(dailySummary.cardRevenue)}</div>
               </div>
           </div>
+          
+          {/* Refunds and Net */}
+          {dailySummary.refundTotal > 0 && (
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="bg-red-950/30 border border-red-900/50 p-3 rounded-lg">
+                <div className="text-neutral-400">Возвраты</div>
+                <div className="text-2xl font-bold text-red-400">{formatRUB(dailySummary.refundTotal)}</div>
+                <div className="mt-1 text-xs text-neutral-500">Нал: {formatRUB(dailySummary.refundCash)} | Карта: {formatRUB(dailySummary.refundCard)}</div>
+              </div>
+              <div className="bg-emerald-950/30 border border-emerald-900/50 p-3 rounded-lg">
+                <div className="text-neutral-400">Чистая касса</div>
+                <div className="text-2xl font-bold text-emerald-400">{formatRUB(dailySummary.netTotal)}</div>
+                <div className="mt-1 text-xs text-neutral-500">Нал: {formatRUB(dailySummary.netCash)} | Карта: {formatRUB(dailySummary.netCard)}</div>
+              </div>
+            </div>
+          )}
           </div>
           
-          {/* Sellers Table */}
-          {/* Salary (cash) stub */}
+          {/* Salary (cash) */}
           <div className="bg-neutral-900 rounded-2xl  p-3">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-xl font-bold text-neutral-100">Зарплата (нал)</h2>
-                <div className="mt-1 text-sm text-neutral-400">Пока заглушка: "к выплате" вводится вручную, позже придёт из мотивации.</div>
+                <div className="mt-1 text-sm text-neutral-400">К выплате временно 0, позже придёт из мотивации.</div>
               </div>
-              <div className="text-xs px-2 py-1 rounded-md border border-neutral-700 bg-neutral-950 text-neutral-300">заглушка</div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
               <div className="bg-neutral-950 p-3 rounded-lg">
-                <div className="text-neutral-400">К выплате всего</div>
-                <div className="text-2xl font-bold text-orange-600">{formatRUB(salarySummary.due)}</div>
+                <div className="text-neutral-400">К выплате</div>
+                <div className="text-2xl font-bold text-orange-600">{formatRUB(salaryDue)}</div>
               </div>
               <div className="bg-neutral-950 p-3 rounded-lg">
-                <div className="text-neutral-400">Выдано</div>
-                <div className="text-2xl font-bold text-green-600">{formatRUB(salarySummary.paid)}</div>
+                <div className="text-neutral-400">Выдано нал</div>
+                <div className="text-2xl font-bold text-green-600">{formatRUB(salaryPaidCash)}</div>
+              </div>
+              <div className="bg-neutral-950 p-3 rounded-lg">
+                <div className="text-neutral-400">Выдано карта</div>
+                <div className="text-2xl font-bold text-blue-600">{formatRUB(salaryPaidCard)}</div>
               </div>
               <div className="bg-neutral-950 p-3 rounded-lg">
                 <div className="text-neutral-400">Осталось выдать</div>
                 <div className={`text-2xl font-bold ${salarySummary.remaining > 0 ? 'text-yellow-400' : 'text-neutral-200'}`}>{formatRUB(salarySummary.remaining)}</div>
               </div>
             </div>
+            {/* Salary payout action */}
+            {!shiftClosed && (
+              <div className="mt-3 flex items-center gap-3">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="Сумма выдачи"
+                  value={salaryPayoutDraft}
+                  onChange={(e) => setSalaryPayoutDraft(e.target.value)}
+                  className="w-32 bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-2 text-neutral-100"
+                />
+                <button
+                  type="button"
+                  onClick={applySalaryPayout}
+                  disabled={!allTripsFinished || Number(salaryPayoutDraft || 0) <= 0}
+                  className={`px-3 py-2 rounded-lg border ${
+                    allTripsFinished && Number(salaryPayoutDraft || 0) > 0
+                      ? 'bg-orange-700 border-orange-600 text-white hover:bg-orange-600'
+                      : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
+                  }`}
+                >
+                  Выдать ЗП (нал)
+                </button>
+                {!allTripsFinished && (
+                  <span className="text-xs text-red-400">Есть незавершённые рейсы</span>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="bg-neutral-900 rounded-2xl  p-3">
             <div className="flex items-start justify-between gap-3 mb-2">
               <div>
                 <h2 className="text-xl font-bold text-neutral-100">По продавцам</h2>
+                {/* Trip completion warning */}
+                {!allTripsFinished && !shiftClosed && (
+                  <div className="mt-1 text-sm text-red-400">
+                    Есть незавершённые рейсы: {openTripsCount}. Операции заблокированы.
+                  </div>
+                )}
                 <div className="mt-1 text-sm">
                   {debtSummary.count > 0 ? (
                     <span className="text-red-400">● Должны деньги: {debtSummary.count} / {formatRUB(debtSummary.total)}</span>
@@ -562,9 +657,6 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                     const termRem = Number(seller.terminalDebt || 0);
 
                     const isOpen = expandedSellerId === seller.id;
-                    const salaryDue = Math.max(0, Number(salaryDueDrafts?.[seller.id] || 0));
-                    const salaryPaidVal = Math.max(0, Number(salaryPaid?.[seller.id] || 0));
-                    const salaryRemaining = Math.max(0, salaryDue - salaryPaidVal);
 
                     return (
                       <Fragment key={seller.id}>
@@ -616,9 +708,9 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                                         <button
                                           type="button"
                                           onClick={() => applyCashDeposit(seller.id)}
-                                          disabled={cashRem <= 0 && Number(depositDrafts?.[seller.id]?.cash || 0) <= 0}
+                                          disabled={shiftClosed || !allTripsFinished || (cashRem <= 0 && Number(depositDrafts?.[seller.id]?.cash || 0) <= 0)}
                                           className={`px-3 py-2 rounded-lg border ${
-                                            cashRem > 0 || Number(depositDrafts?.[seller.id]?.cash || 0) > 0
+                                            !shiftClosed && allTripsFinished && (cashRem > 0 || Number(depositDrafts?.[seller.id]?.cash || 0) > 0)
                                               ? 'bg-neutral-900 border-neutral-700 text-neutral-100 hover:bg-neutral-800'
                                               : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
                                           }`}
@@ -655,56 +747,6 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                                           Закрыть терминал
                                         </button>
                                       </div>
-                                    </div>
-                                  </div>
-
-                                  {/* Salary stub */}
-                                  <div className="bg-neutral-900/40 border border-neutral-800 rounded-xl p-3">
-                                    <div className="flex items-center justify-between">
-                                      <div className="text-sm text-neutral-200 font-semibold">Зарплата (нал)</div>
-                                      <div className="text-xs px-2 py-1 rounded-md border border-neutral-700 bg-neutral-950 text-neutral-300">заглушка</div>
-                                    </div>
-
-                                    <div className="mt-3 grid grid-cols-1 gap-2">
-                                      <div className="flex items-center justify-between gap-3">
-                                        <div>
-                                          <div className="text-neutral-400 text-xs">К выплате</div>
-                                          <div className="text-neutral-200 text-sm">ввод диспетчера</div>
-                                        </div>
-                                        <input
-                                          type="number"
-                                          inputMode="numeric"
-                                          placeholder="0"
-                                          value={salaryDueDrafts?.[seller.id] ?? ''}
-                                          onChange={(e) => setSalaryDueValue(seller.id, e.target.value)}
-                                          className="w-36 bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-2 text-neutral-100"
-                                        />
-                                      </div>
-
-                                      <div className="flex items-center justify-between gap-3">
-                                        <div>
-                                          <div className="text-neutral-400 text-xs">Выдано</div>
-                                          <div className="font-semibold text-green-300">{formatRUB(salaryPaidVal)}</div>
-                                        </div>
-                                        <div className="text-right">
-                                          <div className="text-neutral-400 text-xs">Осталось</div>
-                                          <div className={`font-semibold ${salaryRemaining > 0 ? 'text-yellow-300' : 'text-neutral-200'}`}>{formatRUB(salaryRemaining)}</div>
-                                        </div>
-                                        <button
-                                          type="button"
-                                          onClick={() => paySalary(seller.id)}
-                                          disabled={salaryRemaining <= 0}
-                                          className={`px-3 py-2 rounded-lg border ${
-                                            salaryRemaining > 0
-                                              ? 'bg-orange-700 border-orange-600 text-white hover:bg-orange-600'
-                                              : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
-                                          }`}
-                                        >
-                                          Выдать ЗП
-                                        </button>
-                                      </div>
-
-                                      <div className="text-xs text-neutral-500">Пока расчёт мотивации не подключён — вводишь сумму вручную.</div>
                                     </div>
                                   </div>
                                 </div>

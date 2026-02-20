@@ -12,11 +12,14 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:dispatcher": "vitest run tests/dispatcher",
-    "test:seller": "vitest run tests/seller",
+    "test:dispatcher": "vitest run tests/dispatcher --no-file-parallelism --reporter=verbose",
+    "test:seller": "vitest run tests/seller --no-file-parallelism --reporter=verbose",
+    "test:owner": "vitest run tests/owner --no-file-parallelism --reporter=verbose",
+    "test:all": "npm run test:owner && npm run test:seller && npm run test:dispatcher",
     "e2e": "playwright test --project=chrome",
     "e2e:ui": "playwright test --project=chrome --ui",
-    "e2e:headed": "playwright test --project=chrome --headed"
+    "e2e:headed": "playwright test --project=chrome --headed",
+    "diag": "node diag-simple.mjs"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
