@@ -564,8 +564,8 @@ router.get('/boats/:type/slots', authenticateToken, canSell, (req, res) => {
     console.log(`[SELLER_ZERO_DEBUG] Available generated slots (COALESCE > 0) for type '${boatType}': ${availableGeneratedSlotsCount}`);
     
     // Get active slots for active boats of the specified type with available seats
-    // Use COALESCE to handle legacy data where seats_left might be NULL or 0
-    // NOTE: Only return generated slots (with trip dates) for seller view, exclude manual template slots
+    // IMPORTANT: seats_left is calculated from active tickets, NOT from generated_slots.seats_left column
+    // This ensures consistency between seller and dispatcher views
     const slots = db.prepare(`
       SELECT
         gs.id as slot_id,
@@ -575,7 +575,7 @@ router.get('/boats/:type/slots', authenticateToken, canSell, (req, res) => {
         gs.time,
         gs.price_adult as price,
         gs.capacity,
-        gs.seats_left,
+        (gs.capacity - COALESCE(ticket_counts.active_tickets, 0)) as seats_left,
         gs.duration_minutes,
         gs.price_adult,
         gs.price_child,
@@ -589,17 +589,16 @@ router.get('/boats/:type/slots', authenticateToken, canSell, (req, res) => {
       FROM generated_slots gs
       JOIN boats b ON gs.boat_id = b.id
       LEFT JOIN (
-        SELECT 
+        SELECT
           p.slot_uid,
           COUNT(*) as active_tickets
         FROM tickets t
         JOIN presales p ON t.presale_id = p.id
-        WHERE t.status IN ('ACTIVE', 'USED')
+        WHERE t.status IN ('ACTIVE','PAID','UNPAID','RESERVED','PARTIALLY_PAID','CONFIRMED','USED')
         GROUP BY p.slot_uid
       ) ticket_counts ON ('generated:' || gs.id) = ticket_counts.slot_uid
       WHERE TRIM(LOWER(b.type)) = ?
         AND CAST(gs.is_active AS INTEGER) = 1
-        AND (gs.capacity - COALESCE(ticket_counts.active_tickets, 0)) > 0
         AND (
           -- For future dates, show all trips
           gs.trip_date > date('now')
@@ -2855,15 +2854,20 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
         else if (Number(cashAmount) > 0) ledgerType = 'SALE_ACCEPTED_CASH';
         else if (Number(cardAmount) > 0) ledgerType = 'SALE_ACCEPTED_CARD';
 
+        // FIX: kind based on who accepted payment
+        // seller -> SELLER_SHIFT, dispatcher/admin/owner -> DISPATCHER_SHIFT
+        const ledgerKind = userRole === 'seller' ? 'SELLER_SHIFT' : 'DISPATCHER_SHIFT';
+
         db.prepare(`
           INSERT INTO money_ledger (
             presale_id, slot_id, event_time, kind, type, method, amount, status, seller_id, business_day
           ) VALUES (
-            @presale_id, @slot_id, datetime('now','localtime'), 'SELLER_SHIFT', @type, @method, @amount, 'POSTED', @seller_id, @business_day
+            @presale_id, @slot_id, datetime('now','localtime'), @kind, @type, @method, @amount, 'POSTED', @seller_id, @business_day
           )
         `).run({
           presale_id: presaleId,
           slot_id: presale.boat_slot_id ?? null,
+          kind: ledgerKind,
           type: ledgerType,
           method: method || null,
           amount: totalAccepted,
