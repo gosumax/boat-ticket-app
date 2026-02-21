@@ -13,6 +13,7 @@
 import express from 'express';
 import db from './db.js';
 import * as auth from './auth.js';
+import { calcMotivationDay } from './motivation/engine.mjs';
 
 const authenticateToken = auth.authenticateToken || auth.default || auth;
 
@@ -213,6 +214,10 @@ router.get('/summary', authenticateToken, (req, res) => {
         terminal_debt: terminal_due_to_owner,
         terminal_due_to_owner,
         status: balance === 0 ? 'CLOSED' : balance > 0 ? 'DEBT' : 'OVERPAID',
+        // Salary fields (snapshot may not have per-seller, default to 0)
+        salary_due: Number(r.salary_due || 0),
+        salary_due_total: Number(r.salary_due_total || r.salary_due || 0),
+        salary_accrued: Number(r.salary_accrued || r.salary_due_total || 0),
       };
     });
 
@@ -719,6 +724,43 @@ router.get('/summary', authenticateToken, (req, res) => {
   const sellers_deposited_total = sellers.reduce((s, r) => s + Number(r.deposited || 0), 0);
   const sellers_balance_total = sellers.reduce((s, r) => s + Number(r.balance || 0), 0);
 
+  // --- SALARY_DUE from motivation engine ---
+  // Call motivation engine to get payouts for this business day
+  let salary_due_total = 0;
+  let payoutsByUserId = new Map();
+  
+  try {
+    const motivationResult = calcMotivationDay(db, businessDay);
+    if (motivationResult?.data?.payouts) {
+      for (const payout of motivationResult.data.payouts) {
+        payoutsByUserId.set(payout.user_id, payout);
+        salary_due_total += Number(payout.total || 0);
+      }
+    }
+    
+    // Enrich sellers with salary_due fields
+    for (const seller of sellers) {
+      const payout = payoutsByUserId.get(seller.seller_id);
+      if (payout) {
+        seller.salary_due = payout.total;
+        seller.salary_due_total = payout.total;
+        seller.salary_accrued = payout.total;
+      } else {
+        seller.salary_due = 0;
+        seller.salary_due_total = 0;
+        seller.salary_accrued = 0;
+      }
+    }
+  } catch (e) {
+    console.error('[SALARY_DUE_CALC] Error:', e?.message || e);
+    // On error, all sellers get 0 salary_due
+    for (const seller of sellers) {
+      seller.salary_due = 0;
+      seller.salary_due_total = 0;
+      seller.salary_accrued = 0;
+    }
+  }
+
   // --- Refunds from money_ledger (SALE_CANCEL_REVERSE) ---
   let refundTotal = 0;
   let refundCash = 0;
@@ -1140,9 +1182,9 @@ router.get('/summary', authenticateToken, (req, res) => {
     open_trips_count: getOpenTripsCount(businessDay),
     all_trips_finished: getOpenTripsCount(businessDay) === 0,
 
-    // Salary payouts (from money_ledger)
-    salary_due: 0,  // TEMP: will come from motivation engine
-    salary_due_total: 0,  // alias for backward compat
+    // Salary payouts (from motivation engine + money_ledger)
+    salary_due: salary_due_total,
+    salary_due_total: salary_due_total,  // alias for backward compat
     salary_paid_cash: salaryPaidCash,
     salary_paid_card: salaryPaidCard,
     salary_paid_total: salaryPaidTotal,

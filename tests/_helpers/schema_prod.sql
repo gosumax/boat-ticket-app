@@ -145,6 +145,42 @@ CREATE TABLE motivation_day_settings (
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
+CREATE TABLE seller_motivation_state (
+        seller_id INTEGER PRIMARY KEY,
+        calibrated INTEGER NOT NULL DEFAULT 0,
+        calibration_worked_days INTEGER NOT NULL DEFAULT 0,
+        calibration_revenue_sum INTEGER NOT NULL DEFAULT 0,
+        current_level TEXT NOT NULL DEFAULT 'NONE',
+        streak_days INTEGER NOT NULL DEFAULT 0,
+        last_eval_day TEXT NULL,
+        week_id TEXT NULL,
+        week_worked_days INTEGER NOT NULL DEFAULT 0,
+        week_revenue_sum INTEGER NOT NULL DEFAULT 0
+      );
+
+CREATE TABLE seller_season_stats (
+        seller_id INTEGER NOT NULL,
+        season_id TEXT NOT NULL,
+        revenue_total INTEGER NOT NULL DEFAULT 0,
+        points_total REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (seller_id, season_id)
+      );
+
+CREATE TABLE seller_day_stats (
+        business_day TEXT NOT NULL,
+        seller_id INTEGER NOT NULL,
+        revenue_day INTEGER NOT NULL DEFAULT 0,
+        points_day_total REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (business_day, seller_id)
+      );
+
+CREATE TABLE seller_season_applied_days (
+        season_id TEXT NOT NULL,
+        business_day TEXT NOT NULL,
+        seller_id INTEGER NOT NULL,
+        PRIMARY KEY (season_id, business_day, seller_id)
+      );
+
 CREATE TABLE owner_audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -163,6 +199,7 @@ CREATE TABLE owner_settings (
       phone TEXT DEFAULT '',
       payout_target_rub INTEGER DEFAULT 0,
       motivation_mode TEXT DEFAULT 'v1',
+      settings_json TEXT,
       updated_at TEXT DEFAULT (datetime('now'))
     );
 

@@ -36,6 +36,11 @@ export function normalizeSeller(s) {
     cash_due_to_owner === 0 ? 'CLOSED' : cash_due_to_owner > 0 ? 'DEBT' : 'OVERPAID'
   );
   
+  // Salary fields
+  const salary_due = s.salary_due ?? s.salaryDue ?? 0;
+  const salary_due_total = s.salary_due_total ?? s.salaryDueTotal ?? salary_due;
+  const salary_accrued = s.salary_accrued ?? s.salaryAccrued ?? salary_due_total;
+  
   return {
     seller_id: Number(seller_id),
     seller_name,
@@ -52,6 +57,10 @@ export function normalizeSeller(s) {
     balance: Number(cash_due_to_owner),
     cash_balance: Number(cash_due_to_owner),
     status,
+    // Salary fields
+    salary_due: Number(salary_due),
+    salary_due_total: Number(salary_due_total),
+    salary_accrued: Number(salary_accrued),
     // Raw fallback values for debugging
     _raw: {
       accepted: s.accepted,

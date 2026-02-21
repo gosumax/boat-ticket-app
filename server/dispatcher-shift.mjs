@@ -3,6 +3,7 @@ import db from './db.js';
 import { allTripsFinished } from './dispatcher-shift-ledger.mjs';
 import { updateSellerMotivationState, getStreakMultiplier, getSellerState } from './seller-motivation-state.mjs';
 import { saveDayStats, updateSeasonStatsFromDay } from './season-stats.mjs';
+import { calcMotivationDay } from './motivation/engine.mjs';
 
 const router = express.Router();
 
@@ -428,7 +429,30 @@ router.post('/close', (req, res) => {
     const salaryPaidCash = Number(salaryPaidRow?.salary_paid_cash || 0);
     const salaryPaidCard = Number(salaryPaidRow?.salary_paid_card || 0);
     const salaryPaidTotal = salaryPaidCash + salaryPaidCard;
-    const salaryDue = 0;  // TEMP: will come from motivation engine
+    
+    // Salary due from motivation engine + per-seller breakdown
+    let salaryDue = 0;
+    let payoutsByUserId = new Map();
+    try {
+      const motivationResult = calcMotivationDay(db, businessDay);
+      if (motivationResult?.data?.payouts) {
+        for (const p of motivationResult.data.payouts) {
+          payoutsByUserId.set(Number(p.user_id), p);
+        }
+        salaryDue = motivationResult.data.payouts.reduce((sum, p) => sum + Number(p.total || 0), 0);
+      }
+    } catch (e) {
+      salaryDue = 0;
+    }
+    
+    // Add per-seller salary fields to sellers_json
+    for (const s of sellers) {
+      const sid = Number(s.seller_id);
+      const payout = payoutsByUserId.get(sid);
+      s.salary_due = Number(payout?.total || 0);
+      s.salary_due_total = Number(payout?.total || 0);
+      s.salary_accrued = Number(payout?.total || 0);
+    }
 
     // --- CASHBOX SANITY CHECK ---
     // Ensure cashbox_json column exists

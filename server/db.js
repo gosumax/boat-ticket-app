@@ -1833,6 +1833,32 @@ try {
 }
 
 /* =========================
+   OWNER SETTINGS V2: add settings_json column
+   For existing databases that have owner_settings without settings_json.
+========================= */
+try {
+  const ownerSettingsV2Check = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'owner_settings_v2_settings_json'").get();
+  if (ownerSettingsV2Check.count === 0) {
+    console.log('[OWNER_SETTINGS_V2] Checking settings_json column...');
+    
+    const osCols = db.prepare("PRAGMA table_info(owner_settings)").all().map(r => r.name);
+    
+    if (!osCols.includes('settings_json')) {
+      db.exec("ALTER TABLE owner_settings ADD COLUMN settings_json TEXT");
+      console.log('[OWNER_SETTINGS_V2] Added settings_json column');
+    }
+    
+    // Ensure row id=1 exists
+    db.prepare("INSERT OR IGNORE INTO owner_settings (id, settings_json) VALUES (1, '{}')").run();
+    
+    db.prepare("INSERT INTO settings (key, value) VALUES ('owner_settings_v2_settings_json', 'true')").run();
+    console.log('[OWNER_SETTINGS_V2] Migration complete');
+  }
+} catch (e) {
+  console.log('[OWNER_SETTINGS_V2] migration failed:', e?.message || e);
+}
+
+/* =========================
    SHIFT CLOSURES: dispatcher shift close snapshots
    Stores immutable financial snapshot when dispatcher closes shift.
 ========================= */

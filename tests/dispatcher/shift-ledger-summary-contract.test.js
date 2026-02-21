@@ -175,4 +175,117 @@ describe('DISPATCHER SHIFT LEDGER SUMMARY CONTRACT', () => {
       expect(typeof seller.status).toBe('string');
     }
   });
+
+  it('4) LIVE branch: salary_due fields present when seller has revenue', async () => {
+    const businessDay = '2099-07-01';
+    const sellerId = seedData.users.sellerA.id;
+
+    // Insert a sale into money_ledger to generate motivation payout
+    // Uses SALE_PREPAYMENT_CASH which is counted in motivation engine revenue_total
+    // money_ledger columns: type, kind, method, amount, status, business_day, seller_id, event_time (has DEFAULT)
+    db.prepare(`
+      INSERT INTO money_ledger (type, kind, method, amount, status, business_day, seller_id)
+      VALUES ('SALE_PREPAYMENT_CASH', 'SELLER_SHIFT', 'CASH', 100000, 'POSTED', ?, ?)
+    `).run(businessDay, sellerId);
+
+    const res = await request(app)
+      .get(`/api/dispatcher/shift-ledger/summary?business_day=${businessDay}`)
+      .set('Authorization', `Bearer ${dispatcherToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.source).toBe('live'); // Not closed yet
+
+    // Root-level salary_due fields
+    expect(typeof res.body.salary_due).toBe('number');
+    expect(typeof res.body.salary_due_total).toBe('number');
+    expect(res.body.salary_due).toBeGreaterThanOrEqual(0);
+    expect(res.body.salary_due_total).toBeGreaterThanOrEqual(0);
+
+    // sellers[] should have salary_due fields
+    expect(Array.isArray(res.body.sellers)).toBe(true);
+
+    const sellers = res.body.sellers || [];
+    for (const seller of sellers) {
+      // Each seller must have these fields (even if 0)
+      expect(typeof seller.salary_due).toBe('number');
+      expect(typeof seller.salary_due_total).toBe('number');
+      expect(typeof seller.salary_accrued).toBe('number');
+      expect(seller.salary_due).toBeGreaterThanOrEqual(0);
+      expect(seller.salary_due_total).toBeGreaterThanOrEqual(0);
+      expect(seller.salary_accrued).toBeGreaterThanOrEqual(0);
+    }
+
+    // Find the seller with revenue and verify they have non-zero salary_due
+    const sellerWithRevenue = sellers.find(s => s.seller_id === sellerId);
+    if (sellerWithRevenue) {
+      // This seller should have a payout from the motivation engine
+      expect(sellerWithRevenue.salary_due).toBeGreaterThan(0);
+      expect(sellerWithRevenue.salary_due_total).toBe(sellerWithRevenue.salary_due);
+      expect(sellerWithRevenue.salary_accrued).toBe(sellerWithRevenue.salary_due);
+    }
+  });
+
+  it('5) salary_due invariant: LIVE == shift_closures.salary_due == SNAPSHOT', async () => {
+    const businessDay = '2099-07-02';
+    const sellerId = seedData.users.sellerA.id;
+
+    // A) Insert a sale to generate motivation payout (same ml.type as test 4)
+    db.prepare(`
+      INSERT INTO money_ledger (type, kind, method, amount, status, business_day, seller_id)
+      VALUES ('SALE_PREPAYMENT_CASH', 'SELLER_SHIFT', 'CASH', 100000, 'POSTED', ?, ?)
+    `).run(businessDay, sellerId);
+
+    // B) Get LIVE summary and capture salary_due_total
+    const liveRes = await request(app)
+      .get(`/api/dispatcher/shift-ledger/summary?business_day=${businessDay}`)
+      .set('Authorization', `Bearer ${dispatcherToken}`);
+
+    expect(liveRes.status).toBe(200);
+    expect(liveRes.body.ok).toBe(true);
+    expect(['live', 'ledger']).toContain(liveRes.body.source);
+
+    const liveSalary = Number(liveRes.body.salary_due_total || 0);
+    expect(liveSalary).toBeGreaterThan(0);
+
+    // Verify per-seller salary_due in LIVE
+    const liveSeller = (liveRes.body.sellers || []).find(s => s.seller_id === sellerId);
+    expect(liveSeller).toBeDefined();
+    expect(Number(liveSeller.salary_due_total || 0)).toBeGreaterThan(0);
+
+    // C) Close the shift
+    const closeRes = await request(app)
+      .post('/api/dispatcher/shift/close')
+      .set('Authorization', `Bearer ${dispatcherToken}`)
+      .send({ business_day: businessDay });
+
+    expect(closeRes.status).toBe(200);
+    expect(closeRes.body.ok).toBe(true);
+    expect(closeRes.body.closed).toBe(true);
+
+    // D) Check shift_closures.salary_due in DB
+    const closureRow = db.prepare('SELECT salary_due FROM shift_closures WHERE business_day = ?').get(businessDay);
+    expect(closureRow).toBeDefined();
+    const snapDue = Number(closureRow.salary_due || 0);
+    expect(snapDue).toBe(liveSalary);
+
+    // E) Get SNAPSHOT summary and verify salary_due_total matches
+    const snapRes = await request(app)
+      .get(`/api/dispatcher/shift-ledger/summary?business_day=${businessDay}`)
+      .set('Authorization', `Bearer ${dispatcherToken}`);
+
+    expect(snapRes.status).toBe(200);
+    expect(snapRes.body.ok).toBe(true);
+    expect(snapRes.body.source).toBe('snapshot');
+
+    const snapSalary = Number(snapRes.body.salary_due_total || 0);
+    expect(snapSalary).toBe(liveSalary);
+
+    // F) Verify seller in snapshot has salary_due_total > 0 (stored in sellers_json)
+    const snapSeller = (snapRes.body.sellers || []).find(s => s.seller_id === sellerId);
+    expect(snapSeller).toBeDefined();
+    expect(Number(snapSeller.salary_due_total || 0)).toBeGreaterThan(0);
+    expect(Number(snapSeller.salary_due || 0)).toBe(Number(snapSeller.salary_due_total || 0));
+    expect(Number(snapSeller.salary_accrued || 0)).toBe(Number(snapSeller.salary_due_total || 0));
+  });
 });
