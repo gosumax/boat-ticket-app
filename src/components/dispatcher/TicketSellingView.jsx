@@ -63,7 +63,8 @@ const TicketSellingView = ({
   searchTerm = '',
   onTripCountsChange,
   refreshAllSlots,
-  shiftClosed
+  shiftClosed,
+  isActive = true
 }) => {
   const [trips, setTrips] = useState(() => {
     try {
@@ -144,6 +145,19 @@ const TicketSellingView = ({
       try { window.removeEventListener('dispatcher:slots-changed', h); } catch {}
     };
   }, [loadTrips]);
+
+  // Polling: auto-refresh every 5s when component is active (selling tab visible)
+  useEffect(() => {
+    if (!isActive) return;
+    
+    const intervalId = setInterval(() => {
+      loadTrips({ silent: true });
+    }, 5000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [loadTrips, isActive]);
 
 
 

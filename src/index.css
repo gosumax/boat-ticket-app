@@ -30,3 +30,14 @@ button {
   transition: background-color 0.15s ease, color 0.15s ease,
     border-color 0.15s ease;
 }
+
+/* Hide number input spinners (cross-browser) */
+.no-spin::-webkit-outer-spin-button,
+.no-spin::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.no-spin {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

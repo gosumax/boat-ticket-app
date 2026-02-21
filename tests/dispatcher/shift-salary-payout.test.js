@@ -154,9 +154,9 @@ describe('DISPATCHER SALARY PAYOUT', () => {
       });
     
     console.log('[TEST 4] Payout after close:', payoutRes.status, payoutRes.body);
-    expect(payoutRes.status).toBe(400);
+    expect(payoutRes.status).toBe(409);
     expect(payoutRes.body.ok).toBe(false);
-    expect(payoutRes.body.error).toContain('закрыта');
+    expect(payoutRes.body.code).toBe('SHIFT_CLOSED');
     
     console.log('[TEST 4] PASS: Payout blocked when shift closed');
   });

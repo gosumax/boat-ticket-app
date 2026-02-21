@@ -48,9 +48,10 @@ function getTripDayExpr() {
 function salesLedgerWhere() {
   // Only sales-related entries.
   // Keep it conservative to avoid counting deposits/salary.
+  // Include both SELLER_SHIFT and DISPATCHER_SHIFT for totals.
   return `(
     (ml.kind='PAYMENT' AND ml.type='PRESALE_PAYMENT')
-    OR (ml.kind='SELLER_SHIFT' AND (ml.type LIKE 'SALE_ACCEPTED_%' OR ml.type LIKE 'SALE_PREPAYMENT_%'))
+    OR (ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT') AND (ml.type LIKE 'SALE_ACCEPTED_%' OR ml.type LIKE 'SALE_PREPAYMENT_%'))
   )`;
 }
 
@@ -157,7 +158,7 @@ router.get('/money/summary', (req, res) => {
         `SELECT COALESCE(SUM(amount), 0) AS collected_total
          FROM money_ledger
          WHERE status = 'POSTED'
-           AND kind = 'SELLER_SHIFT'
+           AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
            AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
            AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
       )
@@ -216,7 +217,7 @@ router.get('/money/summary', (req, res) => {
                COALESCE(SUM(${cashCardExpr.card}), 0) AS collected_card
              FROM money_ledger ml
              WHERE ml.status = 'POSTED'
-               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
                AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
           )
@@ -231,7 +232,7 @@ router.get('/money/summary', (req, res) => {
              FROM money_ledger ml
              LEFT JOIN presales p ON p.id = ml.presale_id
              WHERE ml.status = 'POSTED'
-               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
                AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
           )
@@ -547,7 +548,7 @@ router.get('/money/summary', (req, res) => {
              JOIN presales p ON p.id = ml.presale_id
              LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
              WHERE ml.status = 'POSTED'
-               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
                AND ${tripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}`
           )
@@ -585,7 +586,7 @@ router.get('/money/summary', (req, res) => {
              COALESCE(SUM(ABS(card_amount)), 0) AS refund_card
            FROM money_ledger
            WHERE status = 'POSTED'
-             AND kind = 'SELLER_SHIFT'
+             AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
              AND type = 'SALE_CANCEL_REVERSE'
              AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
         )
@@ -602,7 +603,7 @@ router.get('/money/summary', (req, res) => {
             `SELECT COALESCE(SUM(ABS(amount)), 0) AS refund_total
              FROM money_ledger
              WHERE status = 'POSTED'
-               AND kind = 'SELLER_SHIFT'
+               AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                AND type = 'SALE_CANCEL_REVERSE'
                AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
           )
@@ -618,7 +619,7 @@ router.get('/money/summary', (req, res) => {
              COALESCE(SUM(CASE WHEN ml.method = 'MIXED' THEN ABS(ml.amount) ELSE 0 END), 0) AS refund_mixed
            FROM money_ledger ml
            WHERE ml.status = 'POSTED'
-             AND ml.kind = 'SELLER_SHIFT'
+             AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
              AND ml.type = 'SALE_CANCEL_REVERSE'
              AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
         )
@@ -638,7 +639,7 @@ router.get('/money/summary', (req, res) => {
              FROM money_ledger ml
              JOIN presales p ON p.id = ml.presale_id
              WHERE ml.status = 'POSTED'
-               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                AND ml.type = 'SALE_CANCEL_REVERSE'
                AND ml.method = 'MIXED'
                AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
@@ -817,7 +818,7 @@ router.get('/money/compare-days', (req, res) => {
            COALESCE(SUM(amount), 0) AS revenue
          FROM money_ledger
          WHERE status = 'POSTED'
-           AND kind = 'SELLER_SHIFT'
+           AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
            AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
            AND DATE(business_day) BETWEEN ${r.from} AND ${r.to}
          GROUP BY DATE(business_day)
@@ -844,7 +845,7 @@ router.get('/money/compare-days', (req, res) => {
                COALESCE(SUM(${cashCardExpr.card}), 0) AS card
              FROM money_ledger ml
              WHERE ml.status = 'POSTED'
-               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
                AND DATE(ml.business_day) BETWEEN ${r.from} AND ${r.to}
              GROUP BY DATE(ml.business_day)`
@@ -861,7 +862,7 @@ router.get('/money/compare-days', (req, res) => {
              FROM money_ledger ml
              LEFT JOIN presales p ON p.id = ml.presale_id
              WHERE ml.status = 'POSTED'
-               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
                AND DATE(ml.business_day) BETWEEN ${r.from} AND ${r.to}
              GROUP BY DATE(ml.business_day)`
@@ -883,7 +884,7 @@ router.get('/money/compare-days', (req, res) => {
              COALESCE(SUM(ABS(amount)), 0) AS refund_total
            FROM money_ledger
            WHERE status = 'POSTED'
-             AND kind = 'SELLER_SHIFT'
+             AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
              AND type = 'SALE_CANCEL_REVERSE'
              AND DATE(business_day) BETWEEN ${r.from} AND ${r.to}
            GROUP BY DATE(business_day)`
@@ -904,7 +905,7 @@ router.get('/money/compare-days', (req, res) => {
                COALESCE(SUM(ABS(card_amount)), 0) AS refund_card
              FROM money_ledger
              WHERE status = 'POSTED'
-               AND kind = 'SELLER_SHIFT'
+               AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                AND type = 'SALE_CANCEL_REVERSE'
                AND DATE(business_day) BETWEEN ${r.from} AND ${r.to}
              GROUP BY DATE(business_day)`
@@ -927,7 +928,7 @@ router.get('/money/compare-days', (req, res) => {
                COALESCE(SUM(CASE WHEN ml.method = 'CARD' THEN ABS(ml.amount) ELSE 0 END), 0) AS refund_card
              FROM money_ledger ml
              WHERE ml.status = 'POSTED'
-               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                AND ml.type = 'SALE_CANCEL_REVERSE'
                AND DATE(ml.business_day) BETWEEN ${r.from} AND ${r.to}
              GROUP BY DATE(ml.business_day)`
@@ -950,7 +951,7 @@ router.get('/money/compare-days', (req, res) => {
              FROM money_ledger ml
              JOIN presales p ON p.id = ml.presale_id
              WHERE ml.status = 'POSTED'
-               AND ml.kind = 'SELLER_SHIFT'
+               AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                AND ml.type = 'SALE_CANCEL_REVERSE'
                AND ml.method = 'MIXED'
                AND DATE(ml.business_day) BETWEEN ${r.from} AND ${r.to}
@@ -1048,7 +1049,7 @@ router.get('/money/compare-periods', (req, res) => {
            FROM money_ledger ml
            LEFT JOIN presales p ON p.id = ml.presale_id
            WHERE ml.status = 'POSTED'
-             AND ml.kind = 'SELLER_SHIFT'
+             AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
              AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
              AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
         )
@@ -1069,7 +1070,7 @@ router.get('/money/compare-periods', (req, res) => {
                COALESCE(SUM(ABS(card_amount)), 0) AS refund_card
              FROM money_ledger
              WHERE status = 'POSTED'
-               AND kind = 'SELLER_SHIFT'
+               AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                AND type = 'SALE_CANCEL_REVERSE'
                AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
           )
@@ -1085,7 +1086,7 @@ router.get('/money/compare-periods', (req, res) => {
               `SELECT COALESCE(SUM(ABS(amount)), 0) AS refund_total
                FROM money_ledger
                WHERE status = 'POSTED'
-                 AND kind = 'SELLER_SHIFT'
+                 AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                  AND type = 'SALE_CANCEL_REVERSE'
                  AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
             )
@@ -1100,7 +1101,7 @@ router.get('/money/compare-periods', (req, res) => {
                COALESCE(SUM(CASE WHEN method = 'MIXED' THEN ABS(amount) ELSE 0 END), 0) AS refund_mixed
              FROM money_ledger
              WHERE status = 'POSTED'
-               AND kind = 'SELLER_SHIFT'
+               AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                AND type = 'SALE_CANCEL_REVERSE'
                AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
           )
@@ -1119,7 +1120,7 @@ router.get('/money/compare-periods', (req, res) => {
                FROM money_ledger ml
                JOIN presales p ON p.id = ml.presale_id
                WHERE ml.status = 'POSTED'
-                 AND ml.kind = 'SELLER_SHIFT'
+                 AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
                  AND ml.type = 'SALE_CANCEL_REVERSE'
                  AND ml.method = 'MIXED'
                  AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
@@ -1266,7 +1267,7 @@ router.get('/money/compare-periods-daily', (req, res) => {
           COALESCE(SUM(CASE WHEN type = 'SALE_CANCEL_REVERSE' THEN ABS(amount) ELSE 0 END), 0) AS refund
         FROM money_ledger
         WHERE status = 'POSTED'
-          AND kind = 'SELLER_SHIFT'
+          AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
           AND type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
           AND DATE(business_day) BETWEEN '${fromExpr}' AND '${toExpr}'
         GROUP BY DATE(business_day)
@@ -1384,7 +1385,7 @@ router.get('/money/compare-boat-daily', (req, res) => {
         LEFT JOIN presales p ON p.id = ml.presale_id
         LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
         WHERE ml.status = 'POSTED'
-          AND ml.kind = 'SELLER_SHIFT'
+          AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
           AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
           AND bs.boat_id = ${boatId}
           AND DATE(ml.business_day) BETWEEN '${fromExpr}' AND '${toExpr}'

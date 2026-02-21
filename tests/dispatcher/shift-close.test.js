@@ -82,7 +82,7 @@ describe('DISPATCHER SHIFT CLOSE', () => {
     console.log('[TEST 1] PASS: Close creates snapshot');
   });
   
-  it('2) After close → deposit returns 400', async () => {
+  it('2) After close → deposit returns 409 SHIFT_CLOSED', async () => {
     const depositRes = await request(app)
       .post('/api/dispatcher/shift/deposit')
       .set('Authorization', `Bearer ${dispatcherToken}`)
@@ -93,25 +93,26 @@ describe('DISPATCHER SHIFT CLOSE', () => {
       });
     
     console.log('[TEST 2] Deposit after close:', depositRes.status, depositRes.body);
-    expect(depositRes.status).toBe(400);
+    expect(depositRes.status).toBe(409);
     expect(depositRes.body.ok).toBe(false);
-    expect(depositRes.body.error).toContain('Смена уже закрыта');
+    expect(depositRes.body.code).toBe('SHIFT_CLOSED');
     
     console.log('[TEST 2] PASS: Deposit blocked after close');
   });
   
-  it('3) Second close → 409', async () => {
+  it('3) Second close → idempotent (ok:true, is_closed:true)', async () => {
     const secondCloseRes = await request(app)
       .post('/api/dispatcher/shift/close')
       .set('Authorization', `Bearer ${dispatcherToken}`)
       .send({ business_day: today });
     
     console.log('[TEST 3] Second close:', secondCloseRes.status, secondCloseRes.body);
-    expect(secondCloseRes.status).toBe(409);
-    expect(secondCloseRes.body.ok).toBe(false);
-    expect(secondCloseRes.body.error).toContain('уже закрыта');
+    expect(secondCloseRes.status).toBe(200);
+    expect(secondCloseRes.body.ok).toBe(true);
+    expect(secondCloseRes.body.is_closed).toBe(true);
+    expect(secondCloseRes.body.source).toBe('snapshot');
     
-    console.log('[TEST 3] PASS: Second close rejected with 409');
+    console.log('[TEST 3] PASS: Second close is idempotent');
   });
   
   it('4) Summary snapshot values match live before close', async () => {

@@ -99,7 +99,7 @@ describe('Money Ledger Consistency', () => {
       // Check that ledger has the record
       const ledger = db.prepare(`
         SELECT * FROM money_ledger 
-        WHERE presale_id = ? AND kind = 'SELLER_SHIFT'
+        WHERE presale_id = ? AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
       `).all(presaleId);
       
       expect(ledger.length).toBeGreaterThan(0);

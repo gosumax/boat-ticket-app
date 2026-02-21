@@ -241,6 +241,7 @@ const DispatcherView = () => {
             searchTerm={searchTerm}
             onTripCountsChange={setTripCounts}
             shiftClosed={shiftClosed}
+            isActive={activeTab === 'trips'}
           />
         )}
 
@@ -254,6 +255,7 @@ const DispatcherView = () => {
             searchTerm={searchTerm}
             onTripCountsChange={setTripCounts}
             shiftClosed={shiftClosed}
+            isActive={activeTab === 'selling'}
           />
         )}
 

@@ -6,6 +6,26 @@ import { saveDayStats, updateSeasonStatsFromDay } from './season-stats.mjs';
 
 const router = express.Router();
 
+// Helper: ensure cashbox_json column exists in shift_closures
+let cashboxColumnEnsured = false;
+function ensureCashboxColumn() {
+  if (cashboxColumnEnsured) return;
+  try {
+    const cols = db.prepare("PRAGMA table_info(shift_closures)").all().map(r => r.name);
+    if (!cols.includes('cashbox_json')) {
+      db.prepare('ALTER TABLE shift_closures ADD COLUMN cashbox_json TEXT').run();
+      console.log('[SHIFT_CLOSURES] Added cashbox_json column');
+    }
+    cashboxColumnEnsured = true;
+  } catch (e) {
+    // Column might already exist or table doesn't exist yet
+    if (!e.message?.includes('duplicate column')) {
+      console.error('[SHIFT_CLOSURES] ensureCashboxColumn error:', e.message);
+    }
+    cashboxColumnEnsured = true;
+  }
+}
+
 // Helper: get local business day
 function getLocalBusinessDay() {
   return db.prepare("SELECT DATE('now','localtime') AS d").get()?.d;
@@ -46,6 +66,93 @@ const ALLOWED_DEPOSIT_TYPES = [
   'SALARY_PAYOUT_CARD',
 ];
 
+// GET /api/dispatcher/shift/diagnose
+// Diagnostic endpoint for shift close status (read-only)
+router.get('/diagnose', (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ ok: false, error: 'Требуется авторизация' });
+    }
+
+    const businessDay = req.query?.business_day || getLocalBusinessDay();
+
+    // Check if shift is closed
+    const closure = isShiftClosed(businessDay) ? db.prepare(`
+      SELECT closed_at, closed_by, cashbox_json 
+      FROM shift_closures 
+      WHERE business_day = ? 
+      LIMIT 1
+    `).get(businessDay) : null;
+
+    const is_closed = !!closure;
+
+    // Trip status
+    const open_trips_count = getOpenTripsCountForError(businessDay);
+    const all_trips_finished = open_trips_count === 0;
+
+    // Parse cashbox from closure if exists
+    let cashboxData = null;
+    let warnings = [];
+    let cash_discrepancy = null;
+    let has_cashbox_discrepancy = false;
+    let has_warnings = false;
+
+    if (closure?.cashbox_json) {
+      try {
+        cashboxData = JSON.parse(closure.cashbox_json);
+        warnings = cashboxData.warnings || [];
+        cash_discrepancy = cashboxData.cash_discrepancy ?? null;
+        has_cashbox_discrepancy = cash_discrepancy !== null && cash_discrepancy !== 0;
+        has_warnings = warnings.length > 0;
+      } catch {}
+    }
+
+    // Ledger stats
+    const ledgerStats = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN 1 ELSE 0 END), 0) AS sale_count,
+        COALESCE(SUM(CASE WHEN type = 'SALE_CANCEL_REVERSE' THEN 1 ELSE 0 END), 0) AS refund_count,
+        COALESCE(SUM(CASE WHEN type LIKE 'DEPOSIT_TO_OWNER%' THEN 1 ELSE 0 END), 0) AS deposit_count,
+        COALESCE(SUM(CASE WHEN type LIKE 'SALARY_PAYOUT%' THEN 1 ELSE 0 END), 0) AS salary_count
+      FROM money_ledger
+      WHERE business_day = ?
+        AND status = 'POSTED'
+    `).get(businessDay);
+
+    const ledger_stats = {
+      sale_count: Number(ledgerStats?.sale_count || 0),
+      refund_count: Number(ledgerStats?.refund_count || 0),
+      deposit_count: Number(ledgerStats?.deposit_count || 0),
+      salary_count: Number(ledgerStats?.salary_count || 0),
+    };
+
+    // Build notes
+    const notes = [];
+    if (is_closed) notes.push('SHIFT_CLOSED');
+    if (open_trips_count > 0) notes.push('OPEN_TRIPS');
+    if (has_cashbox_discrepancy) notes.push('CASH_DISCREPANCY');
+    if (ledger_stats.sale_count === 0) notes.push('NO_SALES');
+
+    res.json({
+      ok: true,
+      business_day: businessDay,
+      is_closed,
+      all_trips_finished,
+      open_trips_count,
+      has_cashbox_discrepancy,
+      cash_discrepancy,
+      has_warnings,
+      warnings,
+      ledger_stats,
+      notes,
+    });
+  } catch (e) {
+    console.error('[DISPATCHER SHIFT DIAGNOSE ERROR]', e);
+    res.status(500).json({ ok: false, error: 'Ошибка сервера' });
+  }
+});
+
 // POST /api/dispatcher/shift/deposit
 // Auth & role check applied at mount level in index.js
 router.post('/deposit', (req, res) => {
@@ -73,7 +180,12 @@ router.post('/deposit', (req, res) => {
 
     // LOCK: Check if shift already closed
     if (isShiftClosed(businessDay)) {
-      return res.status(400).json({ ok: false, error: 'Смена уже закрыта. Операции запрещены.' });
+      return res.status(409).json({
+        ok: false,
+        code: 'SHIFT_CLOSED',
+        business_day: businessDay,
+        message: 'Shift is already closed'
+      });
     }
 
     // GATE: Check if all trips finished before allowing deposit/salary
@@ -146,9 +258,20 @@ router.post('/close', (req, res) => {
 
     const businessDay = req.body?.business_day || getLocalBusinessDay();
 
-    // Check if already closed
-    if (isShiftClosed(businessDay)) {
-      return res.status(409).json({ ok: false, error: 'Смена уже закрыта', business_day: businessDay });
+    // Check if already closed - return idempotent success
+    const existingClosure = isShiftClosed(businessDay) ? db.prepare(`
+      SELECT closed_at, closed_by FROM shift_closures WHERE business_day = ? LIMIT 1
+    `).get(businessDay) : null;
+    
+    if (existingClosure) {
+      return res.json({
+        ok: true,
+        business_day: businessDay,
+        is_closed: true,
+        source: 'snapshot',
+        closed_at: existingClosure.closed_at,
+        closed_by: existingClosure.closed_by
+      });
     }
 
     // GATE: Check if all trips finished before closing shift
@@ -307,6 +430,44 @@ router.post('/close', (req, res) => {
     const salaryPaidTotal = salaryPaidCash + salaryPaidCard;
     const salaryDue = 0;  // TEMP: will come from motivation engine
 
+    // --- CASHBOX SANITY CHECK ---
+    // Ensure cashbox_json column exists
+    ensureCashboxColumn();
+
+    // Cash in cashbox = net_cash - deposit_cash - salary_paid_cash
+    const cash_in_cashbox = netCash - depositCash - salaryPaidCash;
+
+    // Expected sellers cash due = sum of positive cash_due_to_owner (balance)
+    const expected_sellers_cash_due = sellers.reduce((sum, s) => {
+      const due = Math.max(0, Number(s.balance || s.cash_balance || 0));
+      return sum + due;
+    }, 0);
+
+    // Cash discrepancy = cash_in_cashbox - expected_sellers_cash_due
+    const cash_discrepancy = cash_in_cashbox - expected_sellers_cash_due;
+
+    // Warnings (soft, non-blocking)
+    const warnings = [];
+    if (cash_discrepancy !== 0) {
+      warnings.push({
+        code: 'CASH_DISCREPANCY',
+        amount: cash_discrepancy,
+        message: cash_discrepancy > 0
+          ? `В кассе больше наличных на ${Math.abs(cash_discrepancy)} ₽, чем ожидалось от продавцов`
+          : `В кассе меньше наличных на ${Math.abs(cash_discrepancy)} ₽, чем ожидалось от продавцов`
+      });
+    }
+
+    // Cashbox JSON for snapshot
+    const cashboxJson = JSON.stringify({
+      cash_in_cashbox,
+      expected_sellers_cash_due,
+      deposits_cash_total: depositCash,
+      salary_paid_cash: salaryPaidCash,
+      cash_discrepancy,
+      warnings
+    });
+
     // Insert snapshot
     db.prepare(`
       INSERT INTO shift_closures (
@@ -328,8 +489,9 @@ router.post('/close', (req, res) => {
         salary_paid_cash,
         salary_paid_card,
         salary_paid_total,
-        sellers_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        sellers_json,
+        cashbox_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       businessDay,
       userId,
@@ -349,10 +511,15 @@ router.post('/close', (req, res) => {
       salaryPaidCash,
       salaryPaidCard,
       salaryPaidTotal,
-      JSON.stringify(sellers)
+      JSON.stringify(sellers),
+      cashboxJson
     );
 
     console.log(`[SHIFT_CLOSE] business_day=${businessDay} closed_by=${userId} total_revenue=${totalRevenue} collected=${collectedTotal}`);
+
+    // Get closed_at from the inserted row
+    const closedRow = db.prepare(`SELECT closed_at FROM shift_closures WHERE business_day = ? LIMIT 1`).get(businessDay);
+    const closedAt = closedRow?.closed_at;
 
     // Update seller motivation state (calibration, level, streak)
     try {
@@ -486,6 +653,9 @@ router.post('/close', (req, res) => {
       ok: true,
       business_day: businessDay,
       closed: true,
+      is_closed: true,
+      source: 'snapshot',
+      closed_at: closedAt,
       closed_by: userId,
       totals: {
         total_revenue: totalRevenue,
@@ -496,7 +666,21 @@ router.post('/close', (req, res) => {
         net_total: netTotal,
         deposit_cash: depositCash,
         deposit_card: depositCard
-      }
+      },
+      // Cashbox sanity check fields
+      cashbox: {
+        cash_in_cashbox,
+        expected_sellers_cash_due,
+        deposits_cash_total: depositCash,
+        salary_paid_cash: salaryPaidCash,
+        cash_discrepancy,
+        warnings
+      },
+      // Top-level convenience fields
+      cash_in_cashbox,
+      expected_sellers_cash_due,
+      cash_discrepancy,
+      warnings
     });
   } catch (e) {
     console.error('[DISPATCHER SHIFT CLOSE ERROR]', e);

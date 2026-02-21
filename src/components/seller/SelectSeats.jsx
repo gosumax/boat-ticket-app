@@ -14,6 +14,14 @@ const SelectSeats = ({
   setCustomerPhone,
   prepaymentStr,
   setPrepaymentStr,
+  prepaymentMethod,
+  setPrepaymentMethod,
+  prepaymentCashStr,
+  setPrepaymentCashStr,
+  prepaymentCardStr,
+  setPrepaymentCardStr,
+  prepaymentMethodError,
+  setPrepaymentMethodError,
   validateCustomerInputs,
   apiUrl,
   lastError,
@@ -137,6 +145,12 @@ const SelectSeats = ({
     
     // Clear prepayment error when user types
     setPrepaymentError('');
+    
+    // Reset payment method when prepayment amount changes
+    if (setPrepaymentMethod) setPrepaymentMethod(null);
+    if (setPrepaymentMethodError) setPrepaymentMethodError('');
+    if (setPrepaymentCashStr) setPrepaymentCashStr('');
+    if (setPrepaymentCardStr) setPrepaymentCardStr('');
   };
 
   const handleConfirm = () => {
@@ -481,6 +495,11 @@ const SelectSeats = ({
                 onClick={() => {
                   setLocalPrepaymentStr(String(v));
                   if (setPrepaymentStr) setPrepaymentStr(String(v));
+                  // Reset payment method when prepayment amount changes
+                  if (setPrepaymentMethod) setPrepaymentMethod(null);
+                  if (setPrepaymentMethodError) setPrepaymentMethodError('');
+                  if (setPrepaymentCashStr) setPrepaymentCashStr('');
+                  if (setPrepaymentCardStr) setPrepaymentCardStr('');
                 }}
                 className="py-2 rounded-lg font-semibold bg-blue-100 text-blue-900 hover:bg-blue-200 active:bg-blue-300 transition"
               >
@@ -501,6 +520,86 @@ const SelectSeats = ({
 
           {prepaymentError && (
             <p className="text-red-600 text-xs mt-1">{prepaymentError}</p>
+          )}
+
+          {/* Payment method selection - only shown when prepayment > 0 */}
+          {Number(localPrepaymentStr || 0) > 0 && (
+            <div className="mt-3 p-2 rounded-lg border border-gray-200 bg-gray-50">
+              <div className="text-gray-800 text-sm font-bold mb-2">Оплата предоплаты</div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (setPrepaymentMethod) setPrepaymentMethod('cash');
+                    if (setPrepaymentMethodError) setPrepaymentMethodError('');
+                    if (setPrepaymentCashStr) setPrepaymentCashStr('');
+                    if (setPrepaymentCardStr) setPrepaymentCardStr('');
+                  }}
+                  className={`py-2 rounded-lg font-semibold transition ${
+                    prepaymentMethod === 'cash' ? 'bg-blue-600 text-white' : 'bg-white text-gray-800 border border-gray-300'
+                  }`}
+                >
+                  Нал
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (setPrepaymentMethod) setPrepaymentMethod('card');
+                    if (setPrepaymentMethodError) setPrepaymentMethodError('');
+                    if (setPrepaymentCashStr) setPrepaymentCashStr('');
+                    if (setPrepaymentCardStr) setPrepaymentCardStr('');
+                  }}
+                  className={`py-2 rounded-lg font-semibold transition ${
+                    prepaymentMethod === 'card' ? 'bg-blue-600 text-white' : 'bg-white text-gray-800 border border-gray-300'
+                  }`}
+                >
+                  Карта
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (setPrepaymentMethod) setPrepaymentMethod('mixed');
+                    if (setPrepaymentMethodError) setPrepaymentMethodError('');
+                    const p = Math.round(Number(localPrepaymentStr || 0));
+                    const cash = Math.max(1, Math.floor(p / 2));
+                    const card = Math.max(1, p - cash);
+                    if (setPrepaymentCashStr) setPrepaymentCashStr(String(cash));
+                    if (setPrepaymentCardStr) setPrepaymentCardStr(String(card));
+                  }}
+                  className={`py-2 rounded-lg font-semibold transition ${
+                    prepaymentMethod === 'mixed' ? 'bg-blue-600 text-white' : 'bg-white text-gray-800 border border-gray-300'
+                  }`}
+                >
+                  Комбо
+                </button>
+              </div>
+
+              {prepaymentMethod === 'mixed' && (
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <input
+                    type="number"
+                    value={prepaymentCashStr || ''}
+                    onChange={(e) => setPrepaymentCashStr && setPrepaymentCashStr(e.target.value)}
+                    placeholder="Нал"
+                    className="py-2 px-2 rounded-lg border border-gray-300"
+                  />
+                  <input
+                    type="number"
+                    value={prepaymentCardStr || ''}
+                    onChange={(e) => setPrepaymentCardStr && setPrepaymentCardStr(e.target.value)}
+                    placeholder="Карта"
+                    className="py-2 px-2 rounded-lg border border-gray-300"
+                  />
+                </div>
+              )}
+
+              {prepaymentMethodError && (
+                <div className="text-red-600 text-xs mt-2">{prepaymentMethodError}</div>
+              )}
+            </div>
           )}
         </div>
       </div>

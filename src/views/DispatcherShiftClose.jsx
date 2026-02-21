@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../utils/apiClient';
 import { formatRUB } from '../utils/currency';
+import normalizeSummary from '../utils/normalizeSummary';
 
 const COMMISSION_PERCENT = 13; // Temporary commission rate
 
@@ -42,8 +43,8 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   const [salaryPaidCash, setSalaryPaidCash] = useState(0);
   const [salaryPaidCard, setSalaryPaidCard] = useState(0);
   const [salaryPaidTotal, setSalaryPaidTotal] = useState(0);
-  // Input for salary payout amount
-  const [salaryPayoutDraft, setSalaryPayoutDraft] = useState('');
+  // Per-seller salary payout drafts
+  const [salaryDraftBySellerId, setSalaryDraftBySellerId] = useState({});
   
   // State for confirmation checkboxes
   const [confirmationChecks, setConfirmationChecks] = useState({
@@ -54,10 +55,22 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   
   // State to track if shift is closed
   const [shiftClosed, setShiftClosed] = useState(false);
+  
+  // Normalized summary from backend (single source of truth)
+  const [normalizedSummary, setNormalizedSummary] = useState(null);
+  
+  // New fields from contract (Step 4)
+  const [shiftSource, setShiftSource] = useState('live');
+  const [closedAt, setClosedAt] = useState(null);
+  const [closedBy, setClosedBy] = useState(null);
+  const [dispatcherData, setDispatcherData] = useState(null);
 
   // State for trip completion status (gate for operations)
   const [allTripsFinished, setAllTripsFinished] = useState(true);
   const [openTripsCount, setOpenTripsCount] = useState(0);
+
+  // Explain section (human-readable breakdown)
+  const [explainData, setExplainData] = useState(null);
 
   // Function to generate mock data
   const generateMockData = () => {
@@ -102,107 +115,82 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     const day = businessDay || toLocalBusinessDay();
     const data = await apiClient.request(`/dispatcher/shift-ledger/summary?business_day=${encodeURIComponent(day)}`);
 
-    // Backend contract (aligned with Owner → Money):
-    //  total_revenue: revenue from canonical (trip_date semantics)
-    //  collected_cash/card: from money_ledger (payment date semantics) - SAME AS OWNER
-    //  net_cash/card: collected - refunds
-    //  sellers[]: per-seller balances
-    //
-    // IMPORTANT: No local recalculation. All values come directly from backend.
-    const totalRevenue = Number(data?.total_revenue ?? data?.revenue ?? data?.sales?.revenue ?? 0);
+    // Normalize the response (handles both snake_case and camelCase)
+    const normalized = normalizeSummary(data);
+    if (!normalized) {
+      throw new Error('Failed to normalize summary data');
+    }
+    
+    // Store normalized summary as single source of truth
+    setNormalizedSummary(normalized);
 
-    // Collected money (from money_ledger - authoritative source, same as Owner)
-    const collectedCash = Number(data?.collected_cash ?? data?.collected?.cash ?? 0);
-    const collectedCard = Number(data?.collected_card ?? data?.collected?.card ?? 0);
-    const collectedTotal = Number(data?.collected_total ?? data?.collected?.total ?? 0);
-
-    // Refunds
-    const refundTotal = Number(data?.refund_total ?? data?.refunds?.total ?? 0);
-    const refundCash = Number(data?.refund_cash ?? data?.refunds?.cash ?? 0);
-    const refundCard = Number(data?.refund_card ?? data?.refunds?.card ?? 0);
-
-    // Net metrics (collected - refunds)
-    const netTotal = Number(data?.net_total ?? data?.net?.total ?? 0);
-    const netCash = Number(data?.net_cash ?? data?.net?.cash ?? 0);
-    const netCard = Number(data?.net_card ?? data?.net?.card ?? 0);
-
-    // Deposits (for backward compat / seller details)
-    const depositTotal = Number(data?.deposit_total ?? data?.ledger?.deposit_to_owner?.total ?? 0);
-    const depositCash = Number(data?.deposit_cash ?? data?.ledger?.deposit_to_owner?.cash ?? 0);
-    const depositCard = Number(data?.deposit_card ?? data?.ledger?.deposit_to_owner?.card ?? 0);
-
-    const commissionPaid = Number(
-      data?.salary_total ?? Math.round((totalRevenue * COMMISSION_PERCENT) / 100)
-    );
-
+    // Build legacy-compatible dailySummary object
     const summary = {
-      totalRevenue,
-      // Collected money (authoritative, same as Owner)
-      cashRevenue: collectedCash,
-      cardRevenue: collectedCard,
-      collectedTotal,
-      commissionPaid,
-      businessDay: data?.business_day || day,
+      totalRevenue: normalized.total_revenue,
+      cashRevenue: normalized.collected_cash,
+      cardRevenue: normalized.collected_card,
+      collectedTotal: normalized.collected_total,
+      commissionPaid: Math.round((normalized.total_revenue * COMMISSION_PERCENT) / 100),
+      businessDay: normalized.business_day,
       // Refund and net metrics
-      refundTotal,
-      refundCash,
-      refundCard,
-      netTotal,
-      netCash,
-      netCard,
+      refundTotal: normalized.refund_total,
+      refundCash: normalized.refund_cash,
+      refundCard: normalized.refund_card,
+      netTotal: normalized.net_total,
+      netCash: normalized.net_cash,
+      netCard: normalized.net_card,
+      // Deposits (for cashbox calculation)
+      depositCash: normalized.deposit_cash,
+      depositCard: normalized.deposit_card,
     };
 
-    const rawSellers = Array.isArray(data?.sellers) ? data.sellers : [];
-    const sellers = rawSellers.map((r) => {
-      const sid = Number(r.seller_id);
-      const cashRemaining = Number(r.cash_balance ?? r.balance ?? 0);
-      const terminalDebt = Number(r.terminal_debt ?? 0);
-      const accepted = Number(r.accepted ?? 0);
-      const deposited = Number(r.deposited ?? 0);
+    // Build sellers array for legacy code
+    const sellers = normalized.sellers.map((s) => ({
+      id: s.seller_id,
+      name: s.seller_name,
+      // informational fields
+      totalSales: s.collected_total,
+      cashSales: s.collected_cash,
+      cardSales: s.collected_card,
+      // already handed to owner/dispatcher
+      cashHanded: s.deposit_cash,
+      terminalHanded: s.deposit_card,
+      // critical fields for the main table
+      cashRemaining: s.cash_due_to_owner,
+      terminalDebt: s.terminal_due_to_owner ?? s.terminal_debt,
+      // debug
+      depositedTotal: s._raw?.deposited ?? 0,
+    }));
 
-      return {
-        id: sid,
-        name: `Продавец #${sid}`,
-        // informational fields (used in details, optional)
-        totalSales: accepted,
-        cashSales: Number(r.accepted_cash || 0),
-        cardSales: Number(r.accepted_card || 0),
-
-        // already handed to owner/dispatcher (optional)
-        cashHanded: Number(r.deposited_cash || 0),
-        terminalHanded: Number(r.deposited_card || 0),
-
-        // critical fields for the main table
-        cashRemaining,
-        terminalDebt,
-
-        // debug (optional)
-        depositedTotal: deposited,
-      };
-    });
-
-    // If backend says the shift is already closed — reflect it in UI
-    const closed = Boolean(data?.is_closed);
+    // Set shift closed state
+    const closed = normalized.is_closed;
     setShiftClosed(closed);
     if (typeof setGlobalShiftClosed === 'function') setGlobalShiftClosed(closed);
     try {
       if (closed) localStorage.setItem('dispatcher_shiftClosed', 'true');
       else localStorage.removeItem('dispatcher_shiftClosed');
     } catch {}
+    
+    // Set contract fields
+    setShiftSource(normalized.source);
+    setClosedAt(normalized.closed_at);
+    setClosedBy(normalized.closed_by);
+    setDispatcherData(normalized.dispatcher);
 
-    // Extract trip completion status (gate for operations)
-    // If shift is closed, always consider all trips finished
-    const tripsFinished = closed ? true : Boolean(data?.all_trips_finished ?? true);
-    const tripsCount = closed ? 0 : Number(data?.open_trips_count ?? 0);
-    setAllTripsFinished(tripsFinished);
-    setOpenTripsCount(tripsCount);
+    // Trip status
+    setAllTripsFinished(closed ? true : normalized.all_trips_finished);
+    setOpenTripsCount(closed ? 0 : normalized.open_trips_count);
 
-    // Extract salary values from backend
-    setSalaryDue(Number(data?.salary_due ?? 0));
-    setSalaryPaidCash(Number(data?.salary_paid_cash ?? 0));
-    setSalaryPaidCard(Number(data?.salary_paid_card ?? 0));
-    setSalaryPaidTotal(Number(data?.salary_paid_total ?? 0));
+    // Explain section (human-readable breakdown)
+    setExplainData(normalized.explain || null);
 
+    // Salary values
+    setSalaryDue(normalized.salary_due_total);
+    setSalaryPaidCash(normalized.salary_paid_cash);
+    setSalaryPaidCard(normalized.salary_paid_card);
+    setSalaryPaidTotal(normalized.salary_paid_total);
+
+    // Init drafts
     const draftsInit = {};
     for (const s of sellers) {
       draftsInit[s.id] = { cash: '', terminal: '' };
@@ -212,6 +200,19 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     setSellersData(sellers);
     setDepositDrafts(draftsInit);
     setLoading(false);
+  };
+  
+  // Helper: handle API error, check for SHIFT_CLOSED, reload summary
+  const handleApiError = async (error, operation) => {
+    const errData = error?.body || error?.data || {};
+    if (errData?.code === 'SHIFT_CLOSED' || error?.status === 409) {
+      // Shift was closed - reload summary to update UI
+      const businessDay = normalizedSummary?.business_day || dailySummary?.businessDay || toLocalBusinessDay();
+      await loadSummaryFromBackend(businessDay);
+      return { handled: true, shiftClosed: true };
+    }
+    console.error(`[${operation}] Error:`, error);
+    return { handled: false };
   };
 
   useEffect(() => {
@@ -229,15 +230,16 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   }, []);
 
   const debtSummary = useMemo(() => {
-    const debtSellers = (sellersData || []).filter(
-      (s) => Number(s.cashRemaining || 0) > 0 || Number(s.terminalDebt || 0) > 0
+    const sellers = normalizedSummary?.sellers ?? sellersData ?? [];
+    const debtSellers = sellers.filter(
+      (s) => Number(s.cash_due_to_owner ?? (s.cashRemaining || 0)) > 0 || Number(s.terminal_due_to_owner ?? s.terminal_debt ?? (s.terminalDebt || 0)) > 0
     );
     const totalDebt = debtSellers.reduce(
-      (acc, s) => acc + Number(s.cashRemaining || 0) + Number(s.terminalDebt || 0),
+      (acc, s) => acc + Number(s.cash_due_to_owner ?? (s.cashRemaining || 0)) + Number(s.terminal_due_to_owner ?? s.terminal_debt ?? (s.terminalDebt || 0)),
       0
     );
     return { count: debtSellers.length, total: totalDebt };
-  }, [sellersData]);
+  }, [normalizedSummary, sellersData]);
 
   const getSellerStatus = (s) => {
     const cashRem = Number(s.cashRemaining || 0);
@@ -258,11 +260,17 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   };
 
   const fillAllDrafts = () => {
-    const next = {};
-    for (const s of sellersData || []) {
-      next[s.id] = {
-        cash: Number(s.cashRemaining || 0) > 0 ? String(s.cashRemaining) : '',
-        terminal: Number(s.terminalDebt || 0) > 0 ? String(s.terminalDebt) : '',
+    const sellers = normalizedSummary?.sellers ?? sellersData ?? [];
+    const next = { ...depositDrafts };
+    for (const s of sellers) {
+      const cashDue = Math.max(0, Math.floor(Number(s.cash_due_to_owner ?? (s.cashRemaining || 0))));
+      const termDue = Math.max(0, Math.floor(Number(s.terminal_due_to_owner ?? s.terminal_debt ?? (s.terminalDebt || 0))));
+      const sellerId = s.seller_id ?? s.id;
+      const prev = next[sellerId] || { cash: '', terminal: '' };
+      next[sellerId] = {
+        // Заполнять только если: due > 0 И поле пустое
+        cash: cashDue > 0 && (prev.cash === '' || prev.cash === undefined) ? String(cashDue) : (prev.cash || ''),
+        terminal: termDue > 0 && (prev.terminal === '' || prev.terminal === undefined) ? String(termDue) : (prev.terminal || ''),
       };
     }
     setDepositDrafts(next);
@@ -274,35 +282,81 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     const remaining = Math.max(0, due - paid);
     return { due, paid, remaining };
   }, [salaryDue, salaryPaidTotal]);
+  
+  // Cash in cashbox calculation - use server truth if available, else fallback to local calculation
+  const cashInCashbox = useMemo(() => {
+    // Server truth (from cashbox_json in snapshot or close response)
+    if (normalizedSummary?.cashbox?.cash_in_cashbox !== null && normalizedSummary?.cashbox?.cash_in_cashbox !== undefined) {
+      return normalizedSummary.cashbox.cash_in_cashbox;
+    }
+    // Fallback: local calculation
+    const netCash = normalizedSummary?.net_cash ?? dailySummary?.netCash ?? 0;
+    const depositCash = normalizedSummary?.deposit_cash ?? dailySummary?.depositCash ?? 0;
+    const salaryPaidCashValue = normalizedSummary?.dispatcher?.salary_paid_cash ?? dispatcherData?.salary_paid_cash ?? salaryPaidCash ?? 0;
+    return netCash - depositCash - salaryPaidCashValue;
+  }, [normalizedSummary, dailySummary, salaryPaidCash, dispatcherData]);
+  
+  // Expected sellers cash due - use server truth if available
+  const expectedSellersCashDue = useMemo(() => {
+    // Server truth
+    if (normalizedSummary?.cashbox?.expected_sellers_cash_due !== null && normalizedSummary?.cashbox?.expected_sellers_cash_due !== undefined) {
+      return normalizedSummary.cashbox.expected_sellers_cash_due;
+    }
+    // Fallback: sum of positive cash_due_to_owner
+    const sellers = normalizedSummary?.sellers ?? sellersData ?? [];
+    return sellers.reduce((sum, s) => {
+      const due = s.cash_due_to_owner ?? s.cashRemaining ?? 0;
+      return sum + Math.max(0, Number(due));
+    }, 0);
+  }, [normalizedSummary, sellersData]);
 
-  const applySalaryPayout = async () => {
-    const amount = Math.max(0, Number(salaryPayoutDraft || 0));
+  // Cash discrepancy - use server truth if available
+  const cashDiscrepancy = useMemo(() => {
+    // Server truth
+    if (normalizedSummary?.cashbox?.cash_discrepancy !== null && normalizedSummary?.cashbox?.cash_discrepancy !== undefined) {
+      return normalizedSummary.cashbox.cash_discrepancy;
+    }
+    // Fallback: calculate locally
+    return cashInCashbox - expectedSellersCashDue;
+  }, [normalizedSummary, cashInCashbox, expectedSellersCashDue]);
+
+  // Warnings from server (CASH_DISCREPANCY)
+  const cashboxWarnings = useMemo(() => {
+    return normalizedSummary?.cashbox?.warnings ?? normalizedSummary?.warnings ?? [];
+  }, [normalizedSummary]);
+
+  const applySalaryPayoutForSeller = async (sellerId) => {
+    const raw = salaryDraftBySellerId?.[sellerId];
+    const amount = Math.max(0, Number(raw || 0));
     if (!amount) return;
 
     if (!backendDepositEnabled) {
       // Fallback: local update only
       setSalaryPaidTotal((prev) => prev + amount);
-      setSalaryPayoutDraft('');
+      setSalaryDraftBySellerId((prev) => ({ ...prev, [sellerId]: '' }));
       return;
     }
 
     try {
-      const business_day = dailySummary?.businessDay || toLocalBusinessDay();
+      const business_day = normalizedSummary?.business_day ?? dailySummary?.businessDay ?? toLocalBusinessDay();
       await apiClient.request('/dispatcher/shift/deposit', {
         method: 'POST',
         body: {
           business_day,
           type: 'SALARY_PAYOUT_CASH',
+          seller_id: sellerId,
           amount,
         },
       });
       await loadSummaryFromBackend(business_day);
-      setSalaryPayoutDraft('');
+      setSalaryDraftBySellerId((prev) => ({ ...prev, [sellerId]: '' }));
     } catch (e) {
+      const result = await handleApiError(e, 'SALARY_PAYOUT');
+      if (result.handled) return;
       // Fallback: backend not available
       setBackendDepositEnabled(false);
       setSalaryPaidTotal((prev) => prev + amount);
-      setSalaryPayoutDraft('');
+      setSalaryDraftBySellerId((prev) => ({ ...prev, [sellerId]: '' }));
     }
   };
 
@@ -331,8 +385,8 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     }
 
     try {
-      const business_day = dailySummary?.businessDay || toLocalBusinessDay();
-      await apiClient.request('/dispatcher/shift-ledger', {
+      const business_day = normalizedSummary?.business_day ?? dailySummary?.businessDay ?? toLocalBusinessDay();
+      await apiClient.request('/dispatcher/shift/deposit', {
         method: 'POST',
         body: {
           business_day,
@@ -344,6 +398,8 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
       await loadSummaryFromBackend(business_day);
       setDraftValue(sellerId, 'cash', '');
     } catch (e) {
+      const result = await handleApiError(e, 'CASH_DEPOSIT');
+      if (result.handled) return;
       // Фоллбек: backend не готов/недоступен
       setBackendDepositEnabled(false);
       setSellersData((prev) =>
@@ -385,12 +441,12 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     }
 
     try {
-      const business_day = dailySummary?.businessDay || toLocalBusinessDay();
-      await apiClient.request('/dispatcher/shift-ledger', {
+      const business_day = normalizedSummary?.business_day ?? dailySummary?.businessDay ?? toLocalBusinessDay();
+      await apiClient.request('/dispatcher/shift/deposit', {
         method: 'POST',
         body: {
           business_day,
-          type: 'DEPOSIT_TO_OWNER_TERMINAL',
+          type: 'DEPOSIT_TO_OWNER_CARD',
           seller_id: sellerId,
           amount,
         },
@@ -398,6 +454,8 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
       await loadSummaryFromBackend(business_day);
       setDraftValue(sellerId, 'terminal', '');
     } catch (e) {
+      const result = await handleApiError(e, 'TERMINAL_CLOSE');
+      if (result.handled) return;
       setBackendDepositEnabled(false);
       setSellersData((prev) =>
         prev.map((x) => {
@@ -411,25 +469,6 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
         })
       );
       setDraftValue(sellerId, 'terminal', '');
-    }
-  };
-
-  const applyAllDeposits = async () => {
-    // 1) Наличка
-    for (const s of sellersData || []) {
-      const a = Math.max(0, Number(depositDrafts?.[s.id]?.cash || 0));
-      if (a > 0) {
-        // eslint-disable-next-line no-await-in-loop
-        await applyCashDeposit(s.id);
-      }
-    }
-    // 2) Терминал
-    for (const s of sellersData || []) {
-      const a = Math.max(0, Number(depositDrafts?.[s.id]?.terminal || 0));
-      if (a > 0) {
-        // eslint-disable-next-line no-await-in-loop
-        await applyTerminalClose(s.id);
-      }
     }
   };
 
@@ -496,100 +535,127 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   return (
     <div className="min-h-screen bg-neutral-950">
       <div className="p-3">
-        <div className="max-w-4xl mx-auto space-y-6">
+        <div className="max-w-4xl lg:max-w-5xl xl:max-w-6xl mx-auto space-y-6">
           {/* Daily Summary Card */}
           <div className="bg-neutral-900 rounded-2xl  p-3">
-            <h2 className="text-xl font-bold text-neutral-100 mb-4">ИТОГО ЗА ДЕНЬ</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="bg-neutral-950 p-3 rounded-lg">
-                <div className="text-neutral-400">Общая выручка</div>
-                <div className="text-2xl font-bold text-purple-600">{formatRUB(dailySummary.totalRevenue)}</div>
+            {/* Shift status header */}
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xl font-bold text-neutral-100">ИТОГО ЗА ДЕНЬ</h2>
+              <div className="flex items-center gap-2">
+                {shiftClosed ? (
+                  <span className="px-2 py-1 bg-green-900/50 text-green-300 rounded-lg text-sm">
+                    ✓ Закрыта ({shiftSource === 'snapshot' ? 'snapshot' : 'live'})
+                  </span>
+                ) : (
+                  <span className="px-2 py-1 bg-yellow-900/50 text-yellow-300 rounded-lg text-sm">
+                    ○ Открыта ({shiftSource})
+                  </span>
+                )}
               </div>
-              <div className="bg-neutral-950 p-3 rounded-lg">
-                <div className="text-neutral-400">Наличка/предоплата</div>
-                <div className="text-2xl font-bold text-green-600">{formatRUB(dailySummary.cashRevenue)}</div>
+            </div>
+            
+            {/* Closed shift message */}
+            {shiftClosed && closedAt && (
+              <div className="mb-3 p-2 bg-green-950/50 border border-green-900/50 rounded-lg text-sm text-green-300 text-center">
+                Смена закрыта в {closedAt}. Операции запрещены.
               </div>
-              <div className="bg-neutral-950 p-3 rounded-lg">
-                <div className="text-neutral-400">Безнал/онлайн</div>
-                <div className="text-2xl font-bold text-blue-600">{formatRUB(dailySummary.cardRevenue)}</div>
+            )}
+            
+            {/* КАССА ЗА СМЕНУ - компактный блок */}
+            <div className="bg-neutral-950/50 border border-neutral-800 p-4 rounded-lg">
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <div>
+                  <div className="text-neutral-400 text-sm">Наличные получено</div>
+                  <div className="text-2xl font-bold text-green-400">{formatRUB(dailySummary.cashRevenue)}</div>
+                </div>
+                <div>
+                  <div className="text-neutral-400 text-sm">Терминал получено</div>
+                  <div className="text-2xl font-bold text-blue-400">{formatRUB(dailySummary.cardRevenue)}</div>
+                </div>
+                <div>
+                  <div className="text-neutral-400 text-sm">Итого получено</div>
+                  <div className="text-2xl font-bold text-emerald-400">{formatRUB(dailySummary.cashRevenue + dailySummary.cardRevenue)}</div>
+                </div>
               </div>
-          </div>
+              
+              {/* Предоплаты будущих рейсов */}
+              {explainData && (explainData.liabilities?.prepayment_future_cash > 0 || explainData.liabilities?.prepayment_future_terminal > 0) && (
+                <div className="mt-3 pt-3 border-t border-neutral-800 text-xs text-neutral-500 text-center">
+                  <span 
+                    className="cursor-help text-neutral-500 hover:text-neutral-300" 
+                    title="Это деньги, полученные сегодня за рейсы в будущие дни. Это не 'заработано', это обязательство: при отмене делается возврат предоплаты."
+                  >?</span>
+                  {' '}Предоплаты будущих рейсов: {formatRUB((explainData.liabilities?.prepayment_future_cash || 0) + (explainData.liabilities?.prepayment_future_terminal || 0))}
+                </div>
+              )}
+            </div>
+
+            {/* ОПЕРАЦИИ НА ЗАКРЫТИЕ */}
+            <div className="mt-3 bg-neutral-950/30 border border-neutral-800 p-3 rounded-lg">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                {/* Собрать с продавцов */}
+                <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
+                  <span className="text-neutral-400">Собрать с продавцов:</span>
+                  <span className={`text-lg font-bold ${debtSummary.total > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                    {formatRUB(debtSummary.total)}
+                  </span>
+                </div>
+                
+                {/* К выдаче зарплат */}
+                <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
+                  <span className="text-neutral-400">К выдаче зарплат:</span>
+                  <span className="text-lg font-bold text-blue-400">
+                    {formatRUB(salaryPaidTotal > 0 ? salaryPaidTotal : dailySummary.commissionPaid || 0)}
+                  </span>
+                </div>
+                
+                {/* К сдаче owner'у */}
+                <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
+                  <span className="text-neutral-400">К сдаче owner'у:</span>
+                  <span className="text-lg font-bold text-purple-400">
+                    {formatRUB(dailySummary.netTotal)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Refunds if any */}
+            {dailySummary.refundTotal > 0 && (
+              <div className="mt-3 bg-red-950/30 border border-red-900/50 p-3 rounded-lg text-center">
+                <div className="text-neutral-400 text-sm">Возвраты</div>
+                <div className="text-xl font-bold text-red-400">{formatRUB(dailySummary.refundTotal)}</div>
+                <div className="mt-1 text-xs text-neutral-500">Нал: {formatRUB(dailySummary.refundCash)} | Терминал: {formatRUB(dailySummary.refundCard)}</div>
+              </div>
+            )}
           
-          {/* Refunds and Net */}
-          {dailySummary.refundTotal > 0 && (
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className="bg-red-950/30 border border-red-900/50 p-3 rounded-lg">
-                <div className="text-neutral-400">Возвраты</div>
-                <div className="text-2xl font-bold text-red-400">{formatRUB(dailySummary.refundTotal)}</div>
-                <div className="mt-1 text-xs text-neutral-500">Нал: {formatRUB(dailySummary.refundCash)} | Карта: {formatRUB(dailySummary.refundCard)}</div>
+          {/* Cash discrepancy warning (from server) - KEEP */}
+          {(cashDiscrepancy !== 0 || cashboxWarnings.length > 0) && (
+            <div className={`mt-3 p-3 rounded-lg border text-center ${
+              cashDiscrepancy > 0 
+                ? 'bg-yellow-950/30 border-yellow-900/50' 
+                : 'bg-red-950/30 border-red-900/50'
+            }`}>
+              <div className={`text-lg font-bold mb-1 ${cashDiscrepancy > 0 ? 'text-yellow-400' : 'text-red-400'}`}>
+                ⚠ ВНИМАНИЕ: Расхождение кассы
               </div>
-              <div className="bg-emerald-950/30 border border-emerald-900/50 p-3 rounded-lg">
-                <div className="text-neutral-400">Чистая касса</div>
-                <div className="text-2xl font-bold text-emerald-400">{formatRUB(dailySummary.netTotal)}</div>
-                <div className="mt-1 text-xs text-neutral-500">Нал: {formatRUB(dailySummary.netCash)} | Карта: {formatRUB(dailySummary.netCard)}</div>
+              <div className="text-sm text-neutral-300">
+                {cashDiscrepancy > 0 
+                  ? `В кассе больше наличных на ${formatRUB(Math.abs(cashDiscrepancy))}, чем ожидалось от продавцов`
+                  : `В кассе меньше наличных на ${formatRUB(Math.abs(cashDiscrepancy))}, чем ожидалось от продавцов`
+                }
+              </div>
+              <div className="mt-1 text-xs text-neutral-500">
+                Закрытие смены разрешено, но проверь кассу перед закрытием.
               </div>
             </div>
           )}
           </div>
           
-          {/* Salary (cash) */}
-          <div className="bg-neutral-900 rounded-2xl  p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-xl font-bold text-neutral-100">Зарплата (нал)</h2>
-                <div className="mt-1 text-sm text-neutral-400">К выплате временно 0, позже придёт из мотивации.</div>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
-              <div className="bg-neutral-950 p-3 rounded-lg">
-                <div className="text-neutral-400">К выплате</div>
-                <div className="text-2xl font-bold text-orange-600">{formatRUB(salaryDue)}</div>
-              </div>
-              <div className="bg-neutral-950 p-3 rounded-lg">
-                <div className="text-neutral-400">Выдано нал</div>
-                <div className="text-2xl font-bold text-green-600">{formatRUB(salaryPaidCash)}</div>
-              </div>
-              <div className="bg-neutral-950 p-3 rounded-lg">
-                <div className="text-neutral-400">Выдано карта</div>
-                <div className="text-2xl font-bold text-blue-600">{formatRUB(salaryPaidCard)}</div>
-              </div>
-              <div className="bg-neutral-950 p-3 rounded-lg">
-                <div className="text-neutral-400">Осталось выдать</div>
-                <div className={`text-2xl font-bold ${salarySummary.remaining > 0 ? 'text-yellow-400' : 'text-neutral-200'}`}>{formatRUB(salarySummary.remaining)}</div>
-              </div>
-            </div>
-            {/* Salary payout action */}
-            {!shiftClosed && (
-              <div className="mt-3 flex items-center gap-3">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  placeholder="Сумма выдачи"
-                  value={salaryPayoutDraft}
-                  onChange={(e) => setSalaryPayoutDraft(e.target.value)}
-                  className="w-32 bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-2 text-neutral-100"
-                />
-                <button
-                  type="button"
-                  onClick={applySalaryPayout}
-                  disabled={!allTripsFinished || Number(salaryPayoutDraft || 0) <= 0}
-                  className={`px-3 py-2 rounded-lg border ${
-                    allTripsFinished && Number(salaryPayoutDraft || 0) > 0
-                      ? 'bg-orange-700 border-orange-600 text-white hover:bg-orange-600'
-                      : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
-                  }`}
-                >
-                  Выдать ЗП (нал)
-                </button>
-                {!allTripsFinished && (
-                  <span className="text-xs text-red-400">Есть незавершённые рейсы</span>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="bg-neutral-900 rounded-2xl  p-3">
-            <div className="flex items-start justify-between gap-3 mb-2">
+          {/* По продавцам - wider on desktop */}
+          <div className="lg:-mx-4 xl:-mx-8">
+            <div className="lg:px-4 xl:px-8">
+              <div className="bg-neutral-900 rounded-2xl p-3 lg:p-4">
+                <div className="flex items-start justify-between gap-3 mb-2">
               <div>
                 <h2 className="text-xl font-bold text-neutral-100">По продавцам</h2>
                 {/* Trip completion warning */}
@@ -615,20 +681,6 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                 >
                   Заполнить всё
                 </button>
-
-                <button
-                  type="button"
-                  onClick={applyAllDeposits}
-                  disabled={!backendDepositEnabled}
-                  title={!backendDepositEnabled ? 'Backend сдачи денег ещё не подключён' : ''}
-                  className={`px-3 py-2 rounded-lg border ${
-                    backendDepositEnabled
-                      ? 'bg-purple-700 border-purple-600 text-white hover:bg-purple-600'
-                      : 'bg-neutral-950 border-neutral-800 text-neutral-500 cursor-not-allowed'
-                  }`}
-                >
-                  Провести всё
-                </button>
               </div>
             </div>
             <div className="overflow-x-auto">
@@ -643,120 +695,215 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {sellersData.map((seller) => {
-                    const st = getSellerStatus(seller);
-                    const stLabel = st === 'CLOSED' ? 'Закрыт' : st === 'PARTIAL' ? 'Частично' : 'Долг';
-                    const stClass =
-                      st === 'CLOSED'
-                        ? 'bg-green-900/40 text-green-300 border-green-800'
-                        : st === 'PARTIAL'
-                        ? 'bg-yellow-900/40 text-yellow-300 border-yellow-800'
-                        : 'bg-red-900/40 text-red-300 border-red-800';
-
-                    const cashRem = Number(seller.cashRemaining || 0);
-                    const termRem = Number(seller.terminalDebt || 0);
-
-                    const isOpen = expandedSellerId === seller.id;
-
-                    return (
-                      <Fragment key={seller.id}>
-                        <tr className="border-b hover:bg-neutral-950">
-                          <td className="py-3">{seller.name}</td>
-                          <td className="py-3">
-                            <span className={`inline-flex items-center px-2 py-1 rounded-md border text-xs ${stClass}`}>{stLabel}</span>
-                          </td>
-                          <td className={`text-right py-3 ${cashRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>{formatRUB(cashRem)}</td>
-                          <td className={`text-right py-3 ${termRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>{formatRUB(termRem)}</td>
-                          <td className="py-3 text-right">
-                            <button
-                              type="button"
-                              onClick={() => setExpandedSellerId((prev) => (prev === seller.id ? null : seller.id))}
-                              className="inline-flex items-center justify-center w-10 h-9 rounded-lg border border-neutral-800 bg-neutral-950 text-neutral-200 hover:bg-neutral-900"
-                              aria-label="Показать детали"
-                              title="Показать детали"
-                            >
-                              {isOpen ? '▴' : '▾'}
-                            </button>
+                  {(() => {
+                    // Источник продавцов: normalizedSummary.sellers (нормализованные) -> sellersData (legacy state) -> пусто
+                    const sellersForRender = normalizedSummary?.sellers ?? sellersData ?? [];
+                    if (sellersForRender.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={5} className="py-4 text-center text-neutral-500">
+                            Нет данных по продавцам за этот день
                           </td>
                         </tr>
+                      );
+                    }
+                    return sellersForRender.map((seller) => {
+                      // Normalize field names for rendering
+                      const s = {
+                        id: seller.seller_id ?? seller.id,
+                        name: seller.seller_name ?? seller.name,
+                        cashRemaining: seller.cash_due_to_owner ?? seller.cashRemaining ?? 0,
+                        terminalDebt: seller.terminal_due_to_owner ?? seller.terminal_debt ?? seller.terminalDebt ?? 0,
+                        cashHanded: seller.deposit_cash ?? seller.cashHanded ?? 0,
+                        terminalHanded: seller.deposit_card ?? seller.terminalHanded ?? 0,
+                      };
+                      const st = getSellerStatus(s);
+                      const stLabel = st === 'CLOSED' ? 'Закрыт' : st === 'PARTIAL' ? 'Частично' : 'Долг';
+                      const stClass =
+                        st === 'CLOSED'
+                          ? 'bg-green-900/40 text-green-300 border-green-800'
+                          : st === 'PARTIAL'
+                          ? 'bg-yellow-900/40 text-yellow-300 border-yellow-800'
+                          : 'bg-red-900/40 text-red-300 border-red-800';
 
-                        {isOpen && (
-                          <tr className="border-b">
-                            <td colSpan={5} className="py-3">
-                              <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-3">
-                                <div className="text-sm text-neutral-300 font-semibold mb-3">{seller.name} — детали</div>
+                      const cashRem = Number(s.cashRemaining || 0);
+                      const termRem = Number(s.terminalDebt || 0);
 
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                  {/* Money movement */}
-                                  <div className="bg-neutral-900/40 border border-neutral-800 rounded-xl p-3">
-                                    <div className="text-sm text-neutral-200 font-semibold mb-2">Движение денег</div>
+                      const isOpen = expandedSellerId === s.id;
 
-                                    <div className="flex items-center justify-between gap-3 py-2 border-b border-neutral-800">
-                                      <div>
-                                        <div className="text-neutral-400 text-xs">Остаток нал</div>
-                                        <div className={`font-semibold ${cashRem > 0 ? 'text-red-300' : 'text-neutral-200'}`}>{formatRUB(cashRem)}</div>
+                      return (
+                        <Fragment key={s.id}>
+                          <tr className="border-b hover:bg-neutral-950">
+                            <td className="py-3">{s.name}</td>
+                            <td className="py-3">
+                              <span className={`inline-flex items-center px-2 py-1 rounded-md border text-xs ${stClass}`}>{stLabel}</span>
+                            </td>
+                            <td className={`text-right py-3 ${cashRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>{formatRUB(cashRem)}</td>
+                            <td className={`text-right py-3 ${termRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>{formatRUB(termRem)}</td>
+                            <td className="py-3 text-right">
+                              <button
+                                type="button"
+                                onClick={() => setExpandedSellerId((prev) => (prev === s.id ? null : s.id))}
+                                className="inline-flex items-center justify-center w-10 h-9 rounded-lg border border-neutral-800 bg-neutral-950 text-neutral-200 hover:bg-neutral-900"
+                                aria-label="Показать детали"
+                                title="Показать детали"
+                              >
+                                {isOpen ? '▴' : '▾'}
+                              </button>
+                            </td>
+                          </tr>
+
+                          {isOpen && (
+                            <tr className="border-b">
+                              <td colSpan={5} className="py-3">
+                                <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-3">
+                                  <div className="text-sm text-neutral-300 font-semibold mb-3">{s.name} — детали</div>
+
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {/* Money movement */}
+                                    <div className="bg-neutral-900/40 border border-neutral-800 rounded-xl p-3">
+                                      <div className="text-sm text-neutral-200 font-semibold mb-2">Движение денег</div>
+
+                                      <div className="flex items-center justify-between gap-3 py-2 border-b border-neutral-800">
+                                        <div>
+                                          <div className="text-neutral-400 text-xs">Остаток нал</div>
+                                          <div className={`font-semibold ${cashRem > 0 ? 'text-red-300' : 'text-neutral-200'}`}>{formatRUB(cashRem)}</div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            step="1"
+                                            inputMode="numeric"
+                                            placeholder={cashRem > 0 ? String(cashRem) : ''}
+                                            value={depositDrafts?.[s.id]?.cash ?? ''}
+                                            onChange={(e) => {
+                                              const raw = e.target.value;
+                                              if (raw === '') {
+                                                setDraftValue(s.id, 'cash', '');
+                                              } else {
+                                                const n = Math.max(0, Math.floor(Number(raw) || 0));
+                                                setDraftValue(s.id, 'cash', String(n));
+                                              }
+                                            }}
+                                            className="w-28 bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-2 text-neutral-100 no-spin"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => applyCashDeposit(s.id)}
+                                            disabled={shiftClosed || !allTripsFinished || (cashRem <= 0 && Number(depositDrafts?.[s.id]?.cash || 0) <= 0)}
+                                            className={`px-3 py-2 rounded-lg border ${
+                                              !shiftClosed && allTripsFinished && (cashRem > 0 || Number(depositDrafts?.[s.id]?.cash || 0) > 0)
+                                                ? 'bg-neutral-900 border-neutral-700 text-neutral-100 hover:bg-neutral-800'
+                                                : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
+                                            }`}
+                                          >
+                                            Сдать нал
+                                          </button>
+                                        </div>
                                       </div>
-                                      <div className="flex items-center gap-2">
-                                        <input
-                                          type="number"
-                                          inputMode="numeric"
-                                          placeholder={cashRem > 0 ? String(cashRem) : ''}
-                                          value={depositDrafts?.[seller.id]?.cash ?? ''}
-                                          onChange={(e) => setDraftValue(seller.id, 'cash', e.target.value)}
-                                          className="w-28 bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-2 text-neutral-100"
-                                        />
-                                        <button
-                                          type="button"
-                                          onClick={() => applyCashDeposit(seller.id)}
-                                          disabled={shiftClosed || !allTripsFinished || (cashRem <= 0 && Number(depositDrafts?.[seller.id]?.cash || 0) <= 0)}
-                                          className={`px-3 py-2 rounded-lg border ${
-                                            !shiftClosed && allTripsFinished && (cashRem > 0 || Number(depositDrafts?.[seller.id]?.cash || 0) > 0)
-                                              ? 'bg-neutral-900 border-neutral-700 text-neutral-100 hover:bg-neutral-800'
-                                              : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
-                                          }`}
-                                        >
-                                          Сдать нал
-                                        </button>
+
+                                      <div className="flex items-center justify-between gap-3 py-2">
+                                        <div>
+                                          <div className="text-neutral-400 text-xs">Долг терминал</div>
+                                          <div className={`font-semibold ${termRem > 0 ? 'text-red-300' : 'text-neutral-200'}`}>{formatRUB(termRem)}</div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            step="1"
+                                            inputMode="numeric"
+                                            placeholder={termRem > 0 ? String(termRem) : ''}
+                                            value={depositDrafts?.[s.id]?.terminal ?? ''}
+                                            onChange={(e) => {
+                                              const raw = e.target.value;
+                                              if (raw === '') {
+                                                setDraftValue(s.id, 'terminal', '');
+                                              } else {
+                                                const n = Math.max(0, Math.floor(Number(raw) || 0));
+                                                setDraftValue(s.id, 'terminal', String(n));
+                                              }
+                                            }}
+                                            className="w-28 bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-2 text-neutral-100 no-spin"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => applyTerminalClose(s.id)}
+                                            disabled={shiftClosed || !allTripsFinished || (termRem <= 0 && Number(depositDrafts?.[s.id]?.terminal || 0) <= 0)}
+                                            className={`px-3 py-2 rounded-lg border ${
+                                              !shiftClosed && allTripsFinished && (termRem > 0 || Number(depositDrafts?.[s.id]?.terminal || 0) > 0)
+                                                ? 'bg-neutral-900 border-neutral-700 text-neutral-100 hover:bg-neutral-800'
+                                                : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
+                                            }`}
+                                          >
+                                            Закрыть терминал
+                                          </button>
+                                        </div>
                                       </div>
                                     </div>
-
-                                    <div className="flex items-center justify-between gap-3 py-2">
-                                      <div>
-                                        <div className="text-neutral-400 text-xs">Долг терминал</div>
-                                        <div className={`font-semibold ${termRem > 0 ? 'text-red-300' : 'text-neutral-200'}`}>{formatRUB(termRem)}</div>
+                                    
+                                    {/* Salary payout */}
+                                    <div className="bg-orange-950/20 border border-orange-900/30 rounded-xl p-3">
+                                      <div className="text-sm text-neutral-200 font-semibold mb-1">Зарплата</div>
+                                      <div className="text-xs text-neutral-500 mb-2">Выплата фиксируется в ledger</div>
+                                      
+                                      {/* Начислено - only show real per-seller data, no fake calculations */}
+                                      <div className="mb-2 pb-2 border-b border-neutral-800">
+                                        <div className="text-xs text-neutral-400">Начислено сегодня:</div>
+                                        {(() => {
+                                          const sellerNorm = normalizedSummary?.sellers?.find(x => (x.seller_id ?? x.id) === s.id);
+                                          const accrued = sellerNorm?.salary_due_total ?? sellerNorm?.salary_due ?? sellerNorm?.salary_accrued ?? sellerNorm?.salary_to_pay ?? null;
+                                          return accrued != null ? (
+                                            <div className="text-sm font-semibold text-orange-300">{formatRUB(accrued)}</div>
+                                          ) : (
+                                            <div className="text-sm text-neutral-500">—</div>
+                                          );
+                                        })()}
                                       </div>
+                                      
                                       <div className="flex items-center gap-2">
                                         <input
                                           type="number"
+                                          min="0"
+                                          step="1"
                                           inputMode="numeric"
-                                          placeholder={termRem > 0 ? String(termRem) : ''}
-                                          value={depositDrafts?.[seller.id]?.terminal ?? ''}
-                                          onChange={(e) => setDraftValue(seller.id, 'terminal', e.target.value)}
-                                          className="w-28 bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-2 text-neutral-100"
+                                          placeholder="Сумма"
+                                          value={salaryDraftBySellerId?.[s.id] ?? ''}
+                                          onChange={(e) => {
+                                            const raw = e.target.value;
+                                            if (raw === '') {
+                                              setSalaryDraftBySellerId((prev) => ({ ...prev, [s.id]: '' }));
+                                            } else {
+                                              const n = Math.max(0, Math.floor(Number(raw) || 0));
+                                              setSalaryDraftBySellerId((prev) => ({ ...prev, [s.id]: String(n) }));
+                                            }
+                                          }}
+                                          className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-2 text-neutral-100 no-spin"
                                         />
                                         <button
                                           type="button"
-                                          onClick={() => applyTerminalClose(seller.id)}
-                                          disabled={termRem <= 0 && Number(depositDrafts?.[seller.id]?.terminal || 0) <= 0}
-                                          className={`px-3 py-2 rounded-lg border ${
-                                            termRem > 0 || Number(depositDrafts?.[seller.id]?.terminal || 0) > 0
-                                              ? 'bg-neutral-900 border-neutral-700 text-neutral-100 hover:bg-neutral-800'
+                                          onClick={() => applySalaryPayoutForSeller(s.id)}
+                                          disabled={shiftClosed || !allTripsFinished || Number(salaryDraftBySellerId?.[s.id] || 0) <= 0}
+                                          className={`px-3 py-2 rounded-lg border whitespace-nowrap ${
+                                            !shiftClosed && allTripsFinished && Number(salaryDraftBySellerId?.[s.id] || 0) > 0
+                                              ? 'bg-orange-700 border-orange-600 text-white hover:bg-orange-600'
                                               : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
                                           }`}
                                         >
-                                          Закрыть терминал
+                                          Выдать ЗП
                                         </button>
                                       </div>
                                     </div>
                                   </div>
                                 </div>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    });
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -764,18 +911,25 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
             <div className="mt-4 text-sm text-gray-500 italic">
               Предварительный расчёт по {COMMISSION_PERCENT}% (позже заменим мотивацией)
             </div>
+              </div>
+            </div>
           </div>
           
           {shiftClosed ? (
-            <div className="bg-green-100 border border-green-300 rounded-2xl p-3 mt-6">
-              <h3 className="text-lg font-semibold text-green-800 mb-3">Статус смены</h3>
-              <p className="text-green-700 font-medium">Смена закрыта</p>
+            <div className="bg-green-950/30 border border-green-900/50 rounded-2xl p-3 mt-6">
+              <h3 className="text-lg font-semibold text-green-300 mb-3">Статус смены</h3>
+              <p className="text-green-400 font-medium">Смена закрыта</p>
             </div>
           ) : (
             <>
               {/* Confirmation Checks */}
-              <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-3 mt-6">
-                <h3 className="text-lg font-semibold text-neutral-100 mb-3">Подтверждение закрытия смены</h3>
+              <div className="bg-neutral-900/40 border border-neutral-800 rounded-2xl p-4 mt-6">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-lg font-semibold text-neutral-200">Подтверждение закрытия смены</h3>
+                  <span className="text-sm text-neutral-400">
+                    Подтверждено: {[confirmationChecks.cashHandedOver, confirmationChecks.salaryCalculated, confirmationChecks.noComplaints].filter(Boolean).length}/3
+                  </span>
+                </div>
                 <div className="space-y-2">
                   <label className="flex items-center space-x-3">
                     <input
@@ -785,7 +939,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                       disabled={shiftClosed}
                       className="h-5 w-5 text-purple-600 rounded focus:ring-purple-500"
                     />
-                    <span className="text-neutral-300">Все продавцы сдали наличные/предоплаты</span>
+                    <span className="text-neutral-300">Все продавцы сдали наличные</span>
                   </label>
                   <label className="flex items-center space-x-3">
                     <input
@@ -812,7 +966,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
               
               {/* Action Buttons */}
               {closeBlockReason ? (
-                <div className="text-sm text-red-300 mb-2">Нельзя закрыть смену: {closeBlockReason}</div>
+                <div className="text-sm text-red-400 text-center mt-3">Нельзя закрыть смену: {closeBlockReason}</div>
               ) : null}
 
               <div className="flex flex-col sm:flex-row gap-3 pt-4">
@@ -823,12 +977,6 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                   className={`flex-1 py-3 px-4 rounded-lg font-medium transition-colors ${canCloseShift ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
                 >
                   Закрыть смену
-                </button>
-                <button
-                  onClick={() => navigate('/dispatcher')}
-                  className="flex-1 bg-gray-200 hover:bg-gray-300 text-neutral-100 py-3 px-4 rounded-lg font-medium transition-colors"
-                >
-                  Вернуться к работе
                 </button>
               </div>
             </>

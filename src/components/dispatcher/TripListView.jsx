@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import apiClient from '../../utils/apiClient';
 import PassengerList from './PassengerList';
 
@@ -76,14 +76,22 @@ const TripListView = ({
   searchTerm = '',
   onTripCountsChange,
   shiftClosed,
+  isActive = true
 }) => {
   const [slots, setSlots] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [selectedTrip, setSelectedTrip] = useState(null); // drilldown disabled
+  const inFlightRef = useRef(false);
 
-  const loadSlots = useCallback(async () => {
-    setLoading(true);
+  const loadSlots = useCallback(async (opts = {}) => {
+    const silent = !!opts.silent;
+    
+    // Prevent overlapping requests
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    
+    if (!silent) setLoading(true);
     setErr(null);
     try {
       const resp = await apiClient.getAllDispatcherSlots();
@@ -91,18 +99,32 @@ const TripListView = ({
       setSlots(Array.isArray(arr) ? arr : []);
     } catch (e) {
       setErr(e?.message || 'Ошибка загрузки рейсов');
-      setSlots([]);
+      // Keep previous slots on error to avoid flicker
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
+      inFlightRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     loadSlots();
-    const handler = () => loadSlots();
+    const handler = () => loadSlots({ silent: true });
     window.addEventListener('dispatcher:refresh', handler);
     return () => window.removeEventListener('dispatcher:refresh', handler);
   }, [loadSlots]);
+
+  // Polling: auto-refresh every 5s when component is active (trips tab visible)
+  useEffect(() => {
+    if (!isActive) return;
+    
+    const intervalId = setInterval(() => {
+      loadSlots({ silent: true });
+    }, 5000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [loadSlots, isActive]);
 
   const filtered = useMemo(() => {
     const q = String(searchTerm || '').trim().toLowerCase();

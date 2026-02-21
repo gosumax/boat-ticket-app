@@ -141,7 +141,8 @@ router.get('/summary', authenticateToken, (req, res) => {
           net_total, net_cash, net_card,
           deposit_cash, deposit_card,
           salary_due, salary_paid_cash, salary_paid_card, salary_paid_total,
-          sellers_json
+          sellers_json,
+          cashbox_json
         FROM shift_closures
         WHERE business_day = ?
         LIMIT 1
@@ -166,11 +167,70 @@ router.get('/summary', authenticateToken, (req, res) => {
       }
     } catch {}
 
+    // Parse cashbox_json if present
+    let cashboxData = null;
+    try {
+      if (snap.cashbox_json) {
+        cashboxData = JSON.parse(snap.cashbox_json);
+      }
+    } catch {}
+
     const sellers_accepted_total = sellersFromSnapshot.reduce((s, r) => s + Number(r.accepted || 0), 0);
     const sellers_deposited_total = sellersFromSnapshot.reduce((s, r) => s + Number(r.deposited || 0), 0);
     const sellers_balance_total = sellersFromSnapshot.reduce((s, r) => s + Number(r.balance || 0), 0);
 
+    // Enhance sellers with extended contract fields (same as live branch)
+    const sellers = sellersFromSnapshot.map((r) => {
+      const accepted = Number(r.accepted || 0);
+      const deposited = Number(r.deposited || 0);
+      const balance = Number(r.balance ?? (accepted - deposited));
+      // Use stored terminal_due_to_owner if available, else fallback to terminal_debt or 0
+      const terminal_due_to_owner = Number(r.terminal_due_to_owner ?? r.terminal_debt ?? 0);
+      const cash_due_to_owner = Number(r.cash_due_to_owner ?? balance);
+      
+      // Reconstruct collected_cash/collected_card from due + deposit
+      // collected_cash = prepay_cash = cash_due_to_owner + deposit_cash
+      // collected_card = prepay_card = terminal_due_to_owner + deposit_card
+      const deposit_cash = Number(r.deposit_cash || r.deposited_cash || 0);
+      const deposit_card = Number(r.deposit_card || r.deposited_card || 0);
+      const collected_cash = Number(r.collected_cash ?? (cash_due_to_owner + deposit_cash));
+      const collected_card = Number(r.collected_card ?? (terminal_due_to_owner + deposit_card));
+      
+      return {
+        ...r,
+        seller_id: r.seller_id,
+        seller_name: r.name || `Продавец #${r.seller_id}`,
+        name: r.name || `Продавец #${r.seller_id}`,
+        collected_total: collected_cash + collected_card,
+        collected_cash,
+        collected_card,
+        refund_total: 0,
+        net_total: balance,
+        deposit_cash,
+        deposit_card,
+        cash_due_to_owner,
+        cash_balance: cash_due_to_owner,
+        terminal_debt: terminal_due_to_owner,
+        terminal_due_to_owner,
+        status: balance === 0 ? 'CLOSED' : balance > 0 ? 'DEBT' : 'OVERPAID',
+      };
+    });
+
     const salary_total = Math.round(Number(snap.total_revenue || 0) * 0.13);
+
+    // Dispatcher totals (from snapshot)
+    const dispatcher = {
+      collected_total: 0,
+      collected_cash: 0,
+      collected_card: 0,
+      refund_total: 0,
+      net_total: 0,
+      deposit_cash: Number(snap.deposit_cash || 0),
+      deposit_card: Number(snap.deposit_card || 0),
+      salary_paid_cash: Number(snap.salary_paid_cash || 0),
+      salary_paid_card: Number(snap.salary_paid_card || 0),
+      salary_paid_total: Number(snap.salary_paid_total || 0),
+    };
 
     return res.json({
       ok: true,
@@ -192,10 +252,13 @@ router.get('/summary', authenticateToken, (req, res) => {
       collected_card: Number(snap.collected_card || 0),
 
       // UI-friendly sellers (from snapshot)
-      sellers: sellersFromSnapshot,
+      sellers,
       sellers_accepted_total,
       sellers_deposited_total,
       sellers_balance_total,
+
+      // Dispatcher totals (DISPATCHER_SHIFT kind aggregated)
+      dispatcher,
 
       // Flat totals
       revenue: Number(snap.total_revenue || 0),
@@ -256,9 +319,17 @@ router.get('/summary', authenticateToken, (req, res) => {
 
       // Salary payouts (from snapshot)
       salary_due: Number(snap.salary_due || 0),
+      salary_due_total: Number(snap.salary_due || 0),  // alias for backward compat
       salary_paid_cash: Number(snap.salary_paid_cash || 0),
       salary_paid_card: Number(snap.salary_paid_card || 0),
       salary_paid_total: Number(snap.salary_paid_total || 0),
+
+      // Cashbox sanity check (from snapshot cashbox_json)
+      cash_in_cashbox: cashboxData?.cash_in_cashbox ?? null,
+      expected_sellers_cash_due: cashboxData?.expected_sellers_cash_due ?? null,
+      cash_discrepancy: cashboxData?.cash_discrepancy ?? null,
+      warnings: cashboxData?.warnings ?? [],
+      cashbox: cashboxData ?? null,
     });
   }
 
@@ -335,6 +406,73 @@ router.get('/summary', authenticateToken, (req, res) => {
 
   let ledgerBySeller = [];
 
+  // --- SELLER prepay breakdown by method (cash/card) ---
+  let sellerPrepayByMethod = new Map(); // seller_id -> {prepay_cash, prepay_card}
+
+  if (hasLedger && ledgerHasBDay && ledgerHasSeller && ledgerHasType) {
+    // Get prepay breakdown for SELLER_SHIFT: SALE_PREPAYMENT_CASH/CARD/MIXED and SALE_CANCEL_REVERSE
+    // For MIXED, we need to join presales to get the cash/card split
+    // Reversals have negative amounts, so they subtract from the totals
+    const prepayRows = safeAll(
+      `SELECT
+        ml.seller_id AS seller_id,
+        COALESCE(SUM(
+          CASE
+            WHEN ml.type = 'SALE_PREPAYMENT_CASH' THEN ml.amount
+            WHEN ml.type = 'SALE_PREPAYMENT_MIXED' THEN COALESCE(p.payment_cash_amount, 0)
+            WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ml.method = 'CASH' THEN ml.amount
+            ELSE 0
+          END
+        ),0) AS prepay_cash,
+        COALESCE(SUM(
+          CASE
+            WHEN ml.type = 'SALE_PREPAYMENT_CARD' THEN ml.amount
+            WHEN ml.type = 'SALE_PREPAYMENT_MIXED' THEN COALESCE(p.payment_card_amount, 0)
+            WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ml.method = 'CARD' THEN ml.amount
+            ELSE 0
+          END
+        ),0) AS prepay_card
+      FROM money_ledger ml
+      JOIN users u ON u.id = ml.seller_id
+      LEFT JOIN presales p ON p.id = ml.presale_id
+      WHERE ml.business_day = ?
+        AND ml.status = 'POSTED'
+        AND ml.seller_id IS NOT NULL
+        AND u.role = 'seller'
+        AND ml.kind = 'SELLER_SHIFT'
+        AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_CANCEL_REVERSE')
+      GROUP BY ml.seller_id`,
+      [businessDay]
+    );
+    sellerPrepayByMethod = new Map((prepayRows || []).map(r => [r.seller_id, {
+      prepay_cash: Number(r.prepay_cash || 0),
+      prepay_card: Number(r.prepay_card || 0)
+    }]));
+  }
+
+  // --- SELLER deposit breakdown by method (cash/card) ---
+  let sellerDepositByMethod = new Map(); // seller_id -> {deposit_cash, deposit_card}
+
+  if (hasLedger && ledgerHasBDay && ledgerHasSeller) {
+    const depRows = safeAll(
+      `SELECT seller_id AS seller_id,
+              COALESCE(SUM(CASE WHEN method = 'CASH' THEN amount ELSE 0 END),0) AS deposit_cash,
+              COALESCE(SUM(CASE WHEN method = 'CARD' THEN amount ELSE 0 END),0) AS deposit_card
+       FROM money_ledger
+       WHERE business_day = ?
+         AND status = 'POSTED'
+         AND kind = 'SELLER_SHIFT'
+         AND type LIKE 'DEPOSIT_TO_OWNER%'
+         AND seller_id IS NOT NULL
+       GROUP BY seller_id`,
+      [businessDay]
+    );
+    sellerDepositByMethod = new Map((depRows || []).map(r => [r.seller_id, {
+      deposit_cash: Number(r.deposit_cash || 0),
+      deposit_card: Number(r.deposit_card || 0)
+    }]));
+  }
+
   if (hasLedger && ledgerHasBDay) {
     const where = ['business_day = ?'];
     const params = [businessDay];
@@ -398,15 +536,19 @@ router.get('/summary', authenticateToken, (req, res) => {
   // --- Sellers for UI ---
   let sellersRaw = null;  // Live calculation always
   // Live fallback: compute balances from money_ledger
+  // ONLY SELLER_SHIFT rows count as seller's debt (dispatcher's DISPATCHER_SHIFT does NOT create seller debt)
   if ((!sellersRaw || !sellersRaw.length) && hasLedger && ledgerHasBDay && ledgerHasSeller) {
-    const accWhere = ['business_day = ?'];
-    const accParams = [businessDay];
-    if (ledgerHasStatus) accWhere.push("status = 'POSTED'");
-    if (ledgerHasKind) accWhere.push("kind = 'SELLER_SHIFT'");
-    const accWhereSql = `WHERE ${accWhere.join(' AND ')}`;
     const acceptedRows = safeAll(
-      `SELECT seller_id AS seller_id, COALESCE(SUM(amount),0) AS accepted FROM money_ledger ${accWhereSql} GROUP BY seller_id`,
-      accParams
+      `SELECT ml.seller_id AS seller_id, COALESCE(SUM(ml.amount),0) AS accepted
+       FROM money_ledger ml
+       JOIN users u ON u.id = ml.seller_id
+       WHERE ml.business_day = ?
+         AND ml.status = 'POSTED'
+         AND ml.seller_id IS NOT NULL
+         AND u.role = 'seller'
+         AND ml.kind = 'SELLER_SHIFT'
+       GROUP BY ml.seller_id`,
+      [businessDay]
     );
     const depMap = new Map((ledgerBySeller || []).map((r) => [r.seller_id, r]));
     const accMap = new Map((acceptedRows || []).map((r) => [r.seller_id, r]));
@@ -417,24 +559,160 @@ router.get('/summary', authenticateToken, (req, res) => {
     sellersRaw = sellerIds.map((sid) => {
       const acc = Number(accMap.get(sid)?.accepted || 0);
       const dep = Number(depMap.get(sid)?.deposit_total || 0);
-      return { seller_id: sid, accepted: acc, deposited: dep, balance: acc - dep };
+      return { seller_id: sid, accepted: acc, deposited: dep, balance: acc - dep, role: 'seller' };
     });
   }
 
-  const sellers = (sellersRaw || []).map((r) => {
-    const accepted = Number(r.accepted || 0);
-    const deposited = Number(r.deposited || 0);
-    const balance = Number(r.balance ?? (accepted - deposited));
-    return {
-      seller_id: r.seller_id,
-      accepted,
-      deposited,
-      balance,
-      // aliases used by UI
-      cash_balance: balance,
-      terminal_debt: 0,
-      status: balance === 0 ? 'CLOSED' : balance > 0 ? 'DEBT' : 'OVERPAID',
-    };
+  // --- Dispatchers for UI (same logic, but for role='dispatcher') ---
+  let dispatcherRaw = [];
+  if (hasLedger && ledgerHasBDay && ledgerHasSeller) {
+    // Accepted sales for dispatchers
+    const dispatcherAcceptedRows = safeAll(
+      `SELECT ml.seller_id AS seller_id, COALESCE(SUM(ml.amount),0) AS accepted
+       FROM money_ledger ml
+       JOIN users u ON u.id = ml.seller_id
+       WHERE ml.business_day = ?
+         AND ml.status = 'POSTED'
+         AND ml.seller_id IS NOT NULL
+         AND u.role = 'dispatcher'
+         AND ml.kind = 'DISPATCHER_SHIFT'
+       GROUP BY ml.seller_id`,
+      [businessDay]
+    );
+    // Deposits by dispatcher (DEPOSIT_TO_OWNER from DISPATCHER_SHIFT kind)
+    const dispatcherDepositRows = safeAll(
+      `SELECT seller_id AS seller_id,
+              COALESCE(SUM(amount),0) AS deposit_total,
+              COALESCE(SUM(CASE WHEN method = 'CASH' THEN amount ELSE 0 END),0) AS deposit_cash,
+              COALESCE(SUM(CASE WHEN method = 'CARD' THEN amount ELSE 0 END),0) AS deposit_card
+       FROM money_ledger
+       WHERE business_day = ?
+         AND status = 'POSTED'
+         AND kind = 'DISPATCHER_SHIFT'
+         AND type LIKE 'DEPOSIT_TO_OWNER%'
+         AND seller_id IS NOT NULL
+       GROUP BY seller_id`,
+      [businessDay]
+    );
+    const depMap = new Map((dispatcherDepositRows || []).map((r) => [r.seller_id, r]));
+    const accMap = new Map((dispatcherAcceptedRows || []).map((r) => [r.seller_id, r]));
+    const dispatcherIds = Array.from(new Set([
+      ...Array.from(depMap.keys()),
+      ...Array.from(accMap.keys()),
+    ])).sort((a,b)=>Number(a)-Number(b));
+    dispatcherRaw = dispatcherIds.map((sid) => {
+      const acc = Number(accMap.get(sid)?.accepted || 0);
+      const dep = Number(depMap.get(sid)?.deposit_total || 0);
+      return { seller_id: sid, accepted: acc, deposited: dep, balance: acc - dep, role: 'dispatcher' };
+    });
+  }
+
+  // Combine sellers and dispatchers into single array for UI
+  const combinedRaw = [...(sellersRaw || []), ...(dispatcherRaw || [])];
+
+  const sellers = combinedRaw.map((r) => {
+    try {
+      const accepted = Number(r.accepted || 0);
+      const deposited = Number(r.deposited || 0);
+      
+      // DISPATCHER_SHIFT does NOT create debt - dispatcher is not liable for cash handled
+      // Only SELLER_SHIFT creates actual debt for sellers
+      const balance = r.role === 'dispatcher' ? 0 : Number(r.balance ?? (accepted - deposited));
+      
+      // Fetch seller name from users table
+      let sellerName = r.role === 'dispatcher' ? `Диспетчер #${r.seller_id}` : `Продавец #${r.seller_id}`;
+      try {
+        const userRow = db.prepare('SELECT username FROM users WHERE id = ?').get(r.seller_id);
+        if (userRow?.username) {
+          sellerName = r.role === 'dispatcher' ? `Диспетчер: ${userRow.username}` : userRow.username;
+        }
+      } catch {}
+      
+      // Per-seller deposit breakdown (from ledgerBySeller for sellers, or from dispatcherDepositRows for dispatchers)
+      const depositInfo = r.role === 'dispatcher' 
+        ? (dispatcherRaw.find(d => d.seller_id === r.seller_id) || {})
+        : ((ledgerBySeller || []).find(d => Number(d.seller_id) === Number(r.seller_id)) || {});
+      const depositCash = Number(depositInfo.deposit_cash || 0);
+      const depositCard = Number(depositInfo.deposit_card || 0);
+      
+      // For sellers: get prepay/deposit breakdown by method
+      let cash_due_to_owner = 0;
+      let terminal_due_to_owner = 0;
+      let total_due = 0;
+      let status = 'CLOSED';
+      
+      // Get prepay breakdown for collected_cash/collected_card (for both seller and dispatcher)
+      const prepayInfo = sellerPrepayByMethod.get(r.seller_id) || { prepay_cash: 0, prepay_card: 0 };
+      const sellerDepositInfo = sellerDepositByMethod.get(r.seller_id) || { deposit_cash: 0, deposit_card: 0 };
+      
+      const prepay_cash = Number(prepayInfo.prepay_cash || 0);
+      const prepay_card = Number(prepayInfo.prepay_card || 0);
+      const seller_dep_cash = Number(sellerDepositInfo.deposit_cash || 0);
+      const seller_dep_card = Number(sellerDepositInfo.deposit_card || 0);
+      
+      if (r.role === 'dispatcher') {
+        // Dispatcher never owes - balance is 0
+        cash_due_to_owner = 0;
+        terminal_due_to_owner = 0;
+        status = 'CLOSED';
+      } else {
+        // Seller: calculate cash and terminal debt from prepay/deposit breakdown
+        cash_due_to_owner = prepay_cash - seller_dep_cash;
+        terminal_due_to_owner = prepay_card - seller_dep_card;
+        total_due = cash_due_to_owner + terminal_due_to_owner;
+        
+        status = total_due === 0 ? 'CLOSED' : total_due > 0 ? 'DEBT' : 'OVERPAID';
+      }
+      
+      // Net per seller (simplified: accepted - deposited, same as balance for now)
+      const netTotal = balance;
+      
+      return {
+        seller_id: r.seller_id,
+        seller_name: sellerName,
+        name: sellerName,  // backward compat alias
+        role: r.role,  // 'seller' or 'dispatcher'
+        accepted,
+        deposited,
+        balance,
+        // aliases used by UI
+        cash_balance: cash_due_to_owner,
+        terminal_debt: terminal_due_to_owner,
+        terminal_due_to_owner,  // explicit field name
+        status,
+        // Extended contract fields - use actual cash/card breakdown
+        collected_total: prepay_cash + prepay_card,
+        collected_cash: prepay_cash,
+        collected_card: prepay_card,
+        refund_total: 0,
+        net_total: netTotal,
+        deposit_cash: seller_dep_cash,
+        deposit_card: seller_dep_card,
+        cash_due_to_owner,
+      };
+    } catch (e) {
+      console.error('[SELLER_MAP_ERROR]', e?.message || e);
+      return {
+        seller_id: r.seller_id,
+        seller_name: `Продавец #${r.seller_id}`,
+        name: `Продавец #${r.seller_id}`,
+        accepted: 0,
+        deposited: 0,
+        balance: 0,
+        cash_balance: 0,
+        terminal_debt: 0,
+        terminal_due_to_owner: 0,
+        status: 'CLOSED',
+        collected_total: 0,
+        collected_cash: 0,
+        collected_card: 0,
+        refund_total: 0,
+        net_total: 0,
+        deposit_cash: 0,
+        deposit_card: 0,
+        cash_due_to_owner: 0,
+      };
+    }
   });
 
   const sellers_accepted_total = sellers.reduce((s, r) => s + Number(r.accepted || 0), 0);
@@ -450,7 +728,7 @@ router.get('/summary', authenticateToken, (req, res) => {
     const refundWhere = ['business_day = ?'];
     const refundParams = [businessDay];
     if (ledgerHasStatus) refundWhere.push("status = 'POSTED'");
-    if (ledgerHasKind) refundWhere.push("kind = 'SELLER_SHIFT'");
+    if (ledgerHasKind) refundWhere.push("kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')");
     refundWhere.push("type = 'SALE_CANCEL_REVERSE'");
 
     const refundWhereSql = `WHERE ${refundWhere.join(' AND ')}`;
@@ -507,7 +785,7 @@ router.get('/summary', authenticateToken, (req, res) => {
     collectedTotal = safeSum(
       `SELECT COALESCE(SUM(amount), 0) AS v FROM money_ledger
        WHERE status = 'POSTED'
-         AND kind = 'SELLER_SHIFT'
+         AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
          AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
          AND business_day = ?`,
       [businessDay]
@@ -523,7 +801,7 @@ router.get('/summary', authenticateToken, (req, res) => {
                ELSE 0 END
         ), 0) AS v FROM money_ledger
         WHERE status = 'POSTED'
-          AND kind = 'SELLER_SHIFT'
+          AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
           AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
           AND business_day = ?`,
         [businessDay]
@@ -535,7 +813,7 @@ router.get('/summary', authenticateToken, (req, res) => {
                ELSE 0 END
         ), 0) AS v FROM money_ledger
         WHERE status = 'POSTED'
-          AND kind = 'SELLER_SHIFT'
+          AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
           AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
           AND business_day = ?`,
         [businessDay]
@@ -550,7 +828,7 @@ router.get('/summary', authenticateToken, (req, res) => {
         ), 0) AS v FROM money_ledger ml
         LEFT JOIN presales p ON p.id = ml.presale_id
         WHERE ml.status = 'POSTED'
-          AND ml.kind = 'SELLER_SHIFT'
+          AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
           AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
           AND ml.business_day = ?`,
         [businessDay]
@@ -563,7 +841,7 @@ router.get('/summary', authenticateToken, (req, res) => {
         ), 0) AS v FROM money_ledger ml
         LEFT JOIN presales p ON p.id = ml.presale_id
         WHERE ml.status = 'POSTED'
-          AND ml.kind = 'SELLER_SHIFT'
+          AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
           AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
           AND ml.business_day = ?`,
         [businessDay]
@@ -606,6 +884,156 @@ router.get('/summary', authenticateToken, (req, res) => {
     salaryPaidTotal = salaryPaidCash + salaryPaidCard;
   }
 
+  // --- Dispatcher aggregated totals (DISPATCHER_SHIFT kind) ---
+  // Dispatcher operations: deposits to owner, salary payouts
+  const dispatcher = {
+    collected_total: 0,  // Dispatcher doesn't collect directly; sellers do
+    collected_cash: 0,
+    collected_card: 0,
+    refund_total: 0,
+    net_total: 0,
+    deposit_cash: depositToOwnerCash,
+    deposit_card: depositToOwnerCard,
+    salary_paid_cash: salaryPaidCash,
+    salary_paid_card: salaryPaidCard,
+    salary_paid_total: salaryPaidTotal,
+  };
+
+  // --- EXPLAIN section: human-readable breakdown ---
+  // This section provides detailed breakdown of cash flows for UI tooltips
+  const explain = {
+    cashflow_today: {},
+    liabilities: {},
+    revenue_hint: {},
+    unresolved_trip_day_count: 0,
+  };
+
+  if (hasLedger && ledgerHasBDay) {
+    // 1) PAID SALES TODAY (SALE_ACCEPTED_* for trips today or without trip_date)
+    // These are full payments received today
+    const paidSalesRows = safeAll(`
+      SELECT 
+        ml.method,
+        COALESCE(SUM(ml.amount), 0) AS total,
+        COALESCE(SUM(CASE WHEN ml.method = 'CASH' THEN ml.amount ELSE 0 END), 0) AS cash_total,
+        COALESCE(SUM(CASE WHEN ml.method = 'CARD' THEN ml.amount ELSE 0 END), 0) AS card_total
+      FROM money_ledger ml
+      WHERE ml.business_day = ?
+        AND ml.status = 'POSTED'
+        AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+        AND ml.type IN ('SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED')
+    `, [businessDay]);
+    const paidRow = paidSalesRows?.[0] || {};
+    explain.cashflow_today.paid_sales_cash = Number(paidRow.cash_total || 0);
+    explain.cashflow_today.paid_sales_terminal = Number(paidRow.card_total || 0);
+
+    // 2) PREPAYMENTS FOR FUTURE TRIPS
+    // Get prepayments and determine if they are for future trips
+    const prepayRows = safeAll(`
+      SELECT 
+        ml.id,
+        ml.method,
+        ml.amount,
+        p.slot_uid,
+        CASE 
+          WHEN p.slot_uid LIKE 'generated:%' THEN CAST(SUBSTR(p.slot_uid, 11) AS INTEGER)
+          ELSE NULL
+        END AS gen_slot_id
+      FROM money_ledger ml
+      LEFT JOIN presales p ON p.id = ml.presale_id
+      WHERE ml.business_day = ?
+        AND ml.status = 'POSTED'
+        AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+        AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED')
+    `, [businessDay]);
+
+    let futurePrepayCash = 0;
+    let futurePrepayCard = 0;
+    let unresolvedCount = 0;
+
+    // Get trip_dates for generated slots
+    const genSlotIds = (prepayRows || [])
+      .map(r => r.gen_slot_id)
+      .filter(id => id != null && Number.isFinite(id));
+    
+    let genSlotTripDates = {};
+    if (genSlotIds.length > 0) {
+      try {
+        const genRows = db.prepare(`
+          SELECT id, trip_date FROM generated_slots WHERE id IN (${genSlotIds.map(() => '?').join(',')})
+        `).all(...genSlotIds);
+        genRows.forEach(r => { genSlotTripDates[r.id] = r.trip_date; });
+      } catch (e) {}
+    }
+
+    (prepayRows || []).forEach(r => {
+      const amt = Number(r.amount || 0);
+      const isCash = r.method === 'CASH';
+      const isCard = r.method === 'CARD';
+      
+      // Determine trip_date
+      let tripDate = null;
+      if (r.gen_slot_id && genSlotTripDates[r.gen_slot_id]) {
+        tripDate = genSlotTripDates[r.gen_slot_id];
+      } else if (r.slot_uid && !r.slot_uid.startsWith('generated:')) {
+        // Manual slot - no trip_date available
+        unresolvedCount++;
+      }
+
+      // Classify as future or today
+      if (tripDate && tripDate > businessDay) {
+        if (isCash) futurePrepayCash += amt;
+        else if (isCard) futurePrepayCard += amt;
+      }
+      // Note: todayPrepayCash/Card no longer used - we calculate ALL prepayments below
+    });
+
+    // ALL prepayments today (regardless of trip_date)
+    const allPrepayCash = (prepayRows || []).reduce((sum, r) => 
+      sum + (r.method === 'CASH' ? Number(r.amount || 0) : 0), 0);
+    const allPrepayCard = (prepayRows || []).reduce((sum, r) => 
+      sum + (r.method === 'CARD' ? Number(r.amount || 0) : 0), 0);
+
+    explain.liabilities.prepayment_future_cash = futurePrepayCash;
+    explain.liabilities.prepayment_future_terminal = futurePrepayCard;
+    explain.cashflow_today.prepayment_today_cash = allPrepayCash;
+    explain.cashflow_today.prepayment_today_terminal = allPrepayCard;
+    explain.cashflow_today.prepayment_today_total = allPrepayCash + allPrepayCard;
+    explain.cashflow_today.future_prepay_share = futurePrepayCash + futurePrepayCard;
+    explain.unresolved_trip_day_count = unresolvedCount;
+
+    // 3) REFUNDS (SALE_CANCEL_REVERSE)
+    const refundRows = safeAll(`
+      SELECT 
+        COALESCE(SUM(CASE WHEN method = 'CASH' THEN ABS(amount) ELSE 0 END), 0) AS refund_cash,
+        COALESCE(SUM(CASE WHEN method = 'CARD' THEN ABS(amount) ELSE 0 END), 0) AS refund_card
+      FROM money_ledger
+      WHERE business_day = ?
+        AND status = 'POSTED'
+        AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+        AND type = 'SALE_CANCEL_REVERSE'
+    `, [businessDay]);
+    const refundRow = refundRows?.[0] || {};
+    explain.cashflow_today.refund_cash = Number(refundRow.refund_cash || 0);
+    explain.cashflow_today.refund_terminal = Number(refundRow.refund_card || 0);
+
+    // 4) OWNER DEPOSITS (already computed above)
+    explain.cashflow_today.owner_deposit_cash = depositToOwnerCash;
+    explain.cashflow_today.owner_deposit_terminal = depositToOwnerCard;
+
+    // 5) SALARY PAYOUTS (already computed above)
+    explain.cashflow_today.salary_paid_cash = salaryPaidCash;
+    explain.cashflow_today.salary_paid_terminal = salaryPaidCard;
+
+    // 6) REVENUE HINT - fully paid sales today (estimated)
+    explain.revenue_hint.paid_today_cash = explain.cashflow_today.paid_sales_cash + allPrepayCash;
+    explain.revenue_hint.paid_today_terminal = explain.cashflow_today.paid_sales_terminal + allPrepayCard;
+    explain.revenue_hint.future_liabilities_cash = futurePrepayCash;
+    explain.revenue_hint.future_liabilities_terminal = futurePrepayCard;
+    explain.revenue_hint.prepayment_today_total = allPrepayCash + allPrepayCard;
+    explain.revenue_hint.note = 'prepayment_today = все предоплаты за сегодня; future_liabilities — предоплаты за будущие рейсы (обязательства до поездки/возврата)';
+  }
+
   // --- Response: keep both nested and flat keys for backward compatibility ---
   res.json({
     ok: true,
@@ -631,6 +1059,8 @@ router.get('/summary', authenticateToken, (req, res) => {
     sellers_deposited_total,
     sellers_balance_total,
 
+    // Dispatcher totals (DISPATCHER_SHIFT kind aggregated)
+    dispatcher,
 
     // Flat totals (most UIs just read these)
     revenue: salesRevenue,
@@ -685,6 +1115,9 @@ router.get('/summary', authenticateToken, (req, res) => {
       by_seller: ledgerBySeller,
     },
 
+    // EXPLAIN section for human-readable breakdown
+    explain,
+
     // Debug about schema presence (safe, helps support)
     _schema: {
       sales_transactions_canonical: {
@@ -709,6 +1142,7 @@ router.get('/summary', authenticateToken, (req, res) => {
 
     // Salary payouts (from money_ledger)
     salary_due: 0,  // TEMP: will come from motivation engine
+    salary_due_total: 0,  // alias for backward compat
     salary_paid_cash: salaryPaidCash,
     salary_paid_card: salaryPaidCard,
     salary_paid_total: salaryPaidTotal,

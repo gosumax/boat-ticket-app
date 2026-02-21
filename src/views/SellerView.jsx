@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import SelectBoatType from '../components/seller/SelectBoatType';
 import SelectTrip from '../components/seller/SelectTrip';
@@ -60,9 +60,18 @@ const SellerView = () => {
   const [customerPhone, setCustomerPhone] = useState('');
   const [prepaymentStr, setPrepaymentStr] = useState('');
   const [ticketInfo, setTicketInfo] = useState(null);
+  
+  // Prepayment payment method (same logic as dispatcher)
+  const [prepaymentMethod, setPrepaymentMethod] = useState(null); // 'cash' | 'card' | 'mixed'
+  const [prepaymentCashStr, setPrepaymentCashStr] = useState('');
+  const [prepaymentCardStr, setPrepaymentCardStr] = useState('');
+  const [prepaymentMethodError, setPrepaymentMethodError] = useState('');
 
   // UI toast
   const [toast, setToast] = useState(null);
+
+  // Polling: prevent overlapping requests
+  const isLoadingTripsRef = useRef(false);
 
   const steps = useMemo(() => ([
     { id: 0, label: 'Продать' },
@@ -120,6 +129,10 @@ const SellerView = () => {
     setCustomerPhone('');
     setTicketInfo(null);
     setPrepaymentStr('');
+    setPrepaymentMethod(null);
+    setPrepaymentCashStr('');
+    setPrepaymentCardStr('');
+    setPrepaymentMethodError('');
     setSelectedDate(todayISO());
     setCurrentStep(1);
   };
@@ -184,13 +197,18 @@ const SellerView = () => {
   }, []);
 
   // Load trips whenever type/date changes AND we are on trip step (or later)
+  // Also polls every 5s when on trip selection screen (step 2) to auto-refresh seats
   useEffect(() => {
-    const loadTrips = async () => {
+    const loadTrips = async (opts = {}) => {
       if (!selectedType) return;
       if (currentStep < 2) return;
+      
+      // Prevent overlapping requests
+      if (isLoadingTripsRef.current) return;
+      isLoadingTripsRef.current = true;
 
-      setLoading(true);
       try {
+        setLoading(true);
         const res = await apiClient.getBoatSlotsByType(selectedType);
         const slots = res?.slots || res || [];
         const arr = Array.isArray(slots) ? slots : [];
@@ -200,13 +218,25 @@ const SellerView = () => {
         setTrips(sellable);
       } catch (e) {
         console.error('Error loading trips:', e);
-        setTrips([]);
+        // Keep previous trips on error to avoid flicker
       } finally {
         setLoading(false);
+        isLoadingTripsRef.current = false;
       }
     };
 
     loadTrips();
+
+    // Polling: refresh every 5s when on trip selection screen
+    if (currentStep === 2 && selectedType) {
+      const intervalId = setInterval(() => {
+        loadTrips();
+      }, 5000);
+
+      return () => {
+        clearInterval(intervalId);
+      };
+    }
   }, [selectedType, selectedDate, currentStep]);
 
   // Show sales history overlay
@@ -264,15 +294,52 @@ const SellerView = () => {
             onBack={handleBack}
             onConfirm={async () => {
               // Build payload from parent-held state (SelectSeats pushes updates via setters)
-              const prepaymentAmount = Math.max(0, parseInt(prepaymentStr || '0', 10) || 0);
-
-              await handleCreatePresale({
+              const prepay = Math.max(0, parseInt(prepaymentStr || '0', 10) || 0);
+              
+              // Validate prepayment payment method
+              if (prepay > 0) {
+                if (!prepaymentMethod) {
+                  setPrepaymentMethodError('Выберите способ оплаты предоплаты');
+                  return;
+                }
+                if (prepaymentMethod === 'mixed') {
+                  const cash = Math.round(Number(prepaymentCashStr || 0));
+                  const card = Math.round(Number(prepaymentCardStr || 0));
+                  if (cash + card !== prepay) {
+                    setPrepaymentMethodError('Сумма Нал + Карта должна быть равна предоплате');
+                    return;
+                  }
+                  if (cash === 0 || card === 0) {
+                    setPrepaymentMethodError('Для комбо укажите суммы и для налички, и для карты');
+                    return;
+                  }
+                }
+                setPrepaymentMethodError('');
+              }
+              
+              // Build payload
+              const payload = {
                 slotUid: selectedTrip?.slot_uid,
                 customerName,
                 customerPhone,
                 numberOfSeats,
-                prepaymentAmount
-              });
+                prepaymentAmount: prepay
+              };
+              
+              // Add payment method for prepayment
+              if (prepay > 0) {
+                if (prepaymentMethod === 'cash') {
+                  payload.payment_method = 'CASH';
+                } else if (prepaymentMethod === 'card') {
+                  payload.payment_method = 'CARD';
+                } else if (prepaymentMethod === 'mixed') {
+                  payload.payment_method = 'MIXED';
+                  payload.cash_amount = Math.round(Number(prepaymentCashStr || 0));
+                  payload.card_amount = Math.round(Number(prepaymentCardStr || 0));
+                }
+              }
+
+              await handleCreatePresale(payload);
 
               // Success -> go to confirmation
               setCurrentStep(4);
@@ -285,6 +352,14 @@ const SellerView = () => {
             setCustomerPhone={setCustomerPhone}
             prepaymentStr={prepaymentStr}
             setPrepaymentStr={setPrepaymentStr}
+            prepaymentMethod={prepaymentMethod}
+            setPrepaymentMethod={setPrepaymentMethod}
+            prepaymentCashStr={prepaymentCashStr}
+            setPrepaymentCashStr={setPrepaymentCashStr}
+            prepaymentCardStr={prepaymentCardStr}
+            setPrepaymentCardStr={setPrepaymentCardStr}
+            prepaymentMethodError={prepaymentMethodError}
+            setPrepaymentMethodError={setPrepaymentMethodError}
           />
         );
       case 4:

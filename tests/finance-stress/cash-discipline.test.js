@@ -328,7 +328,7 @@ describe('Cash Discipline', () => {
       // Verify money_ledger entry
       const ledger = db.prepare(`
         SELECT * FROM money_ledger 
-        WHERE presale_id = ? AND kind = 'SELLER_SHIFT' AND type LIKE 'SALE_ACCEPTED%'
+        WHERE presale_id = ? AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT') AND type LIKE 'SALE_ACCEPTED%'
       `).get(presaleId);
       expect(ledger).toBeDefined();
       expect(ledger.amount).toBe(total);

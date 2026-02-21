@@ -885,7 +885,7 @@ describe('Инварианты I1-I6 (Cross-cutting)', () => {
       SELECT COALESCE(SUM(amount), 0) as total
       FROM money_ledger
       WHERE status = 'POSTED'
-        AND kind = 'SELLER_SHIFT'
+        AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
         AND type LIKE 'SALE_ACCEPTED%'
     `).get();
     
