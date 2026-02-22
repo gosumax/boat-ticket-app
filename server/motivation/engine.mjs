@@ -25,8 +25,6 @@ export const OWNER_SETTINGS_DEFAULTS = {
   // Motivation settings (final system) - stored as fractions
   motivationType: "team",
   motivation_percent: 0.15,
-  weekly_percent: 0.01,
-  season_percent: 0.02,
   individual_share: 0.60,
   team_share: 0.40,
   daily_activation_threshold: 200000,
@@ -59,7 +57,12 @@ export const OWNER_SETTINGS_DEFAULTS = {
   notifyBadRevenue: true,
   notifyLowLoad: true,
   notifyLowSeller: false,
-  notifyChannel: "inapp"
+  notifyChannel: "inapp",
+  
+  // Withhold settings (USED FOR LEDGER ENTRIES)
+  dispatcher_withhold_percent_total: 0.002,   // 0.2% total cap for dispatcher withhold
+  weekly_withhold_percent_total: 0.008,       // 0.8% withhold for weekly pool
+  season_withhold_percent_total: 0.005        // 0.5% withhold for season pool
 };
 
 /**
@@ -79,17 +82,38 @@ export function calcMotivationDay(db, day) {
   }
   
   // ====================
+  // STEP 0: Check if day is LOCKED (has WITHHOLD entries)
+  // ====================
+  const lockedDayRow = db.prepare(`
+    SELECT 1 FROM money_ledger
+    WHERE business_day = ? AND kind = 'FUND' AND type IN ('WITHHOLD_WEEKLY', 'WITHHOLD_SEASON') AND status = 'POSTED'
+    LIMIT 1
+  `).get(day);
+  
+  const isLocked = !!lockedDayRow;
+  
+  // ====================
   // STEP 1: Get or create day settings snapshot
   // ====================
   let daySettingsRow = db.prepare('SELECT settings_json FROM motivation_day_settings WHERE business_day = ?').get(day);
   let settings;
+  let snapshotFound = false;
+  let settingsSource = 'fallback';
   
   if (daySettingsRow?.settings_json) {
     settings = JSON.parse(daySettingsRow.settings_json);
+    snapshotFound = true;
+    settingsSource = 'snapshot';
+  } else if (isLocked) {
+    // Locked day without snapshot - use defaults (will be flagged in invariants)
+    settings = { ...OWNER_SETTINGS_DEFAULTS };
+    settingsSource = 'fallback';
+    warnings.push('Locked day has no settings snapshot');
   } else {
     const ownerRow = db.prepare("SELECT settings_json FROM owner_settings WHERE id = 1").get();
     const savedSettings = ownerRow?.settings_json ? JSON.parse(ownerRow.settings_json) : {};
     settings = { ...OWNER_SETTINGS_DEFAULTS, ...savedSettings };
+    settingsSource = 'owner_settings';
     
     const now = new Date().toISOString();
     try {
@@ -98,6 +122,9 @@ export function calcMotivationDay(db, day) {
       // Snapshot may exist from concurrent call - ignore
     }
   }
+  
+  // Guard: ensure settings is always a valid object (defensive, no mutation of defaults)
+  settings = { ...OWNER_SETTINGS_DEFAULTS, ...(settings || {}) };
   
   const mode = settings.motivationType || 'team';
   const p = Number(settings.motivation_percent ?? 0.15);
@@ -118,6 +145,65 @@ export function calcMotivationDay(db, day) {
   
   const revenue_total = Math.max(0, Number(revenueRow?.revenue_gross || 0) - Number(revenueRow?.refunds || 0));
   const fundTotal = Math.round(revenue_total * p);
+  
+  // ====================
+  // STEP 2.5: Calculate WITHHOLDS from fundTotal
+  // ====================
+  const MAX_ACTIVE_DISPATCHERS = 2;
+  
+  // Read weekly withhold percent from settings (with validation)
+  let weeklyPercentTotal = Number(settings.weekly_withhold_percent_total);
+  if (isNaN(weeklyPercentTotal) || weeklyPercentTotal === null) weeklyPercentTotal = 0.008;
+  if (weeklyPercentTotal < 0) weeklyPercentTotal = 0;
+  if (weeklyPercentTotal > 0.05) weeklyPercentTotal = 0.05; // max 5%
+  
+  // Read season withhold percent from settings (with validation)
+  let seasonPercentTotal = Number(settings.season_withhold_percent_total);
+  if (isNaN(seasonPercentTotal) || seasonPercentTotal === null) seasonPercentTotal = 0.005;
+  if (seasonPercentTotal < 0) seasonPercentTotal = 0;
+  if (seasonPercentTotal > 0.05) seasonPercentTotal = 0.05; // max 5%
+  
+  // Read dispatcher withhold percent from settings (with validation)
+  let dispatcherPercentTotal = Number(settings.dispatcher_withhold_percent_total);
+  if (isNaN(dispatcherPercentTotal) || dispatcherPercentTotal === null) dispatcherPercentTotal = 0.002;
+  if (dispatcherPercentTotal < 0) dispatcherPercentTotal = 0;
+  if (dispatcherPercentTotal > 0.05) dispatcherPercentTotal = 0.05; // max 5%
+  const dispatcherPercentPerPerson = dispatcherPercentTotal / 2;
+  
+  // Find dispatchers with sales TODAY (active_dispatchers_today)
+  // A dispatcher is "active today" if they have sales in money_ledger with seller_id = dispatcher.id
+  const dispatchersWithSalesTodayRaw = db.prepare(`
+    SELECT DISTINCT ml.seller_id
+    FROM money_ledger ml
+    JOIN users u ON u.id = ml.seller_id
+    WHERE ml.status = 'POSTED'
+      AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+      AND DATE(ml.business_day) = ?
+      AND ml.seller_id IS NOT NULL
+      AND ml.seller_id > 0
+      AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED')
+      AND u.role = 'dispatcher'
+  `).all(day);
+  
+  const activeDispatchersTodayIdsRaw = (dispatchersWithSalesTodayRaw || []).map(r => Number(r.seller_id));
+  // Cap to max 2 active dispatchers
+  const activeDispatchersTodayIds = activeDispatchersTodayIdsRaw.slice(0, MAX_ACTIVE_DISPATCHERS);
+  const activeDispatchersTodayCount = activeDispatchersTodayIds.length;
+  
+  // Calculate withhold amounts (all rounded down to 50)
+  const weekly_withhold_amount = roundDownTo50(fundTotal * weeklyPercentTotal);
+  const season_withhold_amount = roundDownTo50(fundTotal * seasonPercentTotal);
+  
+  // Dispatcher withhold: per-person percent (capped to max 2)
+  const dispatcher_withhold_per_person = activeDispatchersTodayCount > 0 ? roundDownTo50(fundTotal * dispatcherPercentPerPerson) : 0;
+  const dispatcher_withhold_amounts = activeDispatchersTodayIds.map(dispatcherId => ({
+    dispatcher_id: dispatcherId,
+    amount: dispatcher_withhold_per_person
+  }));
+  const dispatcher_withhold_total = dispatcher_withhold_amounts.reduce((sum, d) => sum + d.amount, 0);
+  
+  // Fund after withhold
+  const fundTotal_after_withhold = fundTotal - weekly_withhold_amount - season_withhold_amount - dispatcher_withhold_total;
   
   // ====================
   // STEP 3: Get sellers with revenue for the day
@@ -593,7 +679,40 @@ export function calcMotivationDay(db, day) {
     individual_share,
     teamFund,
     individualFund,
-    teamPerPerson: safeTeamPerPerson
+    teamPerPerson: safeTeamPerPerson,
+    // NEW: Withhold breakdown
+    withhold: {
+      weekly_percent: weeklyPercentTotal,
+      season_percent: seasonPercentTotal,
+      dispatcher_percent_total: dispatcherPercentTotal,
+      dispatcher_percent_per_person: dispatcherPercentPerPerson,
+      weekly_amount: weekly_withhold_amount,
+      season_amount: season_withhold_amount,
+      dispatcher_amount_total: dispatcher_withhold_total,
+      fund_total_original: safeFundTotal,
+      fund_total_after_withhold: fundTotal_after_withhold
+    },
+    // NEW: Dispatchers with sales today
+    dispatchers_today: {
+      active_ids: activeDispatchersTodayIds,
+      active_count: activeDispatchersTodayCount,
+      active_ids_raw_count: activeDispatchersTodayIdsRaw.length,
+      per_dispatcher_percent: dispatcherPercentPerPerson,
+      per_dispatcher_amounts: dispatcher_withhold_amounts
+    },
+    // NEW: Effective settings used for withhold calculation
+    settings_effective: {
+      weekly_withhold_percent_total: weeklyPercentTotal,
+      season_withhold_percent_total: seasonPercentTotal,
+      dispatcher_withhold_percent_total: dispatcherPercentTotal,
+      dispatcher_withhold_percent_per_person: dispatcherPercentPerPerson
+    },
+    // NEW: Lock status for immutability
+    lock: {
+      is_locked: isLocked,
+      snapshot_found: snapshotFound,
+      settings_source: settingsSource
+    }
   };
   
   // Clean up mode-inappropriate fields

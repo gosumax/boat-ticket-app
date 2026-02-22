@@ -541,6 +541,66 @@ router.post('/close', (req, res) => {
 
     console.log(`[SHIFT_CLOSE] business_day=${businessDay} closed_by=${userId} total_revenue=${totalRevenue} collected=${collectedTotal}`);
 
+    // --- INSERT WITHHOLD LEDGER ENTRIES (idempotent, race-safe) ---
+    // SOFT-LOCK: Check if day is already locked (has WITHHOLD entries)
+    const isDayLocked = db.prepare(`
+      SELECT 1 FROM money_ledger
+      WHERE business_day = ? AND kind = 'FUND' AND type IN ('WITHHOLD_WEEKLY', 'WITHHOLD_SEASON') AND status = 'POSTED'
+      LIMIT 1
+    `).get(businessDay);
+    
+    if (isDayLocked) {
+      console.log(`[SHIFT_CLOSE] Day ${businessDay} is already locked, skipping withhold recalculation`);
+    } else {
+      // Get withhold amounts from motivation engine
+      try {
+        const motivationResult = calcMotivationDay(db, businessDay);
+        const weeklyAmount = Number(motivationResult?.data?.withhold?.weekly_amount || 0);
+        const seasonAmount = Number(motivationResult?.data?.withhold?.season_amount || 0);
+        
+        const now = new Date().toISOString();
+        
+        // Use transaction for atomic check-and-insert (prevents race condition)
+        const insertWithhold = db.transaction(() => {
+          // Check WEEKLY
+          const existingWeekly = db.prepare(`
+            SELECT 1 FROM money_ledger 
+            WHERE business_day = ? AND kind = 'FUND' AND type = 'WITHHOLD_WEEKLY' AND status = 'POSTED'
+            LIMIT 1
+          `).get(businessDay);
+          
+          if (!existingWeekly && weeklyAmount > 0) {
+            db.prepare(`
+              INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time, decision_final)
+              VALUES ('FUND', 'WITHHOLD_WEEKLY', 'INTERNAL', ?, 'POSTED', NULL, ?, ?, 1)
+            `).run(weeklyAmount, businessDay, now);
+            console.log(`[SHIFT_CLOSE] Inserted WITHHOLD_WEEKLY ledger: ${weeklyAmount} for ${businessDay}`);
+          }
+          
+          // Check SEASON
+          const existingSeason = db.prepare(`
+            SELECT 1 FROM money_ledger 
+            WHERE business_day = ? AND kind = 'FUND' AND type = 'WITHHOLD_SEASON' AND status = 'POSTED'
+            LIMIT 1
+          `).get(businessDay);
+          
+          if (!existingSeason && seasonAmount > 0) {
+            db.prepare(`
+              INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time, decision_final)
+              VALUES ('FUND', 'WITHHOLD_SEASON', 'INTERNAL', ?, 'POSTED', NULL, ?, ?, 1)
+            `).run(seasonAmount, businessDay, now);
+            console.log(`[SHIFT_CLOSE] Inserted WITHHOLD_SEASON ledger: ${seasonAmount} for ${businessDay}`);
+          }
+        });
+        
+        // Execute transaction
+        insertWithhold();
+      } catch (withholdError) {
+        console.error('[SHIFT_CLOSE_WITHHOLD_LEDGER_ERROR]', withholdError);
+        // Don't fail the shift close if withhold ledger insertion fails
+      }
+    }
+
     // Get closed_at from the inserted row
     const closedRow = db.prepare(`SELECT closed_at FROM shift_closures WHERE business_day = ? LIMIT 1`).get(businessDay);
     const closedAt = closedRow?.closed_at;

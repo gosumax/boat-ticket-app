@@ -54,12 +54,44 @@ function getCurrentSeason() {
   return String(new Date().getFullYear());
 }
 
-export default function OwnerMotivationView() {
+export default function OwnerMotivationView({ onOpenSettings, settingsRefreshKey }) {
   const [subTab, setSubTab] = useState("day"); // day | week | season
+  
+  // Settings for header summary (read-only)
+  const [settings, setSettings] = useState(null);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsError, setSettingsError] = useState(false);
+
+  const loadSettings = async () => {
+    setSettingsLoading(true);
+    setSettingsError(false);
+    try {
+      const json = await apiClient.request(`/owner/settings/full`, { method: "GET" });
+      setSettings(json?.data || null);
+    } catch {
+      setSettingsError(true);
+    } finally {
+      setSettingsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadSettings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsRefreshKey]);
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 px-3 pt-3 pb-24 space-y-3">
       <div className="text-xl font-extrabold tracking-tight">Мотивация</div>
+
+      {/* Settings Summary Header (read-only, visible on all sub-tabs) */}
+      <MotivationSettingsSummary
+        settings={settings}
+        loading={settingsLoading}
+        error={settingsError}
+        onOpenSettings={onOpenSettings}
+        onRefresh={loadSettings}
+      />
 
       {/* Sub-tabs */}
       <div className="rounded-xl border border-white/10 bg-white/5 p-1 flex gap-1">
@@ -211,7 +243,7 @@ function DayView() {
       {/* Stats */}
       <div className="grid grid-cols-2 gap-2">
         <StatCard title="Выручка дня" value={formatRUB(payload.revenue_total)} accent="emerald" loading={loading} />
-        <StatCard title="Мотивация %" value={`${payload.motivation_percent}%`} loading={loading} />
+        <StatCard title="Мотивация %" value={`${(payload.motivation_percent * 100).toFixed(1)}%`} loading={loading} />
         <StatCard title="Фонд (сумма)" value={formatRUB(payload.fundTotal)} loading={loading} />
         <StatCard title="Участников" value={String(payload.participants)} loading={loading} />
       </div>
@@ -292,6 +324,10 @@ function WeekView() {
     date_from: "",
     date_to: "",
     sellers: [],
+    weekly_pool_total_ledger: 0,
+    weekly_pool_total_daily_sum: 0,
+    weekly_pool_diff: 0,
+    weekly_pool_is_consistent: true,
   });
 
   useEffect(() => {
@@ -313,6 +349,10 @@ function WeekView() {
             date_from: r.data.date_from || "",
             date_to: r.data.date_to || "",
             sellers: Array.isArray(r.data.sellers) ? r.data.sellers : [],
+            weekly_pool_total_ledger: Number(r.data.weekly_pool_total_ledger || 0),
+            weekly_pool_total_daily_sum: Number(r.data.weekly_pool_total_daily_sum || 0),
+            weekly_pool_diff: Number(r.data.weekly_pool_diff || 0),
+            weekly_pool_is_consistent: r.data.weekly_pool_is_consistent !== false,
           });
         } else {
           setErr(r?.error || "Ошибка загрузки");
@@ -374,6 +414,47 @@ function WeekView() {
 
       {err && (
         <div className="rounded-xl border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-200">{err}</div>
+      )}
+
+      {/* Consistency check block */}
+      {!loading && !err && (payload.weekly_pool_total_ledger > 0 || payload.weekly_pool_total_daily_sum > 0) && (
+        <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-neutral-400">Фонд недели (консистентность)</span>
+            <span
+              data-testid="owner-weekly-consistency-badge"
+              className={`px-2 py-0.5 rounded text-xs font-medium ${
+                payload.weekly_pool_is_consistent
+                  ? 'bg-emerald-900/40 text-emerald-300 border border-emerald-500/30'
+                  : 'bg-red-900/40 text-red-300 border border-red-500/30'
+              }`}
+            >
+              {payload.weekly_pool_is_consistent ? '✓ CONSISTENT' : '⚠ MISMATCH'}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div>
+              <div className="text-neutral-500">Ledger total</div>
+              <div data-testid="owner-weekly-consistency-ledger" className="text-neutral-200 font-medium">
+                {formatRUB(payload.weekly_pool_total_ledger)}
+              </div>
+            </div>
+            <div>
+              <div className="text-neutral-500">Daily sum</div>
+              <div data-testid="owner-weekly-consistency-daily" className="text-neutral-200 font-medium">
+                {formatRUB(payload.weekly_pool_total_daily_sum)}
+              </div>
+            </div>
+          </div>
+          {!payload.weekly_pool_is_consistent && (
+            <div className="mt-2 pt-2 border-t border-white/5">
+              <span className="text-neutral-500 text-xs">Diff: </span>
+              <span data-testid="owner-weekly-consistency-diff" className="text-red-300 text-xs font-medium">
+                {formatRUB(payload.weekly_pool_diff)}
+              </span>
+            </div>
+          )}
+        </div>
       )}
 
       {/* Sellers table */}
@@ -444,6 +525,10 @@ function SeasonView() {
   const [payload, setPayload] = useState({
     season_id: "",
     sellers: [],
+    season_pool_total_ledger: 0,
+    season_pool_total_daily_sum: 0,
+    season_pool_diff: 0,
+    season_pool_is_consistent: true,
   });
 
   useEffect(() => {
@@ -463,6 +548,10 @@ function SeasonView() {
           setPayload({
             season_id: r.data.season_id || seasonId,
             sellers: Array.isArray(r.data.sellers) ? r.data.sellers : [],
+            season_pool_total_ledger: Number(r.data.season_pool_total_ledger || 0),
+            season_pool_total_daily_sum: Number(r.data.season_pool_total_daily_sum || 0),
+            season_pool_diff: Number(r.data.season_pool_diff || 0),
+            season_pool_is_consistent: r.data.season_pool_is_consistent !== false,
           });
         } else {
           setErr(r?.error || "Ошибка загрузки");
@@ -502,6 +591,47 @@ function SeasonView() {
 
       {err && (
         <div className="rounded-xl border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-200">{err}</div>
+      )}
+
+      {/* Consistency check block */}
+      {!loading && !err && (payload.season_pool_total_ledger > 0 || payload.season_pool_total_daily_sum > 0) && (
+        <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-neutral-400">Фонд сезона (консистентность)</span>
+            <span
+              data-testid="owner-season-consistency-badge"
+              className={`px-2 py-0.5 rounded text-xs font-medium ${
+                payload.season_pool_is_consistent
+                  ? 'bg-emerald-900/40 text-emerald-300 border border-emerald-500/30'
+                  : 'bg-red-900/40 text-red-300 border border-red-500/30'
+              }`}
+            >
+              {payload.season_pool_is_consistent ? '✓ CONSISTENT' : '⚠ MISMATCH'}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div>
+              <div className="text-neutral-500">Ledger total</div>
+              <div data-testid="owner-season-consistency-ledger" className="text-neutral-200 font-medium">
+                {formatRUB(payload.season_pool_total_ledger)}
+              </div>
+            </div>
+            <div>
+              <div className="text-neutral-500">Daily sum</div>
+              <div data-testid="owner-season-consistency-daily" className="text-neutral-200 font-medium">
+                {formatRUB(payload.season_pool_total_daily_sum)}
+              </div>
+            </div>
+          </div>
+          {!payload.season_pool_is_consistent && (
+            <div className="mt-2 pt-2 border-t border-white/5">
+              <span className="text-neutral-500 text-xs">Diff: </span>
+              <span data-testid="owner-season-consistency-diff" className="text-red-300 text-xs font-medium">
+                {formatRUB(payload.season_pool_diff)}
+              </span>
+            </div>
+          )}
+        </div>
       )}
 
       {/* Sellers table */}
@@ -557,6 +687,208 @@ function SeasonView() {
 }
 
 /* ==================== SHARED COMPONENTS ==================== */
+
+/**
+ * MotivationSettingsSummary — read-only summary of active motivation settings
+ * Shown at the top of OwnerMotivationView (visible on all sub-tabs: Day/Week/Season)
+ */
+function MotivationSettingsSummary({ settings, loading, error, onOpenSettings, onRefresh }) {
+  // Loading state
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-white/10 bg-white/5 p-2 text-xs text-neutral-500">
+        Загрузка параметров...
+      </div>
+    );
+  }
+
+  // Error state
+  if (error || !settings) {
+    return (
+      <div className="rounded-xl border border-red-900/40 bg-red-950/20 p-2 text-xs text-red-300 flex items-center justify-between">
+        <span>Параметры: не удалось загрузить</span>
+        <div className="flex gap-2">
+          {onRefresh && (
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="text-neutral-400 hover:text-neutral-300 underline"
+            >
+              Обновить
+            </button>
+          )}
+          {onOpenSettings && (
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="text-amber-400 hover:text-amber-300 underline"
+            >
+              Открыть настройки
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Extract settings
+  const motivationType = settings.motivationType || "team";
+  const motivationPercent = typeof settings.motivationPercentLegacy === "number" 
+    ? settings.motivationPercentLegacy 
+    : 15;
+  const isAdaptive = motivationType === "adaptive";
+
+  // Type label
+  const typeLabel = {
+    personal: "Личная",
+    team: "Командная",
+    adaptive: "Адаптивная",
+  }[motivationType] || motivationType;
+
+  // Adaptive-only settings
+  const individualShare = typeof settings.individual_share === "number" 
+    ? Math.round(settings.individual_share * 100) 
+    : 60;
+  const teamShare = typeof settings.team_share === "number" 
+    ? Math.round(settings.team_share * 100) 
+    : 40;
+  const weeklyWithhold = typeof settings.weeklyWithholdPercentTotalLegacy === "number"
+    ? settings.weeklyWithholdPercentTotalLegacy
+    : 0;
+  const seasonWithhold = typeof settings.seasonWithholdPercentTotalLegacy === "number"
+    ? settings.seasonWithholdPercentTotalLegacy
+    : 0;
+  const dispatcherWithhold = typeof settings.dispatcherWithholdPercentTotalLegacy === "number"
+    ? settings.dispatcherWithholdPercentTotalLegacy
+    : 0;
+  const coefSpeed = settings.coefSpeed ?? 1.2;
+  const coefWalk = settings.coefWalk ?? 3;
+  const coefFishing = settings.coefFishing ?? 5;
+  const kDispatchers = settings.k_dispatchers ?? 1.0;
+  const kBananaHedgehog = settings.k_banana_hedgehog ?? 2.7;
+  const kBananaCenter = settings.k_banana_center ?? 2.2;
+  const kBananaSanatorium = settings.k_banana_sanatorium ?? 1.2;
+  const kBananaStationary = settings.k_banana_stationary ?? 1.0;
+  const kZoneHedgehog = settings.k_zone_hedgehog ?? 1.3;
+  const kZoneCenter = settings.k_zone_center ?? 1.0;
+  const kZoneSanatorium = settings.k_zone_sanatorium ?? 0.8;
+  const kZoneStationary = settings.k_zone_stationary ?? 0.7;
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/5 p-2 text-xs">
+      {/* Always visible: Type + Motivation % */}
+      <div className="flex flex-wrap items-center gap-2">
+        <SettingsChip label="Тип" value={typeLabel} accent />
+        <SettingsChip label="Мотивация" value={`${motivationPercent.toFixed(1)}%`} />
+        
+        {/* Action buttons */}
+        <div className="ml-auto flex gap-2">
+          {onRefresh && (
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="text-neutral-400 hover:text-neutral-300 underline text-[11px]"
+            >
+              Обновить
+            </button>
+          )}
+          {onOpenSettings && (
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="text-amber-400 hover:text-amber-300 underline text-[11px]"
+            >
+              Открыть настройки
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Adaptive-only: detailed settings */}
+      {isAdaptive && (
+        <>
+          {/* Row 2: Withholds + Shares */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-neutral-400">
+            <span className="text-[10px] text-neutral-500">Удержания:</span>
+            <span>wk {weeklyWithhold.toFixed(1)}%</span>
+            <span>|</span>
+            <span>sn {seasonWithhold.toFixed(1)}%</span>
+            <span>|</span>
+            <span>dsp {dispatcherWithhold.toFixed(1)}%</span>
+          </div>
+          
+          {/* Row 3: Shares */}
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-neutral-400">
+            <span className="text-[10px] text-neutral-500">Распределение:</span>
+            <span>инд. {individualShare}%</span>
+            <span>/</span>
+            <span>ком. {teamShare}%</span>
+          </div>
+
+          {/* Row 4: Coefficients */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-neutral-400">
+            <span className="text-[10px] text-neutral-500">Коэф:</span>
+            <span>speed {coefSpeed.toFixed(2)}</span>
+            <span>|</span>
+            <span>cruise {coefWalk.toFixed(2)}</span>
+            <span>|</span>
+            <span>fish {coefFishing.toFixed(2)}</span>
+            <span>|</span>
+            <span>kD {kDispatchers.toFixed(2)}</span>
+          </div>
+
+          {/* Row 5: Zones */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-neutral-400">
+            <span className="text-[10px] text-neutral-500">Зоны speed/cruise:</span>
+            <span>Ёж {kZoneHedgehog.toFixed(2)}</span>
+            <span>|</span>
+            <span>Цнт {kZoneCenter.toFixed(2)}</span>
+            <span>|</span>
+            <span>Сан {kZoneSanatorium.toFixed(2)}</span>
+            <span>|</span>
+            <span>Стац {kZoneStationary.toFixed(2)}</span>
+          </div>
+
+          {/* Row 6: Banana zones */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-neutral-400">
+            <span className="text-[10px] text-neutral-500">Зоны banana:</span>
+            <span>Ёж {kBananaHedgehog.toFixed(2)}</span>
+            <span>|</span>
+            <span>Цнт {kBananaCenter.toFixed(2)}</span>
+            <span>|</span>
+            <span>Сан {kBananaSanatorium.toFixed(2)}</span>
+            <span>|</span>
+            <span>Стац {kBananaStationary.toFixed(2)}</span>
+          </div>
+        </>
+      )}
+
+      {/* Non-adaptive note */}
+      {!isAdaptive && (
+        <div className="mt-1.5 text-[10px] text-neutral-500 italic">
+          Остальные параметры стандартные и не применяются
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Small chip for settings display
+ */
+function SettingsChip({ label, value, accent }) {
+  return (
+    <span className={[
+      "px-2 py-0.5 rounded",
+      accent 
+        ? "bg-amber-900/30 text-amber-300 border border-amber-500/30" 
+        : "bg-neutral-800/50 text-neutral-300 border border-neutral-700/50"
+    ].join(" ")}>
+      <span className="text-neutral-500 mr-1">{label}:</span>
+      {value}
+    </span>
+  );
+}
 
 function StatCard({ title, value, accent, loading, className = "" }) {
   const vCls =

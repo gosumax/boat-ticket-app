@@ -3639,6 +3639,44 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
       return res.status(400).json({ error: 'Cannot delete this presale in current status' });
     }
 
+    // === SHIFT CLOSE GUARD ===
+    // Нельзя отменять продажу, если день закрыт. Проверяем:
+    // 1) business_day самого presale (если есть платежи, реверсы пойдут туда)
+    // 2) все business_days, по которым есть POSTED записи в money_ledger для этого presale
+    const bdPresale = presale.business_day;
+    if (bdPresale) {
+      const closedPresale = db.prepare(`SELECT 1 FROM shift_closures WHERE business_day = ? LIMIT 1`).get(bdPresale);
+      if (closedPresale) {
+        return res.status(409).json({
+          ok: false,
+          code: 'SHIFT_CLOSED',
+          message: 'Нельзя отменить/удалить продажу: смена за этот день уже закрыта. Обратитесь к owner.'
+        });
+      }
+    }
+
+    // Проверяем все business_days с POSTED записями в money_ledger для этого presale
+    const ledgerExistsCheck = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='money_ledger'`).get();
+    if (ledgerExistsCheck) {
+      const bdsWithLedger = db.prepare(`
+        SELECT DISTINCT business_day
+        FROM money_ledger
+        WHERE presale_id = ? AND status = 'POSTED' AND business_day IS NOT NULL
+      `).all(presaleId);
+
+      for (const row of bdsWithLedger) {
+        const closedBd = db.prepare(`SELECT 1 FROM shift_closures WHERE business_day = ? LIMIT 1`).get(row.business_day);
+        if (closedBd) {
+          return res.status(409).json({
+            ok: false,
+            code: 'SHIFT_CLOSED',
+            message: 'Нельзя отменить/удалить продажу: смена за этот день уже закрыта. Обратитесь к owner.'
+          });
+        }
+      }
+    }
+    // === END SHIFT CLOSE GUARD ===
+
     const transaction = db.transaction(() => {
       // 1) РїРѕРјРµС‡Р°РµРј РїСЂРµСЃРµР№Р» РєР°Рє CANCELLED (СЌС‚Рѕ вЂњСЃР¶РµС‡СЊ Р±РёР»РµС‚вЂќ)
       db.prepare(`UPDATE presales SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(presaleId);

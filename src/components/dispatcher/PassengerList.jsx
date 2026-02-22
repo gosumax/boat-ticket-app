@@ -884,7 +884,12 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
         } catch (e) {}
       } catch (error) {
         console.error('Error performing presale operation:', error);
-        setConfirmError(error?.message || 'Ошибка операции');
+        // Handle SHIFT_CLOSED guard
+        if (error?.status === 409 && error?.response?.code === 'SHIFT_CLOSED') {
+          setConfirmError('Нельзя отменить продажу: смена за этот день уже закрыта. Обратитесь к owner.');
+        } else {
+          setConfirmError(error?.message || 'Ошибка операции');
+        }
         setConfirmLoading(false);
       }
     }

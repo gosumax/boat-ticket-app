@@ -10,7 +10,7 @@
       - combobox [ref=e9]: dispatcher
     - generic [ref=e10]:
       - generic [ref=e11]: Пароль
-      - textbox [ref=e12]: "123456"
+      - textbox [ref=e12]: dispatcher123
     - generic [ref=e13]:
       - checkbox "Запомнить пароль" [ref=e14]
       - text: Запомнить пароль

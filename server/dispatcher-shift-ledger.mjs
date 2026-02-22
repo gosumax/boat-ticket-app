@@ -223,6 +223,26 @@ router.get('/summary', authenticateToken, (req, res) => {
 
     const salary_total = Math.round(Number(snap.total_revenue || 0) * 0.13);
 
+    // --- Motivation withhold from engine (snapshot branch) ---
+    let motivationWithhold = null;
+    try {
+      const motivationResult = calcMotivationDay(db, businessDay);
+      if (motivationResult?.data) {
+        motivationWithhold = {
+          weekly_amount: motivationResult.data.withhold?.weekly_amount ?? 0,
+          season_amount: motivationResult.data.withhold?.season_amount ?? 0,
+          dispatcher_amount_total: motivationResult.data.withhold?.dispatcher_amount_total ?? 0,
+          fund_total_original: motivationResult.data.withhold?.fund_total_original ?? 0,
+          fund_total_after_withhold: motivationResult.data.withhold?.fund_total_after_withhold ?? 0,
+          dispatcher_percent_total: motivationResult.data.settings_effective?.dispatcher_withhold_percent_total ?? 0.002,
+          dispatcher_percent_per_person: motivationResult.data.settings_effective?.dispatcher_withhold_percent_per_person ?? 0.001,
+          active_dispatchers_count: motivationResult.data.dispatchers_today?.active_count ?? 0
+        };
+      }
+    } catch (e) {
+      console.error('[MOTIVATION_WITHHOLD_SNAPSHOT] Error:', e?.message || e);
+    }
+
     // Dispatcher totals (from snapshot)
     const dispatcher = {
       collected_total: 0,
@@ -335,6 +355,9 @@ router.get('/summary', authenticateToken, (req, res) => {
       cash_discrepancy: cashboxData?.cash_discrepancy ?? null,
       warnings: cashboxData?.warnings ?? [],
       cashbox: cashboxData ?? null,
+      
+      // Motivation withhold breakdown
+      motivation_withhold: motivationWithhold
     });
   }
 
@@ -728,6 +751,7 @@ router.get('/summary', authenticateToken, (req, res) => {
   // Call motivation engine to get payouts for this business day
   let salary_due_total = 0;
   let payoutsByUserId = new Map();
+  let motivationWithhold = null;
   
   try {
     const motivationResult = calcMotivationDay(db, businessDay);
@@ -736,6 +760,20 @@ router.get('/summary', authenticateToken, (req, res) => {
         payoutsByUserId.set(payout.user_id, payout);
         salary_due_total += Number(payout.total || 0);
       }
+    }
+    
+    // Extract withhold info for UI
+    if (motivationResult?.data) {
+      motivationWithhold = {
+        weekly_amount: motivationResult.data.withhold?.weekly_amount ?? 0,
+        season_amount: motivationResult.data.withhold?.season_amount ?? 0,
+        dispatcher_amount_total: motivationResult.data.withhold?.dispatcher_amount_total ?? 0,
+        fund_total_original: motivationResult.data.withhold?.fund_total_original ?? 0,
+        fund_total_after_withhold: motivationResult.data.withhold?.fund_total_after_withhold ?? 0,
+        dispatcher_percent_total: motivationResult.data.settings_effective?.dispatcher_withhold_percent_total ?? 0.002,
+        dispatcher_percent_per_person: motivationResult.data.settings_effective?.dispatcher_withhold_percent_per_person ?? 0.001,
+        active_dispatchers_count: motivationResult.data.dispatchers_today?.active_count ?? 0
+      };
     }
     
     // Enrich sellers with salary_due fields
@@ -1188,6 +1226,9 @@ router.get('/summary', authenticateToken, (req, res) => {
     salary_paid_cash: salaryPaidCash,
     salary_paid_card: salaryPaidCard,
     salary_paid_total: salaryPaidTotal,
+    
+    // Motivation withhold breakdown
+    motivation_withhold: motivationWithhold
   });
 });
 

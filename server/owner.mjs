@@ -1919,7 +1919,6 @@ router.get('/motivation/weekly', (req, res) => {
     const savedSettings = ownerRow?.settings_json ? JSON.parse(ownerRow.settings_json) : {};
     const settings = { ...OWNER_SETTINGS_DEFAULTS, ...savedSettings };
     const k_speed = Number(settings.k_speed ?? 1.2);
-    const weekly_percent = Number(settings.weekly_percent ?? 0.01);
     const k_cruise = Number(settings.k_cruise ?? 3.0);
     const k_zone_hedgehog = Number(settings.k_zone_hedgehog ?? 1.3);
     const k_zone_center = Number(settings.k_zone_center ?? 1.0);
@@ -2074,11 +2073,43 @@ router.get('/motivation/weekly', (req, res) => {
     const top3 = sellers.slice(0, 3);
     
     // ====================
-    // STEP 8: Weekly Payout Distribution (50/30/20)
+    // STEP 8: Weekly Payout Distribution (from ledger WITHHOLD_WEEKLY)
     // ====================
     
-    // Calculate weekly pool from SQL-calculated revenue_total_week
-    const weekly_pool_total = Math.floor(revenue_total_week * weekly_percent);
+    // Calculate weekly_pool_total_ledger from money_ledger (sum of WITHHOLD_WEEKLY)
+    // This is the ONLY source of truth for weekly pool
+    const weeklyPoolLedgerRow = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) AS weekly_pool_total_ledger
+      FROM money_ledger
+      WHERE kind = 'FUND' AND type = 'WITHHOLD_WEEKLY' AND status = 'POSTED'
+        AND DATE(business_day) BETWEEN ? AND ?
+    `).get(dateFrom, dateTo);
+    const weekly_pool_total_ledger = Number(weeklyPoolLedgerRow?.weekly_pool_total_ledger || 0);
+    
+    // Use ledger sum as the pool total (no calculation from percent)
+    const weekly_pool_total = weekly_pool_total_ledger;
+    
+    // === CONSISTENCY CHECK: daily_sum vs ledger ===
+    // Get days with WITHHOLD_WEEKLY entries in the week range
+    const withholdDays = db.prepare(`
+      SELECT DISTINCT business_day FROM money_ledger
+      WHERE kind = 'FUND' AND type = 'WITHHOLD_WEEKLY' AND status = 'POSTED'
+        AND DATE(business_day) BETWEEN ? AND ?
+    `).all(dateFrom, dateTo);
+    
+    let weekly_pool_total_daily_sum = 0;
+    for (const row of (withholdDays || [])) {
+      const day = row.business_day;
+      try {
+        const dayResult = calcMotivationDay(db, day);
+        weekly_pool_total_daily_sum += Number(dayResult?.data?.withhold?.weekly_amount || 0);
+      } catch (e) {
+        console.error(`[weekly consistency] calcMotivationDay error for ${day}:`, e);
+      }
+    }
+    
+    const weekly_pool_diff = weekly_pool_total_ledger - weekly_pool_total_daily_sum;
+    const weekly_pool_is_consistent = (weekly_pool_diff === 0);
     
     // Distribution percentages based on number of sellers
     let weekly_distribution = { first: 0.5, second: 0.3, third: 0.2 };
@@ -2112,6 +2143,10 @@ router.get('/motivation/weekly', (req, res) => {
         date_to: dateTo,
         revenue_total_week,
         weekly_pool_total,
+        weekly_pool_total_ledger,
+        weekly_pool_total_daily_sum,
+        weekly_pool_diff,
+        weekly_pool_is_consistent,
         weekly_distribution,
         sellers,
         top3
@@ -2160,11 +2195,6 @@ router.get('/motivation/season', (req, res) => {
     const MIN_WORKED_DAYS_SEASON = 75;
     const MIN_WORKED_DAYS_SEP = 20;
     const END_SEP_WINDOW_DAYS = 7;
-    
-    // Get settings for season_percent
-    const ownerRow = db.prepare("SELECT settings_json FROM owner_settings WHERE id = 1").get();
-    const savedSettings = ownerRow?.settings_json ? JSON.parse(ownerRow.settings_json) : {};
-    const season_percent = Number(savedSettings.season_percent ?? savedSettings.seasonal_percent ?? 0);
     
     // Get all active sellers
     const sellersRows = db.prepare(`
@@ -2238,7 +2268,41 @@ router.get('/motivation/season', (req, res) => {
     `).get(seasonFrom, seasonTo);
     
     const revenue_total_season = Math.max(0, Number(seasonRevenueRow?.revenue_gross || 0) - Number(seasonRevenueRow?.refunds || 0));
-    const season_pool_total = Math.floor(revenue_total_season * season_percent);
+    
+    // Calculate season_pool_total_ledger from money_ledger (sum of WITHHOLD_SEASON)
+    // This is the ONLY source of truth for season pool
+    const seasonPoolLedgerRow = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) AS season_pool_total_ledger
+      FROM money_ledger
+      WHERE kind = 'FUND' AND type = 'WITHHOLD_SEASON' AND status = 'POSTED'
+        AND DATE(business_day) BETWEEN ? AND ?
+    `).get(seasonFrom, seasonTo);
+    const season_pool_total_ledger = Number(seasonPoolLedgerRow?.season_pool_total_ledger || 0);
+    
+    // Use ledger sum as the pool total (no calculation from percent)
+    const season_pool_total = season_pool_total_ledger;
+    
+    // === CONSISTENCY CHECK: daily_sum vs ledger ===
+    // Get days with WITHHOLD_SEASON entries in the season range
+    const seasonWithholdDays = db.prepare(`
+      SELECT DISTINCT business_day FROM money_ledger
+      WHERE kind = 'FUND' AND type = 'WITHHOLD_SEASON' AND status = 'POSTED'
+        AND DATE(business_day) BETWEEN ? AND ?
+    `).all(seasonFrom, seasonTo);
+    
+    let season_pool_total_daily_sum = 0;
+    for (const row of (seasonWithholdDays || [])) {
+      const day = row.business_day;
+      try {
+        const dayResult = calcMotivationDay(db, day);
+        season_pool_total_daily_sum += Number(dayResult?.data?.withhold?.season_amount || 0);
+      } catch (e) {
+        console.error(`[season consistency] calcMotivationDay error for ${day}:`, e);
+      }
+    }
+    
+    const season_pool_diff = season_pool_total_ledger - season_pool_total_daily_sum;
+    const season_pool_is_consistent = (season_pool_diff === 0);
     
     // Build sellers list with eligibility
     const sellers = (sellersRows || []).map(r => {
@@ -2300,8 +2364,11 @@ router.get('/motivation/season', (req, res) => {
         season_from: seasonFrom,
         season_to: seasonTo,
         revenue_total_season,
-        season_percent,
         season_pool_total,
+        season_pool_total_ledger,
+        season_pool_total_daily_sum,
+        season_pool_diff,
+        season_pool_is_consistent,
         eligible_count,
         sum_points_eligible,
         season_payouts_sum,
@@ -2322,6 +2389,266 @@ router.get('/motivation/season', (req, res) => {
   } catch (e) {
     console.error('[owner/motivation/season] Error:', e);
     return res.status(500).json({ ok: false, error: e?.message || 'season motivation calculation failed' });
+  }
+});
+
+// =====================
+// GET /api/owner/invariants?business_day=YYYY-MM-DD&week=YYYY-Wxx&season_id=YYYY
+// Read-only endpoint to verify financial invariants
+// =====================
+router.get('/invariants', (req, res) => {
+  try {
+    const { business_day, week, season_id } = req.query;
+    
+    if (!business_day && !week && !season_id) {
+      return res.status(400).json({ 
+        ok: false, 
+        error: 'At least one parameter required: business_day, week, or season_id' 
+      });
+    }
+    
+    const result = {
+      ok: true,
+      data: {}
+    };
+    
+    // === DAY INVARIANTS ===
+    if (business_day) {
+      const dayErrors = [];
+      const motivationResult = calcMotivationDay(db, business_day);
+      
+      if (motivationResult.error) {
+        dayErrors.push(`calcMotivationDay error: ${motivationResult.error}`);
+      }
+      
+      const w = motivationResult?.data?.withhold || {};
+      const fundTotal = Number(w.fund_total_original || 0);
+      const weeklyAmount = Number(w.weekly_amount || 0);
+      const seasonAmount = Number(w.season_amount || 0);
+      const dispatcherAmount = Number(w.dispatcher_amount_total || 0);
+      const fundAfter = Number(w.fund_total_after_withhold || 0);
+      
+      // Check: fund_total_original - withhold == fund_total_after_withhold
+      const expectedAfter = fundTotal - weeklyAmount - seasonAmount - dispatcherAmount;
+      if (expectedAfter !== fundAfter) {
+        dayErrors.push(`fund mismatch: ${fundTotal} - ${weeklyAmount} - ${seasonAmount} - ${dispatcherAmount} = ${expectedAfter}, but fund_total_after_withhold = ${fundAfter}`);
+      }
+      
+      result.data.day = {
+        business_day,
+        ok: dayErrors.length === 0,
+        errors: dayErrors,
+        values: {
+          fund_total_original: fundTotal,
+          weekly_amount: weeklyAmount,
+          season_amount: seasonAmount,
+          dispatcher_amount_total: dispatcherAmount,
+          fund_total_after_withhold: fundAfter
+        }
+      };
+      
+      // === IMMUTABILITY CHECK ===
+      // Check if day is locked (has WITHHOLD entries)
+      const isLocked = !!motivationResult?.data?.lock?.is_locked;
+      const snapshotFound = !!motivationResult?.data?.lock?.snapshot_found;
+      
+      if (isLocked) {
+        const immutabilityErrors = [];
+        
+        // Check snapshot exists
+        if (!snapshotFound) {
+          immutabilityErrors.push('locked day without snapshot');
+        }
+        
+        // Get ledger amounts
+        const ledgerWeeklyRow = db.prepare(`
+          SELECT COALESCE(SUM(amount), 0) AS total FROM money_ledger
+          WHERE business_day = ? AND kind = 'FUND' AND type = 'WITHHOLD_WEEKLY' AND status = 'POSTED'
+        `).get(business_day);
+        const ledgerWeekly = Number(ledgerWeeklyRow?.total || 0);
+        
+        const ledgerSeasonRow = db.prepare(`
+          SELECT COALESCE(SUM(amount), 0) AS total FROM money_ledger
+          WHERE business_day = ? AND kind = 'FUND' AND type = 'WITHHOLD_SEASON' AND status = 'POSTED'
+        `).get(business_day);
+        const ledgerSeason = Number(ledgerSeasonRow?.total || 0);
+        
+        // Compare calc (from snapshot) vs ledger
+        const calcWeekly = weeklyAmount;
+        const calcSeason = seasonAmount;
+        
+        if (ledgerWeekly !== calcWeekly) {
+          immutabilityErrors.push(`ledger weekly (${ledgerWeekly}) differs from snapshot calc (${calcWeekly})`);
+        }
+        if (ledgerSeason !== calcSeason) {
+          immutabilityErrors.push(`ledger season (${ledgerSeason}) differs from snapshot calc (${calcSeason})`);
+        }
+        
+        result.data.immutability = {
+          ok: immutabilityErrors.length === 0,
+          errors: immutabilityErrors,
+          details: {
+            locked_day: true,
+            snapshot_found: snapshotFound,
+            ledger_weekly_amount: ledgerWeekly,
+            ledger_season_amount: ledgerSeason,
+            calc_weekly_amount: calcWeekly,
+            calc_season_amount: calcSeason
+          }
+        };
+      } else {
+        // Day not locked - immutability is trivially OK
+        result.data.immutability = {
+          ok: true,
+          errors: [],
+          details: {
+            locked_day: false,
+            snapshot_found: snapshotFound
+          }
+        };
+      }
+    }
+    
+    // === WEEKLY INVARIANTS ===
+    if (week) {
+      const weekErrors = [];
+      
+      // Parse week (YYYY-Wxx)
+      const weekMatch = week.match(/^(\d{4})-W(\d{2})$/);
+      if (!weekMatch) {
+        weekErrors.push(`Invalid week format: ${week}. Use YYYY-Wxx`);
+      } else {
+        const year = parseInt(weekMatch[1], 10);
+        const weekNum = parseInt(weekMatch[2], 10);
+        
+        // Calculate week date range
+        const jan4 = new Date(year, 0, 4);
+        const dayOfWeek = jan4.getDay() || 7;
+        const weekStart = new Date(jan4);
+        weekStart.setDate(jan4.getDate() - dayOfWeek + 1 + (weekNum - 1) * 7);
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekStart.getDate() + 6);
+        
+        const dateFrom = weekStart.toISOString().split('T')[0];
+        const dateTo = weekEnd.toISOString().split('T')[0];
+        
+        // Get ledger total
+        const ledgerRow = db.prepare(`
+          SELECT COALESCE(SUM(amount), 0) AS total
+          FROM money_ledger
+          WHERE kind = 'FUND' AND type = 'WITHHOLD_WEEKLY' AND status = 'POSTED'
+            AND DATE(business_day) BETWEEN ? AND ?
+        `).get(dateFrom, dateTo);
+        const ledgerTotal = Number(ledgerRow?.total || 0);
+        
+        // Get daily sum
+        const withholdDays = db.prepare(`
+          SELECT DISTINCT business_day FROM money_ledger
+          WHERE kind = 'FUND' AND type = 'WITHHOLD_WEEKLY' AND status = 'POSTED'
+            AND DATE(business_day) BETWEEN ? AND ?
+        `).all(dateFrom, dateTo);
+        
+        let dailySum = 0;
+        for (const row of (withholdDays || [])) {
+          try {
+            const dayResult = calcMotivationDay(db, row.business_day);
+            dailySum += Number(dayResult?.data?.withhold?.weekly_amount || 0);
+          } catch (e) {
+            weekErrors.push(`calcMotivationDay error for ${row.business_day}: ${e.message}`);
+          }
+        }
+        
+        const diff = ledgerTotal - dailySum;
+        const isConsistent = diff === 0;
+        
+        result.data.weekly = {
+          week_id: week,
+          date_from: dateFrom,
+          date_to: dateTo,
+          ok: isConsistent && weekErrors.length === 0,
+          errors: weekErrors,
+          diff,
+          ledger_total: ledgerTotal,
+          daily_sum: dailySum
+        };
+      }
+    }
+    
+    // === SEASON INVARIANTS ===
+    if (season_id) {
+      const seasonErrors = [];
+      
+      if (!/^\d{4}$/.test(season_id)) {
+        seasonErrors.push(`Invalid season_id format: ${season_id}. Use YYYY`);
+      } else {
+        const seasonFrom = `${season_id}-01-01`;
+        const seasonTo = `${season_id}-12-31`;
+        
+        // Get ledger total
+        const ledgerRow = db.prepare(`
+          SELECT COALESCE(SUM(amount), 0) AS total
+          FROM money_ledger
+          WHERE kind = 'FUND' AND type = 'WITHHOLD_SEASON' AND status = 'POSTED'
+            AND DATE(business_day) BETWEEN ? AND ?
+        `).get(seasonFrom, seasonTo);
+        const ledgerTotal = Number(ledgerRow?.total || 0);
+        
+        // Get daily sum
+        const withholdDays = db.prepare(`
+          SELECT DISTINCT business_day FROM money_ledger
+          WHERE kind = 'FUND' AND type = 'WITHHOLD_SEASON' AND status = 'POSTED'
+            AND DATE(business_day) BETWEEN ? AND ?
+        `).all(seasonFrom, seasonTo);
+        
+        let dailySum = 0;
+        for (const row of (withholdDays || [])) {
+          try {
+            const dayResult = calcMotivationDay(db, row.business_day);
+            dailySum += Number(dayResult?.data?.withhold?.season_amount || 0);
+          } catch (e) {
+            seasonErrors.push(`calcMotivationDay error for ${row.business_day}: ${e.message}`);
+          }
+        }
+        
+        const diff = ledgerTotal - dailySum;
+        const isConsistent = diff === 0;
+        
+        result.data.season = {
+          season_id,
+          date_from: seasonFrom,
+          date_to: seasonTo,
+          ok: isConsistent && seasonErrors.length === 0,
+          errors: seasonErrors,
+          diff,
+          ledger_total: ledgerTotal,
+          daily_sum: dailySum
+        };
+      }
+    }
+    
+    // === LEDGER UNIQUENESS ===
+    // Check for duplicate WITHHOLD_WEEKLY/WITHHOLD_SEASON entries per business_day
+    const duplicates = db.prepare(`
+      SELECT business_day, type, COUNT(*) AS cnt
+      FROM money_ledger
+      WHERE kind = 'FUND' AND type IN ('WITHHOLD_WEEKLY', 'WITHHOLD_SEASON') AND status = 'POSTED'
+      GROUP BY business_day, type
+      HAVING COUNT(*) > 1
+    `).all();
+    
+    result.data.ledger_uniqueness = {
+      ok: duplicates.length === 0,
+      duplicates: duplicates.map(d => ({
+        business_day: d.business_day,
+        type: d.type,
+        count: d.cnt
+      }))
+    };
+    
+    return res.json(result);
+  } catch (e) {
+    console.error('[owner/invariants] Error:', e);
+    return res.status(500).json({ ok: false, error: e?.message || 'invariants check failed' });
   }
 });
 
@@ -3211,8 +3538,6 @@ const OWNER_SETTINGS_DEFAULTS = {
   // Motivation settings (final system) - stored as fractions
   motivationType: "team",
   motivation_percent: 0.15,           // доля (0.15 = 15%)
-  weekly_percent: 0.01,              // доля (0.01 = 1%)
-  season_percent: 0.02,              // доля (0.02 = 2%)
   individual_share: 0.60,            // доля индивидуального фонда
   team_share: 0.40,                  // доля командного фонда
   daily_activation_threshold: 200000,
@@ -3247,7 +3572,12 @@ const OWNER_SETTINGS_DEFAULTS = {
   notifyBadRevenue: true,
   notifyLowLoad: true,
   notifyLowSeller: false,
-  notifyChannel: "inapp"
+  notifyChannel: "inapp",
+  
+  // Withhold settings (USED FOR LEDGER ENTRIES)
+  dispatcher_withhold_percent_total: 0.002,   // 0.2% total cap for dispatcher withhold
+  weekly_withhold_percent_total: 0.008,       // 0.8% withhold for weekly pool
+  season_withhold_percent_total: 0.005        // 0.5% withhold for season pool
 };
 
 // Helper: clamp value to min
@@ -3265,22 +3595,10 @@ function buildFullSettings(body, defaults) {
   if (body.motivationPercent !== undefined) {
     normalized.motivation_percent = Number(body.motivationPercent) / 100;
   }
-  if (body.toWeeklyFund !== undefined) {
-    normalized.weekly_percent = Number(body.toWeeklyFund) / 100;
-  }
-  if (body.toSeasonFund !== undefined) {
-    normalized.season_percent = Number(body.toSeasonFund) / 100;
-  }
   
   // === PERCENT FIELDS: NEW FORMAT (use as-is) - overrides legacy ===
   if (body.motivation_percent !== undefined) {
     normalized.motivation_percent = Number(body.motivation_percent);
-  }
-  if (body.weekly_percent !== undefined) {
-    normalized.weekly_percent = Number(body.weekly_percent);
-  }
-  if (body.season_percent !== undefined) {
-    normalized.season_percent = Number(body.season_percent);
   }
   
   // === MOTIVATION TYPE-SPECIFIC PERCENT FIELDS (0..100 -> 0..1) ===
@@ -3314,6 +3632,30 @@ function buildFullSettings(body, defaults) {
   }
   if (body.team_share !== undefined) {
     normalized.team_share = Number(body.team_share);
+  }
+  
+  // === WITHHOLD PERCENT FIELDS (come as percent from frontend, stored as fraction) ===
+  if (body.dispatcherWithholdPercentTotal !== undefined) {
+    normalized.dispatcher_withhold_percent_total = Number(body.dispatcherWithholdPercentTotal) / 100;
+  }
+  if (body.dispatcher_withhold_percent_total !== undefined) {
+    normalized.dispatcher_withhold_percent_total = Number(body.dispatcher_withhold_percent_total);
+  }
+  
+  // Weekly withhold percent (come as percent from frontend, stored as fraction)
+  if (body.weeklyWithholdPercentTotal !== undefined) {
+    normalized.weekly_withhold_percent_total = Number(body.weeklyWithholdPercentTotal) / 100;
+  }
+  if (body.weekly_withhold_percent_total !== undefined) {
+    normalized.weekly_withhold_percent_total = Number(body.weekly_withhold_percent_total);
+  }
+  
+  // Season withhold percent (come as percent from frontend, stored as fraction)
+  if (body.seasonWithholdPercentTotal !== undefined) {
+    normalized.season_withhold_percent_total = Number(body.seasonWithholdPercentTotal) / 100;
+  }
+  if (body.season_withhold_percent_total !== undefined) {
+    normalized.season_withhold_percent_total = Number(body.season_withhold_percent_total);
   }
   
   // Validate: individual_share + team_share = 1 (normalize if needed)
@@ -3353,8 +3695,6 @@ function addLegacyFields(settings) {
   // Computed legacy percent fields (always synchronized)
   // Use the raw fraction value, multiply by 100, preserve decimals
   result.motivationPercentLegacy = (settings.motivation_percent ?? 0.15) * 100;
-  result.toWeeklyFundLegacy = (settings.weekly_percent ?? 0.01) * 100;
-  result.toSeasonFundLegacy = (settings.season_percent ?? 0.02) * 100;
   
   // Motivation type-specific percent legacy fields
   const personalP = settings.motivation_personal_percent ?? settings.motivation_percent ?? 0.15;
@@ -3366,6 +3706,11 @@ function addLegacyFields(settings) {
   result.coefSpeed = settings.k_speed ?? 1.2;
   result.coefWalk = settings.k_cruise ?? 3.0;
   result.coefFishing = settings.k_fishing ?? 5.0;
+  
+  // Withhold percent field (show as percent in UI)
+  result.dispatcherWithholdPercentTotalLegacy = (settings.dispatcher_withhold_percent_total ?? 0.002) * 100;
+  result.weeklyWithholdPercentTotalLegacy = (settings.weekly_withhold_percent_total ?? 0.008) * 100;
+  result.seasonWithholdPercentTotalLegacy = (settings.season_withhold_percent_total ?? 0.005) * 100;
   
   return result;
 }

@@ -472,7 +472,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     }
   };
 
-  const handleShiftClose = () => {
+  const handleShiftClose = async () => {
     if (!allChecked) {
       alert('Отметь все пункты подтверждения перед закрытием смены.');
       return;
@@ -485,11 +485,49 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
       alert('Нельзя закрыть смену: есть несданные суммы у продавцов.');
       return;
     }
-    if (window.confirm('Вы уверены, что хотите закрыть смену?')) {
+    if (!window.confirm('Вы уверены, что хотите закрыть смену?')) return;
+
+    const business_day = normalizedSummary?.business_day ?? dailySummary?.businessDay ?? toLocalBusinessDay();
+
+    try {
+      const res = await apiClient.request('/dispatcher/shift/close', {
+        method: 'POST',
+        body: { business_day },
+      });
+
+      // Success: ok:true
       setShiftClosed(true);
-      localStorage.setItem('dispatcher_shiftClosed', 'true');
       if (setGlobalShiftClosed) setGlobalShiftClosed(true);
+      try { localStorage.setItem('dispatcher_shiftClosed', 'true'); } catch {}
       alert('Смена закрыта');
+
+      // Refetch summary to switch to snapshot source
+      await loadSummaryFromBackend(business_day);
+    } catch (e) {
+      const errData = e?.body || e?.data || {};
+      const status = e?.status;
+
+      // 409: already closed (idempotent)
+      if (status === 409 || errData?.code === 'SHIFT_CLOSED') {
+        setShiftClosed(true);
+        if (setGlobalShiftClosed) setGlobalShiftClosed(true);
+        try { localStorage.setItem('dispatcher_shiftClosed', 'true'); } catch {}
+        await loadSummaryFromBackend(business_day);
+        alert('Смена уже закрыта');
+        return;
+      }
+
+      // 400: validation error (open trips, etc.)
+      if (status === 400) {
+        const msg = errData?.error || errData?.message || JSON.stringify(errData);
+        alert(`Нельзя закрыть смену: ${msg}`);
+        return;
+      }
+
+      // Other errors
+      console.error('shift close failed', e);
+      const msg = errData?.error || errData?.message || 'Проверь соединение и повтори.';
+      alert(`Ошибка закрытия смены. ${msg}`);
     }
   };
 
@@ -625,6 +663,41 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                 <div className="text-neutral-400 text-sm">Возвраты</div>
                 <div className="text-xl font-bold text-red-400">{formatRUB(dailySummary.refundTotal)}</div>
                 <div className="mt-1 text-xs text-neutral-500">Нал: {formatRUB(dailySummary.refundCash)} | Терминал: {formatRUB(dailySummary.refundCard)}</div>
+              </div>
+            )}
+          
+            {/* Motivation withhold breakdown */}
+            {normalizedSummary?.motivation_withhold && (
+              <div className="mt-3 bg-purple-950/30 border border-purple-900/50 p-3 rounded-lg">
+                <div className="text-sm font-semibold text-purple-300 mb-2">Удержания из фонда мотивации</div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+                  <div data-testid="shiftclose-withhold-weekly" className="flex flex-col">
+                    <span className="text-neutral-400">Weekly фонд</span>
+                    <span className="text-lg font-bold text-purple-300">{formatRUB(normalizedSummary.motivation_withhold.weekly_amount)}</span>
+                  </div>
+                  <div data-testid="shiftclose-withhold-season" className="flex flex-col">
+                    <span className="text-neutral-400">Season фонд</span>
+                    <span className="text-lg font-bold text-purple-300">{formatRUB(normalizedSummary.motivation_withhold.season_amount)}</span>
+                  </div>
+                  <div data-testid="shiftclose-withhold-dispatcher" className="flex flex-col">
+                    <span className="text-neutral-400">Бонус диспетчерам</span>
+                    <span className="text-lg font-bold text-purple-300">
+                      {formatRUB(normalizedSummary.motivation_withhold.dispatcher_amount_total)}
+                      <span className="text-xs text-neutral-500 ml-1">(активных: {normalizedSummary.motivation_withhold.active_dispatchers_count})</span>
+                    </span>
+                  </div>
+                  <div data-testid="shiftclose-withhold-fund-original" className="flex flex-col">
+                    <span className="text-neutral-400">Фонд до удержаний</span>
+                    <span className="text-lg font-bold text-neutral-200">{formatRUB(normalizedSummary.motivation_withhold.fund_total_original)}</span>
+                  </div>
+                  <div data-testid="shiftclose-withhold-fund-after" className="flex flex-col">
+                    <span className="text-neutral-400">Фонд после удержаний</span>
+                    <span className="text-lg font-bold text-emerald-300">{formatRUB(normalizedSummary.motivation_withhold.fund_total_after_withhold)}</span>
+                  </div>
+                </div>
+                <div className="mt-2 text-xs text-neutral-500">
+                  Удержание на диспетчеров: {(normalizedSummary.motivation_withhold.dispatcher_percent_total * 100).toFixed(2)}% (на одного: {(normalizedSummary.motivation_withhold.dispatcher_percent_per_person * 100).toFixed(2)}%)
+                </div>
               </div>
             )}
           

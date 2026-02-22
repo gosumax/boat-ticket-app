@@ -1,9 +1,17 @@
 // e2e/helpers/dispatcher.js
 import { expect } from '@playwright/test';
+import { login } from './auth.js';
 
 /**
  * Helpers for dispatcher UI interactions
  */
+
+/**
+ * Login as dispatcher
+ */
+export async function loginAsDispatcher(page) {
+  await login(page, 'dispatcher', 'dispatcher123');
+}
 
 /**
  * Ensure we're on the "Продажа | Посадка" (Sales/Boarding) tab

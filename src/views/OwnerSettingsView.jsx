@@ -14,7 +14,7 @@ import apiClient from "../utils/apiClient.js";
  * 4.5 Уведомления Owner
  */
 
-export default function OwnerSettingsView() {
+export default function OwnerSettingsView({ onSettingsSaved }) {
   const [busy, setBusy] = useState(false);
   const [saveOk, setSaveOk] = useState(false);
   const [err, setErr] = useState("");
@@ -57,7 +57,21 @@ export default function OwnerSettingsView() {
   const [kBananaSanatorium, setKBananaSanatorium] = useState(1.2);
   const [kBananaStationary, setKBananaStationary] = useState(1.0);
 
+  // Коэффициенты зон для speed/cruise
+  const [kZoneHedgehog, setKZoneHedgehog] = useState(1.3);
+  const [kZoneCenter, setKZoneCenter] = useState(1.0);
+  const [kZoneSanatorium, setKZoneSanatorium] = useState(0.8);
+  const [kZoneStationary, setKZoneStationary] = useState(0.7);
+
+  // Вес диспетчера (adaptive)
   const [kDispatchers, setKDispatchers] = useState(1.0);
+  
+  // Dispatcher withhold percent (shown as percent in UI, stored as fraction)
+  const [dispatcherWithholdPercentTotal, setDispatcherWithholdPercentTotal] = useState(0.2);
+  
+  // Weekly/Season withhold percent (shown as percent in UI, stored as fraction)
+  const [weeklyWithholdPercentTotal, setWeeklyWithholdPercentTotal] = useState(0.8);
+  const [seasonWithholdPercentTotal, setSeasonWithholdPercentTotal] = useState(0.5);
 
   // Sellers list for zone assignment
   const [sellersList, setSellersList] = useState([]);
@@ -117,11 +131,26 @@ export default function OwnerSettingsView() {
       if (typeof s.k_banana_center === "number") setKBananaCenter(s.k_banana_center);
       if (typeof s.k_banana_sanatorium === "number") setKBananaSanatorium(s.k_banana_sanatorium);
       if (typeof s.k_banana_stationary === "number") setKBananaStationary(s.k_banana_stationary);
+
+      // Zone coefficients for speed/cruise (k_zone_*)
+      if (typeof s.k_zone_hedgehog === "number") setKZoneHedgehog(s.k_zone_hedgehog);
+      if (typeof s.k_zone_center === "number") setKZoneCenter(s.k_zone_center);
+      if (typeof s.k_zone_sanatorium === "number") setKZoneSanatorium(s.k_zone_sanatorium);
+      if (typeof s.k_zone_stationary === "number") setKZoneStationary(s.k_zone_stationary);
+
+      // Dispatcher weight (adaptive)
       if (typeof s.k_dispatchers === "number") setKDispatchers(s.k_dispatchers);
 
       if (typeof s.coefSpeed === "number") setCoefSpeed(s.coefSpeed);
       if (typeof s.coefWalk === "number") setCoefWalk(s.coefWalk);
       if (typeof s.coefFishing === "number") setCoefFishing(s.coefFishing);
+      
+      // Dispatcher withhold percent (comes as percent from legacy field)
+      if (typeof s.dispatcherWithholdPercentTotalLegacy === "number") setDispatcherWithholdPercentTotal(s.dispatcherWithholdPercentTotalLegacy);
+      
+      // Weekly/Season withhold percent (comes as percent from legacy field)
+      if (typeof s.weeklyWithholdPercentTotalLegacy === "number") setWeeklyWithholdPercentTotal(s.weeklyWithholdPercentTotalLegacy);
+      if (typeof s.seasonWithholdPercentTotalLegacy === "number") setSeasonWithholdPercentTotal(s.seasonWithholdPercentTotalLegacy);
 
       if (typeof s.lowLoad === "number") setLowLoad(s.lowLoad);
       if (typeof s.highLoad === "number") setHighLoad(s.highLoad);
@@ -142,17 +171,24 @@ export default function OwnerSettingsView() {
     setErr("");
     setSaveOk(false);
     
-    // Validation: individual_share + team_share = 100%
-    if (individualShare + teamShare !== 100) {
+    // Validation: individual_share + team_share = 100% (only for adaptive)
+    if (motivationType === 'adaptive' && individualShare + teamShare !== 100) {
       setErr("Сумма индивидуального и командного распределения должна быть 100%");
       return;
     }
     
-    // Validation: coefficients must be > 0
-    const allCoefs = [coefSpeed, coefWalk, coefFishing, kBananaHedgehog, kBananaCenter, kBananaSanatorium, kBananaStationary, kDispatchers];
-    if (allCoefs.some(c => c <= 0)) {
-      setErr("Все коэффициенты должны быть больше 0");
-      return;
+    // Validation: coefficients must be > 0 (only for adaptive)
+    if (motivationType === 'adaptive') {
+      const allCoefs = [
+        coefSpeed, coefWalk, coefFishing,
+        kBananaHedgehog, kBananaCenter, kBananaSanatorium, kBananaStationary,
+        kZoneHedgehog, kZoneCenter, kZoneSanatorium, kZoneStationary,
+        kDispatchers
+      ];
+      if (allCoefs.some(c => c <= 0)) {
+        setErr("Все коэффициенты должны быть больше 0");
+        return;
+      }
     }
     
     setBusy(true);
@@ -187,7 +223,14 @@ export default function OwnerSettingsView() {
         k_banana_center: kBananaCenter,
         k_banana_sanatorium: kBananaSanatorium,
         k_banana_stationary: kBananaStationary,
+        k_zone_hedgehog: kZoneHedgehog,
+        k_zone_center: kZoneCenter,
+        k_zone_sanatorium: kZoneSanatorium,
+        k_zone_stationary: kZoneStationary,
         k_dispatchers: kDispatchers,
+        dispatcherWithholdPercentTotal: dispatcherWithholdPercentTotal,
+        weeklyWithholdPercentTotal: weeklyWithholdPercentTotal,
+        seasonWithholdPercentTotal: seasonWithholdPercentTotal,
         lowLoad,
         highLoad,
         minSellerRevenue,
@@ -198,6 +241,7 @@ export default function OwnerSettingsView() {
       };
       await apiClient.request(`/owner/settings/full`, { method: "PUT", body: payload });
       setSaveOk(true);
+      if (onSettingsSaved) onSettingsSaved();
     } catch (e) {
       setErr(e?.message || "Ошибка сохранения");
     } finally {
@@ -252,9 +296,39 @@ export default function OwnerSettingsView() {
     }
   };
 
+  // Derived: mode flags
+  const isTeam = motivationType === 'team';
+  const isPersonal = motivationType === 'personal';
+  const isAdaptive = motivationType === 'adaptive';
+  const showTeamBlocks = isTeam || isAdaptive;
+  const showAdaptiveBlocks = isAdaptive;
+
+  // Auto-fix shares: when one changes, auto-set the other to sum to 100
+  const handleIndividualShareChange = (val) => {
+    const clamped = Math.max(0, Math.min(100, val));
+    setIndividualShare(clamped);
+    setTeamShare(100 - clamped);
+  };
+  const handleTeamShareChange = (val) => {
+    const clamped = Math.max(0, Math.min(100, val));
+    setTeamShare(clamped);
+    setIndividualShare(100 - clamped);
+  };
+
+  // Validation: can save?
+  const motivationPercentValid = typeof motivationPercent === 'number' && !isNaN(motivationPercent) && motivationPercent >= 0 && motivationPercent <= 100;
+  const sharesValid = !isAdaptive || (individualShare + teamShare === 100);
+  const coefficientsValid = !isAdaptive || [
+    coefSpeed, coefWalk, coefFishing,
+    kBananaHedgehog, kBananaCenter, kBananaSanatorium, kBananaStationary,
+    kZoneHedgehog, kZoneCenter, kZoneSanatorium, kZoneStationary,
+    kDispatchers
+  ].every(c => typeof c === 'number' && !isNaN(c) && c > 0);
+  const canSave = motivationPercentValid && sharesValid && coefficientsValid;
+
   return (
     <div className="p-4 pb-24 space-y-4">
-      <Header title="Настройки" subtitle="Параметры аналитики и мотивации (не влияет на текущие продажи)" />
+      <Header title="Настройки мотивации" subtitle="Параметры расчёта мотивации (не влияет на текущие продажи)" />
 
       <div className="rounded-2xl border border-neutral-800 p-3 flex items-center justify-between gap-2">
         <div className="text-xs text-neutral-500">
@@ -272,76 +346,16 @@ export default function OwnerSettingsView() {
           <button
             type="button"
             onClick={save}
-            className="rounded-xl border border-amber-600/60 bg-amber-900/20 px-3 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-900/30"
-            disabled={busy}
+            className="rounded-xl border border-amber-600/60 bg-amber-900/20 px-3 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-900/30 disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={busy || !canSave}
           >
             Сохранить
           </button>
         </div>
       </div>
 
-      {/* 4.1 Общие настройки бизнеса */}
-      <Section title="Общие настройки бизнеса">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Field label="Название бизнеса">
-            <TextInput value={businessName} onChange={setBusinessName} placeholder="Например: Морские прогулки" />
-          </Field>
-
-          <Field label="Часовой пояс">
-            <Select
-              value={timezone}
-              onChange={setTimezone}
-              options={[
-                "Europe/Moscow (UTC+3)",
-                "Asia/Almaty (UTC+5)",
-                "Europe/Kaliningrad (UTC+2)",
-                "UTC",
-              ]}
-            />
-          </Field>
-
-          <Field label="Валюта">
-            <Select value={currency} onChange={setCurrency} options={["RUB", "KZT", "USD", "EUR"]} />
-          </Field>
-
-          <Field label="Сезон (начало / конец)">
-            <div className="grid grid-cols-2 gap-2">
-              <TextInput value={seasonStart} onChange={setSeasonStart} />
-              <TextInput value={seasonEnd} onChange={setSeasonEnd} />
-            </div>
-            <div className="mt-2 text-xs text-neutral-500">Текущий сезон: {seasonLabel}</div>
-          </Field>
-        </div>
-      </Section>
-
-      {/* 4.2 Настройки аналитики */}
-      <Section title="Настройки аналитики">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Card>
-            <div className="text-sm text-neutral-400 mb-3">Пороги дня по выручке</div>
-            <div className="grid grid-cols-1 gap-2">
-              <NumberRow label="Плохой день (≤)" value={badDay} onChange={setBadDay} suffix="₽" />
-              <NumberRow label="Нормальный день (≈)" value={normalDay} onChange={setNormalDay} suffix="₽" />
-              <NumberRow label="Хороший день (≥)" value={goodDay} onChange={setGoodDay} suffix="₽" />
-            </div>
-          </Card>
-
-          <Card>
-            <div className="text-sm text-neutral-400 mb-3">Базовый период сравнения</div>
-            <div className="grid grid-cols-3 gap-2">
-              <Chip active={baseCompareDays === 7} onClick={() => setBaseCompareDays(7)} label="7 дней" />
-              <Chip active={baseCompareDays === 14} onClick={() => setBaseCompareDays(14)} label="14 дней" />
-              <Chip active={baseCompareDays === 30} onClick={() => setBaseCompareDays(30)} label="30 дней" />
-            </div>
-            <div className="mt-3 text-xs text-neutral-500">
-              Используется для «Сегодня ↔ среднее за N дней» и похожих сравнений.
-            </div>
-          </Card>
-        </div>
-      </Section>
-
-      {/* 4.3 Настройки мотивации */}
-      <Section title="Настройки мотивации">
+      {/* A) Тип мотивации */}
+      <Section title="Тип мотивации">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <Card>
             <div className="text-sm text-neutral-400 mb-3">Активный тип мотивации</div>
@@ -358,181 +372,205 @@ export default function OwnerSettingsView() {
                 label="Адаптивная"
               />
             </div>
-
-            <div className="mt-4">
-              <div className="text-xs text-neutral-500 mb-2">Процент мотивации</div>
-              <DecimalRow label="" value={motivationPercent} onChange={setMotivationPercent} suffix="%" />
+            <div className="mt-3 text-xs text-neutral-500">
+              {isTeam && "Равное распределение фонда между участниками команды. Настраивается только процент мотивации."}
+              {isPersonal && "Индивидуальный процент от личной выручки. Настраивается только процент мотивации."}
+              {isAdaptive && "Комбинация командного и индивидуального распределения с коэффициентами"}
             </div>
           </Card>
 
+          {/* B) Базовые проценты */}
           <Card>
-            <div className="text-sm text-neutral-400 mb-3">Участие в командной мотивации</div>
-            <ToggleRow label="Продавцы" value={teamIncludeSellers} onChange={setTeamIncludeSellers} />
-            <div className="h-2" />
-            <ToggleRow label="Диспетчеры" value={teamIncludeDispatchers} onChange={setTeamIncludeDispatchers} />
-
-            <div className="mt-4 text-sm text-neutral-400 mb-3">Отчисления в фонды</div>
-            <div className="grid grid-cols-2 gap-2">
-              <NumberRow label="В недельный фонд" value={toWeeklyFund} onChange={setToWeeklyFund} suffix="%" />
-              <NumberRow label="В сезонный фонд" value={toSeasonFund} onChange={setToSeasonFund} suffix="%" />
-            </div>
-
-            <div className="mt-4 text-sm text-neutral-400 mb-3">Распределение фондов</div>
-            <div className="grid grid-cols-2 gap-2">
-              <NumberRow label="Индивидуальный" value={individualShare} onChange={setIndividualShare} suffix="%" />
-              <NumberRow label="Командный" value={teamShare} onChange={setTeamShare} suffix="%" />
-            </div>
-            {individualShare + teamShare !== 100 && (
-              <div className="mt-2 text-xs text-red-400">Сумма должна быть 100%</div>
-            )}
-          </Card>
-          <Card>
-            <div className="text-sm text-neutral-400 mb-3">Пороги активации и серий</div>
-            <div className="space-y-3">
-              <NumberRow label="Активация дня" value={dailyActivationThreshold} onChange={setDailyActivationThreshold} suffix="₽" />
-              <NumberRow label="Серия продавца" value={sellerSeriesThreshold} onChange={setSellerSeriesThreshold} suffix="₽" />
-              <NumberRow label="Серия диспетчера" value={dispatchersSeriesThreshold} onChange={setDispatchersSeriesThreshold} suffix="₽" />
-              <NumberRow label="Мин. дней для сезона" value={seasonMinDays} onChange={setSeasonMinDays} suffix="дн" />
-            </div>
-          </Card>
-
-          <Card>
-            <div className="text-sm text-neutral-400 mb-3">Коэффициенты по типам лодок</div>
-            <div className="space-y-3">
-              <DecimalRow label="Скоростные" value={coefSpeed} onChange={setCoefSpeed} />
-              <DecimalRow label="Прогулочные" value={coefWalk} onChange={setCoefWalk} />
-              <DecimalRow label="Рыбалка" value={coefFishing} onChange={setCoefFishing} />
-              <DecimalRow label="Диспетчеры" value={kDispatchers} onChange={setKDispatchers} />
-            </div>
-          </Card>
-
-          <Card>
-            <div className="text-sm text-neutral-400 mb-3">Коэффициенты банана по зонам</div>
-            <div className="space-y-3">
-              <DecimalRow label="Ёжик" value={kBananaHedgehog} onChange={setKBananaHedgehog} />
-              <DecimalRow label="Центр" value={kBananaCenter} onChange={setKBananaCenter} />
-              <DecimalRow label="Санаторий" value={kBananaSanatorium} onChange={setKBananaSanatorium} />
-              <DecimalRow label="Стационарные" value={kBananaStationary} onChange={setKBananaStationary} />
-            </div>
-          </Card>
-
-        </div>
-      </Section>
-
-      {/* 4.4 Пороги и триггеры */}
-      <Section title="Пороги и триггеры">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Card>
-            <div className="text-sm text-neutral-400 mb-3">Загрузка рейсов</div>
-            <div className="grid grid-cols-2 gap-2">
-              <NumberRow label="Низкая загрузка (≤)" value={lowLoad} onChange={setLowLoad} suffix="%" />
-              <NumberRow label="Высокая загрузка (≥)" value={highLoad} onChange={setHighLoad} suffix="%" />
-            </div>
-            <div className="mt-3 text-xs text-neutral-500">Используется для подсветки и уведомлений.</div>
-          </Card>
-
-          <Card>
-            <div className="text-sm text-neutral-400 mb-3">Минимум по продавцу</div>
-            <NumberRow label="Мин. дневная выручка" value={minSellerRevenue} onChange={setMinSellerRevenue} suffix="₽" />
-            <div className="mt-3 text-xs text-neutral-500">Используется для уведомлений Owner.</div>
+            <div className="text-sm text-neutral-400 mb-3">Процент мотивации</div>
+            <DecimalRow label="От выручки" value={motivationPercent} onChange={setMotivationPercent} suffix="%" min={0} max={100} />
+            <div className="mt-2 text-xs text-neutral-500">Доля от выручки, направляемая в фонд мотивации</div>
           </Card>
         </div>
       </Section>
 
-      {/* 4.5 Зоны продавцов (для банана) */}
-      <Section title="Зоны продавцов (для банана)">
-        <div className="text-sm text-neutral-500 mb-3">
-          Назначьте зону каждому продавцу для применения коэффициента банана.
-        </div>
-        
-        {sellersLoading && (
-          <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4 text-sm text-neutral-400">
-            Загрузка списка продавцов...
+      {/* B2) Удержания (только adaptive) */}
+      {showAdaptiveBlocks && (
+        <Section title="Удержания из фонда мотивации">
+          <div className="text-xs text-neutral-500 mb-2">
+            Удерживается из фонда мотивации (fundTotal) до распределения
           </div>
-        )}
-        
-        {sellersError && (
-          <div className="rounded-xl border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-200">
-            {sellersError}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <Card>
+              <div className="text-sm text-neutral-400 mb-3">Weekly удержание</div>
+              <DecimalRow label="" value={weeklyWithholdPercentTotal} onChange={setWeeklyWithholdPercentTotal} suffix="%" min={0} max={30} />
+              <div className="mt-2 text-xs text-neutral-500">Удерживается еженедельно, округляется вниз до 50₽</div>
+            </Card>
+
+            <Card>
+              <div className="text-sm text-neutral-400 mb-3">Season удержание</div>
+              <DecimalRow label="" value={seasonWithholdPercentTotal} onChange={setSeasonWithholdPercentTotal} suffix="%" min={0} max={30} />
+              <div className="mt-2 text-xs text-neutral-500">Удерживается в сезонный фонд, округляется вниз до 50₽</div>
+            </Card>
+
+            <Card>
+              <div className="text-sm text-neutral-400 mb-3">Удержание на диспетчеров</div>
+              <DecimalRow label="TOTAL cap" value={dispatcherWithholdPercentTotal} onChange={setDispatcherWithholdPercentTotal} suffix="%" min={0} max={30} />
+              <div className="mt-2 text-xs text-neutral-500">
+                На одного = половина; выплата активным по продажам сегодня; макс. 2 диспетчера
+              </div>
+            </Card>
           </div>
-        )}
-        
-        {!sellersLoading && !sellersError && sellersList.length === 0 && (
-          <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4 text-sm text-neutral-400">
-            Нет продавцов
+        </Section>
+      )}
+
+      {/* C) Участники команды (только adaptive) */}
+      {showAdaptiveBlocks && (
+        <Section title="Участие в командной мотивации">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Card>
+              <ToggleRow label="Продавцы участвуют" value={teamIncludeSellers} onChange={setTeamIncludeSellers} />
+            </Card>
+            <Card>
+              <ToggleRow label="Диспетчеры участвуют" value={teamIncludeDispatchers} onChange={setTeamIncludeDispatchers} />
+            </Card>
           </div>
-        )}
-        
-        {!sellersLoading && !sellersError && sellersList.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 relative z-10">
-            {sellersList.map(seller => (
-              <div
-                key={seller.id}
-                className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-3 relative"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className={[
-                      "w-2 h-2 rounded-full shrink-0",
-                      seller.is_active ? "bg-emerald-500" : "bg-neutral-600"
-                    ].join(" ")} />
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold truncate">{seller.username}</div>
-                      <div className="text-xs text-neutral-500">
-                        ID: {seller.id}{!seller.is_active && " • неактивен"}
+        </Section>
+      )}
+
+      {/* D) Распределение adaptive (только adaptive) */}
+      {showAdaptiveBlocks && (
+        <Section title="Распределение фонда (adaptive)">
+          <div className="text-xs text-neutral-500 mb-2">
+            Сумма индивидуальной и командной доли всегда равна 100%
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Card>
+              <div className="text-sm text-neutral-400 mb-3">Индивидуальная доля</div>
+              <NumberRow label="" value={individualShare} onChange={handleIndividualShareChange} suffix="%" min={0} max={100} />
+            </Card>
+            <Card>
+              <div className="text-sm text-neutral-400 mb-3">Командная доля</div>
+              <NumberRow label="" value={teamShare} onChange={handleTeamShareChange} suffix="%" min={0} max={100} />
+            </Card>
+          </div>
+        </Section>
+      )}
+
+      {/* F) Коэффициенты adaptive (только adaptive) */}
+      {showAdaptiveBlocks && (
+        <Section title="Коэффициенты (adaptive)">
+          <div className="text-xs text-neutral-500 mb-2">
+            Множители для расчёта баллов. Все значения от 0.1 до 10.
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* A) По типам лодок */}
+            <Card>
+              <div className="text-sm text-neutral-400 mb-3">По типам лодок</div>
+              <div className="space-y-3">
+                <DecimalRow label="Скоростные" value={coefSpeed} onChange={setCoefSpeed} min={0.1} max={10} />
+                <DecimalRow label="Прогулочные" value={coefWalk} onChange={setCoefWalk} min={0.1} max={10} />
+                <DecimalRow label="Рыбалка" value={coefFishing} onChange={setCoefFishing} min={0.1} max={10} />
+              </div>
+            </Card>
+
+            {/* B) Коэффициенты зон для speed/cruise */}
+            <Card>
+              <div className="text-sm text-neutral-400 mb-3">Зоны для speed/cruise</div>
+              <div className="space-y-3">
+                <DecimalRow label="Ёжик" value={kZoneHedgehog} onChange={setKZoneHedgehog} min={0.1} max={10} />
+                <DecimalRow label="Центр" value={kZoneCenter} onChange={setKZoneCenter} min={0.1} max={10} />
+                <DecimalRow label="Санаторий" value={kZoneSanatorium} onChange={setKZoneSanatorium} min={0.1} max={10} />
+                <DecimalRow label="Стационарные" value={kZoneStationary} onChange={setKZoneStationary} min={0.1} max={10} />
+              </div>
+            </Card>
+
+            {/* C) Коэффициенты банана по зонам */}
+            <Card>
+              <div className="text-sm text-neutral-400 mb-3">Зоны для банана</div>
+              <div className="space-y-3">
+                <DecimalRow label="Ёжик" value={kBananaHedgehog} onChange={setKBananaHedgehog} min={0.1} max={10} />
+                <DecimalRow label="Центр" value={kBananaCenter} onChange={setKBananaCenter} min={0.1} max={10} />
+                <DecimalRow label="Санаторий" value={kBananaSanatorium} onChange={setKBananaSanatorium} min={0.1} max={10} />
+                <DecimalRow label="Стационарные" value={kBananaStationary} onChange={setKBananaStationary} min={0.1} max={10} />
+              </div>
+            </Card>
+
+            {/* D) Вес диспетчера */}
+            <Card>
+              <div className="text-sm text-neutral-400 mb-3">Вес диспетчера</div>
+              <DecimalRow label="Множитель" value={kDispatchers} onChange={setKDispatchers} min={0.1} max={10} />
+              <div className="mt-2 text-xs text-neutral-500">
+                Используется для взвешенной выручки диспетчера в adaptive-режиме.
+              </div>
+            </Card>
+          </div>
+        </Section>
+      )}
+
+      {/* Зоны продавцов (только adaptive) */}
+      {showAdaptiveBlocks && (
+        <Section title="Зоны продавцов (для банана)">
+          <div className="text-sm text-neutral-500 mb-3">
+            Назначьте зону каждому продавцу для применения коэффициента банана.
+          </div>
+          
+          {sellersLoading && (
+            <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4 text-sm text-neutral-400">
+              Загрузка списка продавцов...
+            </div>
+          )}
+          
+          {sellersError && (
+            <div className="rounded-xl border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-200">
+              {sellersError}
+            </div>
+          )}
+          
+          {!sellersLoading && !sellersError && sellersList.length === 0 && (
+            <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-4 text-sm text-neutral-400">
+              Нет продавцов
+            </div>
+          )}
+          
+          {!sellersLoading && !sellersError && sellersList.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 relative z-10">
+              {sellersList.map(seller => (
+                <div
+                  key={seller.id}
+                  className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-3 relative"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className={[
+                        "w-2 h-2 rounded-full shrink-0",
+                        seller.is_active ? "bg-emerald-500" : "bg-neutral-600"
+                      ].join(" ")} />
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold truncate">{seller.username}</div>
+                        <div className="text-xs text-neutral-500">
+                          ID: {seller.id}{!seller.is_active && " • неактивен"}
+                        </div>
                       </div>
                     </div>
+                    
+                    <select
+                      value={seller.zone ?? ''}
+                      onChange={(e) => handleZoneChange(seller.id, e.target.value)}
+                      className="relative z-20 rounded-lg border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-200 outline-none focus:border-neutral-500 shrink-0 cursor-pointer"
+                      style={{ minWidth: '120px' }}
+                    >
+                      <option value="">Не назначена</option>
+                      <option value="hedgehog">Ёжик</option>
+                      <option value="center">Центр</option>
+                      <option value="sanatorium">Санаторий</option>
+                      <option value="stationary">Стационарные</option>
+                    </select>
                   </div>
-                  
-                  <select
-                    value={seller.zone ?? ''}
-                    onChange={(e) => handleZoneChange(seller.id, e.target.value)}
-                    className="relative z-20 rounded-lg border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-xs text-neutral-200 outline-none focus:border-neutral-500 shrink-0 cursor-pointer"
-                    style={{ minWidth: '120px' }}
-                  >
-                    <option value="">Не назначена</option>
-                    <option value="hedgehog">Ёжик</option>
-                    <option value="center">Центр</option>
-                    <option value="sanatorium">Санаторий</option>
-                    <option value="stationary">Стационарные</option>
-                  </select>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
-
-      {/* 4.6 Уведомления Owner */}
-      <Section title="Уведомления Owner">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Card>
-            <div className="text-sm text-neutral-400 mb-3">Уведомлять при</div>
-            <ToggleRow label="Выручка ниже нормы" value={notifyBadRevenue} onChange={setNotifyBadRevenue} />
-            <div className="h-2" />
-            <ToggleRow label="Загрузка ниже порога" value={notifyLowLoad} onChange={setNotifyLowLoad} />
-            <div className="h-2" />
-            <ToggleRow label="Продавец ниже минимума" value={notifyLowSeller} onChange={setNotifyLowSeller} />
-          </Card>
-
-          <Card>
-            <div className="text-sm text-neutral-400 mb-3">Канал</div>
-            <div className="grid grid-cols-2 gap-2">
-              <Chip active={notifyChannel === "inapp"} onClick={() => setNotifyChannel("inapp")} label="В приложении" />
-              <Chip
-                active={notifyChannel === "telegramFuture"}
-                onClick={() => setNotifyChannel("telegramFuture")}
-                label="Telegram (позже)"
-              />
+              ))}
             </div>
-            <div className="mt-3 text-xs text-neutral-500">Telegram — заглушка, в будущем.</div>
-          </Card>
-        </div>
-      </Section>
+          )}
+        </Section>
+      )}
 
       {/* Safety footer */}
       <div className="rounded-2xl border border-neutral-800 p-4 text-xs text-neutral-500">
-        Эти настройки влияют только на аналитику/расчёты в Owner-панели и не добавляют операционные действия.
+        Настройки влияют на расчёт мотивации. При смене типа мотивации некоторые параметры могут не использоваться.
       </div>
     </div>
   );
@@ -661,7 +699,7 @@ function formatNumForDisplay(value, fallback = '') {
   return isNaN(num) ? fallback : String(num);
 }
 
-function NumberRow({ label, value, onChange, suffix }) {
+function NumberRow({ label, value, onChange, suffix, min, max }) {
   // Use local state for input string to allow intermediate values
   const [inputStr, setInputStr] = useState(formatNumForDisplay(value, ''));
   const [isFocused, setIsFocused] = useState(false);
@@ -688,8 +726,17 @@ function NumberRow({ label, value, onChange, suffix }) {
   const handleBlur = () => {
     setIsFocused(false);
     const num = toNumberOrNull(inputStr);
-    onChange(num ?? 0);
-    setInputStr(String(num ?? 0));
+    if (num !== null) {
+      // Clamp to min/max
+      let clamped = num;
+      if (typeof min === 'number') clamped = Math.max(min, clamped);
+      if (typeof max === 'number') clamped = Math.min(max, clamped);
+      onChange(Math.round(clamped));
+      setInputStr(String(Math.round(clamped)));
+    } else {
+      // Invalid - revert to previous value
+      setInputStr(formatNumForDisplay(value, ''));
+    }
   };
 
   const handleFocus = () => {
@@ -708,6 +755,7 @@ function NumberRow({ label, value, onChange, suffix }) {
           onBlur={handleBlur}
           inputMode="decimal"
           pattern="^-?[0-9]*[.,]?[0-9]*$"
+          placeholder={typeof min === 'number' && typeof max === 'number' ? `${min}..${max}` : undefined}
           className="w-28 rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-right outline-none focus:border-neutral-700"
         />
         <div className="text-sm text-neutral-500">{suffix}</div>
@@ -716,7 +764,7 @@ function NumberRow({ label, value, onChange, suffix }) {
   );
 }
 
-function DecimalRow({ label, value, onChange, suffix }) {
+function DecimalRow({ label, value, onChange, suffix, min, max }) {
   // Use local state for input string to allow intermediate values like "1."
   const [inputStr, setInputStr] = useState(formatNumForDisplay(value, ''));
   const [isFocused, setIsFocused] = useState(false);
@@ -744,13 +792,13 @@ function DecimalRow({ label, value, onChange, suffix }) {
     setIsFocused(false);
     // Convert to number on blur
     const num = toNumberOrNull(inputStr);
-    if (num !== null && num > 0) {
-      onChange(num);
-      setInputStr(String(num));
-    } else if (num !== null && num <= 0) {
-      // Clamp to minimum
-      onChange(0.0001);
-      setInputStr('0.0001');
+    if (num !== null) {
+      // Clamp to min/max
+      let clamped = num;
+      if (typeof min === 'number') clamped = Math.max(min, clamped);
+      if (typeof max === 'number') clamped = Math.min(max, clamped);
+      onChange(clamped);
+      setInputStr(String(clamped));
     } else {
       // Invalid - revert to previous value
       setInputStr(formatNumForDisplay(value, ''));
@@ -773,6 +821,7 @@ function DecimalRow({ label, value, onChange, suffix }) {
           onBlur={handleBlur}
           inputMode="decimal"
           pattern="^[0-9]*[.,]?[0-9]*$"
+          placeholder={typeof min === 'number' && typeof max === 'number' ? `${min}..${max}` : undefined}
           className="w-28 rounded-xl border border-neutral-800 bg-neutral-950/30 px-3 py-2 text-sm text-right outline-none focus:border-neutral-700 focus:ring-2 focus:ring-neutral-700/40"
         />
         <div className="text-sm text-neutral-500">{suffix || 'x'}</div>

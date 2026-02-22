@@ -615,6 +615,11 @@ function PresetChip({ active, onClick, label }) {
 export default function OwnerView() {
   const { logout } = useAuth();
   const [tab, setTab] = useState("money"); // money | compare | boats | sellers | motivation | settings | load | export
+  const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
+
+  const handleSettingsSaved = () => {
+    setSettingsRefreshKey(k => k + 1);
+  };
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
@@ -633,8 +638,8 @@ export default function OwnerView() {
         {tab === "compare" && <OwnerComparePeriodsView />}
         {tab === "boats" && <OwnerBoatsView />}
         {tab === "sellers" && <OwnerSellersView />}
-        {tab === "motivation" && <OwnerMotivationView />}
-        {tab === "settings" && <OwnerSettingsView />}
+        {tab === "motivation" && <OwnerMotivationView onOpenSettings={() => setTab("settings")} settingsRefreshKey={settingsRefreshKey} />}
+        {tab === "settings" && <OwnerSettingsView onSettingsSaved={handleSettingsSaved} />}
         {tab === "load" && <OwnerLoadView />}
         {tab === "export" && <OwnerExportView />}
       </main>
