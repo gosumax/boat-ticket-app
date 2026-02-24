@@ -1,0 +1,21 @@
+{
+  "metaRunId": "meta-2026-02-23T07-06-39.113Z-synthresume2",
+  "currentStepIndex": 2,
+  "stepsTotal": 2,
+  "completedSteps": [
+    {
+      "id": 1,
+      "type": "backend",
+      "status": "PASS"
+    },
+    {
+      "id": 2,
+      "type": "validation",
+      "status": "PASS"
+    }
+  ],
+  "remainingSteps": [],
+  "lastRunId": "2026-02-23T07-06-39.113Z-synthrun2",
+  "integrityStatus": "PASS",
+  "resumeCommand": "node meta-orchestrator.js --resume meta-2026-02-23T07-06-39.113Z-synthresume2"
+}

@@ -1,0 +1,13 @@
+{
+  "runId": "2026-02-23T06-01-01.671Z",
+  "task": "pipeline lockdown verify",
+  "baseBranch": "",
+  "taskBranch": "",
+  "lifecycleState": "FAILED",
+  "maxRetries": 1,
+  "validationAttempts": 0,
+  "systemMap": {
+    "baselineHash": "",
+    "nextHash": ""
+  }
+}

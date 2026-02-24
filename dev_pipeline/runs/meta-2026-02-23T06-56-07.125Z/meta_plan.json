@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {
+      "id": 1,
+      "type": "validation",
+      "description": "Run integrity + tests"
+    },
+    {
+      "id": 2,
+      "type": "finalize",
+      "description": "Full contract verification"
+    }
+  ]
+}

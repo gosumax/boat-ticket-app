@@ -1,0 +1,12 @@
+{
+  "steps": [
+    {
+      "stepId": 1,
+      "description": "Add backend support for: meta planner verify",
+      "runId": "2026-02-23T06-53-49.263Z",
+      "lifecycleState": "FAILED",
+      "contractIntegrityStatus": "FAILED",
+      "status": "FAILED"
+    }
+  ]
+}

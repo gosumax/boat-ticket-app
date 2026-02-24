@@ -1,0 +1,22 @@
+{
+  "steps": [
+    {
+      "stepId": 1,
+      "type": "backend",
+      "description": "Implement backend changes",
+      "runId": "2026-02-23T07-07-06.543Z-resume-flow-step1",
+      "lifecycleState": "PASS",
+      "contractIntegrityStatus": "PASS",
+      "status": "PASS"
+    },
+    {
+      "stepId": 2,
+      "type": "validation",
+      "description": "Run integrity + tests",
+      "runId": "2026-02-23T07-07-17.349Z",
+      "lifecycleState": "FAILED",
+      "contractIntegrityStatus": "FAILED",
+      "status": "FAILED"
+    }
+  ]
+}

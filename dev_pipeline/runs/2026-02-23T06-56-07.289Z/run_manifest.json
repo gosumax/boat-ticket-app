@@ -1,0 +1,13 @@
+{
+  "runId": "2026-02-23T06-56-07.289Z",
+  "task": "Run integrity + tests",
+  "baseBranch": "",
+  "taskBranch": "",
+  "lifecycleState": "FAILED",
+  "maxRetries": 3,
+  "validationAttempts": 0,
+  "systemMap": {
+    "baselineHash": "",
+    "nextHash": ""
+  }
+}

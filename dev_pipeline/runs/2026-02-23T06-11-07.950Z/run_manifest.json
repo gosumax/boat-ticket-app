@@ -1,0 +1,13 @@
+{
+  "runId": "2026-02-23T06-11-07.950Z",
+  "task": "auto test foundation verify",
+  "baseBranch": "",
+  "taskBranch": "",
+  "lifecycleState": "FAILED",
+  "maxRetries": 1,
+  "validationAttempts": 0,
+  "systemMap": {
+    "baselineHash": "",
+    "nextHash": ""
+  }
+}

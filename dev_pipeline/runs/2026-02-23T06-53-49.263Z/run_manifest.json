@@ -1,0 +1,13 @@
+{
+  "runId": "2026-02-23T06-53-49.263Z",
+  "task": "Add backend support for: meta planner verify",
+  "baseBranch": "",
+  "taskBranch": "",
+  "lifecycleState": "FAILED",
+  "maxRetries": 3,
+  "validationAttempts": 0,
+  "systemMap": {
+    "baselineHash": "",
+    "nextHash": ""
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "steps": [
+    {
+      "stepId": 1,
+      "type": "validation",
+      "description": "Run integrity + tests",
+      "runId": "2026-02-23T07-04-51.544Z",
+      "lifecycleState": "FAILED",
+      "contractIntegrityStatus": "FAILED",
+      "status": "FAILED"
+    }
+  ]
+}

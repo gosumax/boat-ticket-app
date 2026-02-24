@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "id": 1,
+      "type": "frontend",
+      "description": "Implement frontend integration"
+    },
+    {
+      "id": 2,
+      "type": "validation",
+      "description": "Run integrity + tests"
+    },
+    {
+      "id": 3,
+      "type": "finalize",
+      "description": "Full contract verification"
+    }
+  ]
+}

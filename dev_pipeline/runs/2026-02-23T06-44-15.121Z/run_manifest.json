@@ -1,0 +1,13 @@
+{
+  "runId": "2026-02-23T06-44-15.121Z",
+  "task": "contract integrity normalized verify",
+  "baseBranch": "",
+  "taskBranch": "",
+  "lifecycleState": "FAILED",
+  "maxRetries": 1,
+  "validationAttempts": 0,
+  "systemMap": {
+    "baselineHash": "",
+    "nextHash": ""
+  }
+}

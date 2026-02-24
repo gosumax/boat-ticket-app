@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {
+      "id": 1,
+      "type": "backend",
+      "description": "Implement backend changes"
+    },
+    {
+      "id": 2,
+      "type": "validation",
+      "description": "Run integrity + tests"
+    }
+  ]
+}

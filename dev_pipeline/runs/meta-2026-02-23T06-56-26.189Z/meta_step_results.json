@@ -1,0 +1,12 @@
+{
+  "steps": [
+    {
+      "stepId": 1,
+      "description": "Implement frontend integration",
+      "runId": "2026-02-23T06-56-26.357Z",
+      "lifecycleState": "FAILED",
+      "contractIntegrityStatus": "FAILED",
+      "status": "FAILED"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "context": {
+    "estimatedSize": 10,
+    "threshold": 50000,
+    "recommendNextChat": false
+  }
+}

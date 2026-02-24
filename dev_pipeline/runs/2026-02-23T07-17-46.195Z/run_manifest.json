@@ -1,0 +1,13 @@
+{
+  "runId": "2026-02-23T07-17-46.195Z",
+  "task": "allow direct verify",
+  "baseBranch": "",
+  "taskBranch": "",
+  "lifecycleState": "FAILED",
+  "maxRetries": 3,
+  "validationAttempts": 0,
+  "systemMap": {
+    "baselineHash": "",
+    "nextHash": ""
+  }
+}

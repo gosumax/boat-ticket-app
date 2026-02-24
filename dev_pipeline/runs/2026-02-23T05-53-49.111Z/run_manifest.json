@@ -1,0 +1,13 @@
+{
+  "runId": "2026-02-23T05-53-49.111Z",
+  "task": "",
+  "baseBranch": "",
+  "taskBranch": "",
+  "lifecycleState": "FAILED",
+  "maxRetries": 0,
+  "validationAttempts": 0,
+  "systemMap": {
+    "baselineHash": "",
+    "nextHash": ""
+  }
+}
