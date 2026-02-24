@@ -1,0 +1,3 @@
+[submodule "tooling/orchestrator-kit"]
+	path = tooling/orchestrator-kit
+	url = https://github.com/gosumax/orchestrator-kit.git
