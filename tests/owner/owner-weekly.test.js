@@ -41,6 +41,12 @@ describe('OWNER MOTIVATION WEEKLY', () => {
     expect(res.body.data.date_to).toBeDefined();
     expect(Array.isArray(res.body.data.sellers)).toBe(true);
     expect(Array.isArray(res.body.data.top3)).toBe(true);
+    expect(Array.isArray(res.body.data.top3_current)).toBe(true);
+    expect(res.body.data.weekly_pool_total_current).toBeDefined();
+    expect(res.body.data.weekly_distribution_current).toBeDefined();
+    expect(res.body.data.weekly_distribution_current.first).toBe(0.5);
+    expect(res.body.data.weekly_distribution_current.second).toBe(0.3);
+    expect(res.body.data.weekly_distribution_current.third).toBe(0.2);
     
     // top3 length <= 3
     expect(res.body.data.top3.length).toBeLessThanOrEqual(3);
@@ -62,9 +68,30 @@ describe('OWNER MOTIVATION WEEKLY', () => {
     expect(res.body.data.date_to).toBeDefined();
   });
 
+  test('weekly endpoint uses ISO Monday-Sunday boundaries', async () => {
+    const res = await request(app)
+      .get('/api/owner/motivation/weekly?week=2026-W01')
+      .set('Authorization', `Bearer ${ownerToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.week_id).toBe('2026-W01');
+    expect(res.body.data.date_from).toBe('2025-12-29');
+    expect(res.body.data.date_to).toBe('2026-01-04');
+  });
+
   test('weekly endpoint rejects invalid week format', async () => {
     const res = await request(app)
       .get('/api/owner/motivation/weekly?week=invalid')
+      .set('Authorization', `Bearer ${ownerToken}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+  });
+
+  test('weekly endpoint rejects impossible ISO week number', async () => {
+    const res = await request(app)
+      .get('/api/owner/motivation/weekly?week=2021-W53')
       .set('Authorization', `Bearer ${ownerToken}`);
 
     expect(res.status).toBe(400);
@@ -116,6 +143,8 @@ describe('OWNER MOTIVATION SEASON', () => {
     expect(res.body.data.season_id).toBeDefined();
     expect(Array.isArray(res.body.data.sellers)).toBe(true);
     expect(Array.isArray(res.body.data.top3)).toBe(true);
+    expect(res.body.data.season_pool_total_current).toBeDefined();
+    expect(res.body.data.season_pool_rounding_total).toBeDefined();
     
     // top3 length <= 3
     expect(res.body.data.top3.length).toBeLessThanOrEqual(3);
@@ -129,6 +158,8 @@ describe('OWNER MOTIVATION SEASON', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.data.season_id).toBe('2026');
+    expect(res.body.data.season_from).toBe('2026-01-01');
+    expect(res.body.data.season_to).toBe('2026-12-31');
   });
 
   test('season endpoint rejects invalid season_id format', async () => {

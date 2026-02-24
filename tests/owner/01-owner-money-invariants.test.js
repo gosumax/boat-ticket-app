@@ -15,7 +15,7 @@ import { getTodayLocal, getTomorrowLocal } from '../_helpers/testDates.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'boat_ticket_secret_key';
 
-let app, db, seedData, sellerToken, ownerToken, ownerUserId;
+let app, db, seedData, sellerToken, dispatcherToken, ownerToken, ownerUserId;
 let today, tomorrow;
 
 beforeAll(async () => {
@@ -49,6 +49,11 @@ beforeAll(async () => {
     .post('/api/auth/login')
     .send({ username: 'sellerA', password: 'password123' });
   sellerToken = loginRes.body.token;
+
+  const dispatcherLoginRes = await request(app)
+    .post('/api/auth/login')
+    .send({ username: 'dispatcher1', password: 'password123' });
+  dispatcherToken = dispatcherLoginRes.body.token;
   
   console.log('[SETUP] today:', today, 'tomorrow:', tomorrow);
 });
@@ -225,6 +230,162 @@ describe('OWNER MONEY INVARIANTS', () => {
     }
     
     expect(rowCash + rowCard).toBe(rowRevenue);
+  });
+
+  it('D) reserve metrics: future-trip reserve (cash/card/total) and available cash after reserve are correct', async () => {
+    const summaryRes = await request(app)
+      .get(`/api/owner/money/summary?from=${today}&to=${today}`)
+      .set('Authorization', `Bearer ${ownerToken}`);
+
+    expect(summaryRes.status).toBe(200);
+    expect(summaryRes.body.ok).toBe(true);
+
+    const totals = summaryRes.body.data?.totals || {};
+    const reserveCash = Number(totals.future_trips_reserve_cash || 0);
+    const reserveCard = Number(totals.future_trips_reserve_card || 0);
+    const reserveTotal = Number(totals.future_trips_reserve_total || 0);
+    const netCash = Number(totals.net_cash || 0);
+    const ownerAvailableAfterReserve = Number(totals.owner_available_cash_after_future_reserve || 0);
+
+    // Test A + B are both payments "today for tomorrow":
+    // A: MIXED 1200/800, B: CASH 2000/0 => reserve cash=3200, card=800, total=4000.
+    expect(reserveCash).toBe(3200);
+    expect(reserveCard).toBe(800);
+    expect(reserveTotal).toBe(4000);
+    expect(ownerAvailableAfterReserve).toBe(netCash - reserveCash);
+  });
+
+  it('E) next-day refund keeps reserve consistent (today unchanged, tomorrow reserve = 0)', async () => {
+    // Simulate refund tomorrow for one of tomorrow trips.
+    db.prepare(`
+      INSERT INTO money_ledger (presale_id, kind, type, method, amount, status, seller_id, business_day, event_time)
+      VALUES (?, 'SELLER_SHIFT', 'SALE_CANCEL_REVERSE', 'CASH', -500, 'POSTED', ?, ?, datetime('now'))
+    `).run(presale2Id, seedData.users.sellerA.id, tomorrow);
+
+    const todayRes = await request(app)
+      .get(`/api/owner/money/summary?from=${today}&to=${today}`)
+      .set('Authorization', `Bearer ${ownerToken}`);
+    expect(todayRes.status).toBe(200);
+    expect(Number(todayRes.body.data?.totals?.future_trips_reserve_total || 0)).toBe(4000);
+
+    const tomorrowRes = await request(app)
+      .get(`/api/owner/money/summary?from=${tomorrow}&to=${tomorrow}`)
+      .set('Authorization', `Bearer ${ownerToken}`);
+    expect(tomorrowRes.status).toBe(200);
+    expect(Number(tomorrowRes.body.data?.totals?.future_trips_reserve_total || 0)).toBe(0);
+    expect(Number(tomorrowRes.body.data?.totals?.future_trips_reserve_cash || 0)).toBe(0);
+    expect(Number(tomorrowRes.body.data?.totals?.future_trips_reserve_card || 0)).toBe(0);
+  });
+
+  it('F) funds obligations are calculated correctly and exposed as cash-only split', async () => {
+    // Add dispatcher sale to ensure dispatcher bonus obligation is applicable for today.
+    db.prepare(`
+      INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time)
+      VALUES ('DISPATCHER_SHIFT', 'SALE_ACCEPTED_CASH', 'CASH', 400000, 'POSTED', ?, ?, datetime('now'))
+    `).run(seedData.users.dispatcher.id, today);
+
+    const motivationRes = await request(app)
+      .get(`/api/owner/motivation/day?day=${today}`)
+      .set('Authorization', `Bearer ${ownerToken}`);
+    expect(motivationRes.status).toBe(200);
+
+    const withhold = motivationRes.body?.data?.withhold || {};
+    const expectedWeekly = Number(withhold.weekly_amount || 0);
+    const expectedSeason = Number(withhold.season_amount || 0);
+    const expectedDispatcherBonus = Number(withhold.dispatcher_amount_total || 0);
+    const expectedRounding = Number(withhold.rounding_to_season_amount_total || 0);
+
+    const summaryRes = await request(app)
+      .get(`/api/owner/money/summary?from=${today}&to=${today}`)
+      .set('Authorization', `Bearer ${ownerToken}`);
+    expect(summaryRes.status).toBe(200);
+    expect(summaryRes.body.ok).toBe(true);
+
+    const totals = summaryRes.body.data?.totals || {};
+    const fundsWeekly = Number(totals.funds_withhold_weekly_today || 0);
+    const fundsSeason = Number(totals.funds_withhold_season_today || 0);
+    const fundsDispatcherBonus = Number(totals.funds_withhold_dispatcher_bonus_today || 0);
+    const fundsRounding = Number(totals.funds_withhold_rounding_to_season_today || 0);
+    const fundsTotal = Number(totals.funds_withhold_total_today || 0);
+    const fundsCash = Number(totals.funds_withhold_cash_today || 0);
+    const fundsCard = Number(totals.funds_withhold_card_today || 0);
+
+    expect(fundsWeekly).toBeCloseTo(expectedWeekly, 6);
+    expect(fundsSeason).toBeCloseTo(expectedSeason, 6);
+    expect(fundsDispatcherBonus).toBeCloseTo(expectedDispatcherBonus, 6);
+    expect(fundsRounding).toBeCloseTo(expectedRounding, 6);
+    expect(fundsTotal).toBeCloseTo(expectedWeekly + expectedSeason + expectedDispatcherBonus, 6);
+    expect(fundsCash).toBeCloseTo(fundsTotal, 6);
+    expect(fundsCard).toBe(0);
+  });
+
+  it('G) final takeaway metric formula is correct', async () => {
+    const summaryRes = await request(app)
+      .get(`/api/owner/money/summary?from=${today}&to=${today}`)
+      .set('Authorization', `Bearer ${ownerToken}`);
+    expect(summaryRes.status).toBe(200);
+
+    const totals = summaryRes.body.data?.totals || {};
+    const availableAfterReserve = Number(totals.owner_available_cash_after_future_reserve || 0);
+    const fundsCash = Number(totals.funds_withhold_cash_today || 0);
+    const finalTakeaway = Number(totals.cash_takeaway_after_reserve_and_funds || 0);
+
+    expect(finalTakeaway).toBeCloseTo(availableAfterReserve - fundsCash, 6);
+  });
+
+  it('H) summary contract regression: existing fields stay present and consistent', async () => {
+    const summaryRes = await request(app)
+      .get(`/api/owner/money/summary?from=${today}&to=${today}`)
+      .set('Authorization', `Bearer ${ownerToken}`);
+    expect(summaryRes.status).toBe(200);
+    expect(summaryRes.body.ok).toBe(true);
+
+    const totals = summaryRes.body.data?.totals || {};
+    // Existing contract fields (must remain intact)
+    expect(typeof totals.collected_total).toBe('number');
+    expect(typeof totals.collected_cash).toBe('number');
+    expect(typeof totals.collected_card).toBe('number');
+    expect(typeof totals.refund_total).toBe('number');
+    expect(typeof totals.refund_cash).toBe('number');
+    expect(typeof totals.refund_card).toBe('number');
+    expect(typeof totals.net_total).toBe('number');
+    expect(typeof totals.net_cash).toBe('number');
+    expect(typeof totals.net_card).toBe('number');
+    expect(typeof totals.owner_available_cash_after_future_reserve).toBe('number');
+
+    expect(Number(totals.net_total)).toBeCloseTo(Number(totals.collected_total) - Number(totals.refund_total), 6);
+    expect(Number(totals.net_cash)).toBeCloseTo(Number(totals.collected_cash) - Number(totals.refund_cash), 6);
+    expect(Number(totals.net_card)).toBeCloseTo(Number(totals.collected_card) - Number(totals.refund_card), 6);
+  });
+
+  it('I) dispatcher final KPI equals owner main KPI for same day', async () => {
+    const ownerSummaryRes = await request(app)
+      .get(`/api/owner/money/summary?from=${today}&to=${today}`)
+      .set('Authorization', `Bearer ${ownerToken}`);
+    expect(ownerSummaryRes.status).toBe(200);
+    expect(ownerSummaryRes.body.ok).toBe(true);
+
+    const dispatcherSummaryRes = await request(app)
+      .get(`/api/dispatcher/shift-ledger/summary?business_day=${today}`)
+      .set('Authorization', `Bearer ${dispatcherToken}`);
+    expect(dispatcherSummaryRes.status).toBe(200);
+    expect(dispatcherSummaryRes.body.ok).toBe(true);
+
+    const ownerMainKpi = Number(ownerSummaryRes.body.data?.totals?.cash_takeaway_after_reserve_and_funds || 0);
+    const dispatcherFundsCash = Number(
+      dispatcherSummaryRes.body?.funds_withhold_cash_today ??
+      (
+        Number(dispatcherSummaryRes.body?.motivation_withhold?.weekly_amount || 0) +
+        Number(dispatcherSummaryRes.body?.motivation_withhold?.season_amount || 0) +
+        Number(dispatcherSummaryRes.body?.motivation_withhold?.dispatcher_amount_total || 0)
+      )
+    );
+    const dispatcherFinalKpi =
+      Number(dispatcherSummaryRes.body?.net_cash || 0) -
+      Number(dispatcherSummaryRes.body?.future_trips_reserve_cash || 0) -
+      dispatcherFundsCash;
+
+    expect(dispatcherFinalKpi).toBeCloseTo(ownerMainKpi, 6);
   });
   
   it('Fallback: paid_by_trip_day returns zeros when stc unavailable', async () => {

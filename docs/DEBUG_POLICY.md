@@ -9,3 +9,4 @@
   - role
   - error codes
 - После деплоя debug удаляется полностью
+- Fund consistency checksum must use immutable money_ledger only; any recalculated expected values are diagnostic estimates and must not be used as control totals.

@@ -180,6 +180,170 @@ describe('Dispatcher Delete API (Real Backend)', () => {
       expect(presale.number_of_seats).toBe(1);
     });
   });
+
+  describe('Prepayment decision on delete', () => {
+    it('moves prepayment to season fund when deleting full presale with decision=FUND', async () => {
+      const createRes = await request(app)
+        .post('/api/selling/presales')
+        .set('Authorization', `Bearer ${dispatcherToken}`)
+        .send({
+          slotUid: `generated:${testData.genSlotId1}`,
+          customerName: 'Fund Decision Client',
+          customerPhone: '79991234991',
+          numberOfSeats: 1,
+          prepaymentAmount: 1000,
+          tripDate: testData.today,
+        });
+
+      expect(createRes.status).toBe(201);
+      const presaleId = Number(createRes.body?.presale?.id);
+      expect(presaleId).toBeGreaterThan(0);
+
+      const delRes = await request(app)
+        .patch(`/api/selling/presales/${presaleId}/delete`)
+        .set('Authorization', `Bearer ${dispatcherToken}`)
+        .send({ decision: 'FUND' });
+
+      expect(delRes.status).toBe(200);
+      expect(delRes.body.ok).toBe(true);
+
+      const seasonFund = db.prepare(`
+        SELECT COALESCE(SUM(amount), 0) AS total
+        FROM money_ledger
+        WHERE presale_id = ? AND kind = 'FUND' AND type = 'SEASON_PREPAY_DELETE' AND status = 'POSTED'
+      `).get(presaleId);
+      expect(Number(seasonFund?.total || 0)).toBe(1000);
+    });
+
+    it('does not move prepayment to season fund when decision=REFUND', async () => {
+      const createRes = await request(app)
+        .post('/api/selling/presales')
+        .set('Authorization', `Bearer ${dispatcherToken}`)
+        .send({
+          slotUid: `generated:${testData.genSlotId1}`,
+          customerName: 'Refund Decision Client',
+          customerPhone: '79991234992',
+          numberOfSeats: 1,
+          prepaymentAmount: 1000,
+          tripDate: testData.today,
+        });
+
+      expect(createRes.status).toBe(201);
+      const presaleId = Number(createRes.body?.presale?.id);
+      expect(presaleId).toBeGreaterThan(0);
+
+      const delRes = await request(app)
+        .patch(`/api/selling/presales/${presaleId}/delete`)
+        .set('Authorization', `Bearer ${dispatcherToken}`)
+        .send({ decision: 'REFUND' });
+
+      expect(delRes.status).toBe(200);
+      expect(delRes.body.ok).toBe(true);
+
+      const seasonFundRows = db.prepare(`
+        SELECT COUNT(*) AS cnt
+        FROM money_ledger
+        WHERE presale_id = ? AND kind = 'FUND' AND type = 'SEASON_PREPAY_DELETE' AND status = 'POSTED'
+      `).get(presaleId);
+      expect(Number(seasonFundRows?.cnt || 0)).toBe(0);
+    });
+
+    it('does not move prepayment to season fund when deleting one ticket and passengers remain', async () => {
+      const createRes = await request(app)
+        .post('/api/selling/presales')
+        .set('Authorization', `Bearer ${dispatcherToken}`)
+        .send({
+          slotUid: `generated:${testData.genSlotId1}`,
+          customerName: 'Partial Delete Client',
+          customerPhone: '79991234993',
+          numberOfSeats: 2,
+          prepaymentAmount: 1000,
+          tripDate: testData.today,
+        });
+
+      expect(createRes.status).toBe(201);
+      const presaleId = Number(createRes.body?.presale?.id);
+      expect(presaleId).toBeGreaterThan(0);
+
+      const ticketIds = db.prepare('SELECT id FROM tickets WHERE presale_id = ? ORDER BY id').all(presaleId).map(t => Number(t.id));
+      expect(ticketIds.length).toBe(2);
+
+      const delRes = await request(app)
+        .patch(`/api/selling/tickets/${ticketIds[0]}/delete`)
+        .set('Authorization', `Bearer ${dispatcherToken}`)
+        .send({ decision: 'FUND' });
+
+      expect(delRes.status).toBe(200);
+      expect(delRes.body.success).toBe(true);
+
+      const updatedPresale = db.prepare(`
+        SELECT number_of_seats, total_price, prepayment_amount
+        FROM presales
+        WHERE id = ?
+      `).get(presaleId);
+      expect(Number(updatedPresale?.number_of_seats || 0)).toBe(1);
+      expect(Number(updatedPresale?.prepayment_amount || 0)).toBe(1000);
+      expect(Number(updatedPresale?.total_price || 0)).toBeGreaterThanOrEqual(Number(updatedPresale?.prepayment_amount || 0));
+
+      const seasonFundRows = db.prepare(`
+        SELECT COUNT(*) AS cnt
+        FROM money_ledger
+        WHERE presale_id = ? AND kind = 'FUND' AND type = 'SEASON_PREPAY_DELETE' AND status = 'POSTED'
+      `).get(presaleId);
+      expect(Number(seasonFundRows?.cnt || 0)).toBe(0);
+    });
+
+    it('moves prepayment to season fund when last ticket is deleted with decision=FUND', async () => {
+      const createRes = await request(app)
+        .post('/api/selling/presales')
+        .set('Authorization', `Bearer ${dispatcherToken}`)
+        .send({
+          slotUid: `generated:${testData.genSlotId1}`,
+          customerName: 'Last Ticket Fund Client',
+          customerPhone: '79991234994',
+          numberOfSeats: 2,
+          prepaymentAmount: 1000,
+          tripDate: testData.today,
+        });
+
+      expect(createRes.status).toBe(201);
+      const presaleId = Number(createRes.body?.presale?.id);
+      expect(presaleId).toBeGreaterThan(0);
+
+      const ticketIds = db.prepare('SELECT id FROM tickets WHERE presale_id = ? ORDER BY id').all(presaleId).map(t => Number(t.id));
+      expect(ticketIds.length).toBe(2);
+
+      const firstDel = await request(app)
+        .patch(`/api/selling/tickets/${ticketIds[0]}/delete`)
+        .set('Authorization', `Bearer ${dispatcherToken}`)
+        .send({ decision: 'FUND' });
+      expect(firstDel.status).toBe(200);
+
+      const secondDel = await request(app)
+        .patch(`/api/selling/tickets/${ticketIds[1]}/delete`)
+        .set('Authorization', `Bearer ${dispatcherToken}`)
+        .send({ decision: 'FUND' });
+      expect(secondDel.status).toBe(200);
+      expect(secondDel.body.success).toBe(true);
+
+      const updatedPresale = db.prepare(`
+        SELECT status, number_of_seats, total_price, prepayment_amount
+        FROM presales
+        WHERE id = ?
+      `).get(presaleId);
+      expect(String(updatedPresale?.status || '')).toBe('CANCELLED');
+      expect(Number(updatedPresale?.number_of_seats || 0)).toBe(0);
+      expect(Number(updatedPresale?.total_price || 0)).toBe(0);
+      expect(Number(updatedPresale?.prepayment_amount || 0)).toBe(0);
+
+      const seasonFund = db.prepare(`
+        SELECT COALESCE(SUM(amount), 0) AS total
+        FROM money_ledger
+        WHERE presale_id = ? AND kind = 'FUND' AND type = 'SEASON_PREPAY_DELETE' AND status = 'POSTED'
+      `).get(presaleId);
+      expect(Number(seasonFund?.total || 0)).toBe(1000);
+    });
+  });
   
   describe('Delete Authorization', () => {
     let presaleId;

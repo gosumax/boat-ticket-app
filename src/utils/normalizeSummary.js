@@ -36,6 +36,11 @@ export function normalizeSeller(s) {
     cash_due_to_owner === 0 ? 'CLOSED' : cash_due_to_owner > 0 ? 'DEBT' : 'OVERPAID'
   );
   
+  // Salary fields
+  const salary_due = s.salary_due ?? s.salaryDue ?? 0;
+  const salary_due_total = s.salary_due_total ?? s.salaryDueTotal ?? salary_due;
+  const salary_accrued = s.salary_accrued ?? s.salaryAccrued ?? salary_due_total;
+  
   return {
     seller_id: Number(seller_id),
     seller_name,
@@ -52,6 +57,10 @@ export function normalizeSeller(s) {
     balance: Number(cash_due_to_owner),
     cash_balance: Number(cash_due_to_owner),
     status,
+    // Salary fields
+    salary_due: Number(salary_due),
+    salary_due_total: Number(salary_due_total),
+    salary_accrued: Number(salary_accrued),
     // Raw fallback values for debugging
     _raw: {
       accepted: s.accepted,
@@ -137,6 +146,47 @@ export function normalizeSummary(data) {
   const salary_paid_cash = data.salary_paid_cash ?? data.salaryPaidCash ?? 0;
   const salary_paid_card = data.salary_paid_card ?? data.salaryPaidCard ?? 0;
   const salary_paid_total = data.salary_paid_total ?? data.salaryPaidTotal ?? 0;
+  const sellers_debt_total = data.sellers_debt_total ?? data.sellersDebtTotal ?? null;
+  const owner_cash_available = data.owner_cash_available ?? data.ownerCashAvailable ?? null;
+  const owner_cash_available_after_future_reserve_cash =
+    data.owner_cash_available_after_future_reserve_cash ??
+    data.ownerCashAvailableAfterFutureReserveCash ??
+    null;
+  const owner_cash_available_after_reserve_and_funds =
+    data.owner_cash_available_after_reserve_and_funds ??
+    data.ownerCashAvailableAfterReserveAndFunds ??
+    null;
+  const owner_cash_available_after_reserve_and_funds_cash =
+    data.owner_cash_available_after_reserve_and_funds_cash ??
+    data.ownerCashAvailableAfterReserveAndFundsCash ??
+    owner_cash_available_after_reserve_and_funds;
+  const funds_withhold_cash_today =
+    data.funds_withhold_cash_today ??
+    data.fundsWithholdCashToday ??
+    null;
+  const owner_cash_available_without_future_reserve =
+    data.owner_cash_available_without_future_reserve ??
+    data.ownerCashAvailableWithoutFutureReserve ??
+    owner_cash_available;
+  const reserveFromExplainCash = data.explain?.liabilities?.future_trips_reserve_cash ?? data.explain?.liabilities?.prepayment_future_cash;
+  const reserveFromExplainCard = data.explain?.liabilities?.future_trips_reserve_terminal ?? data.explain?.liabilities?.prepayment_future_terminal;
+  const future_trips_reserve_cash =
+    data.future_trips_reserve_cash ??
+    data.futureTripsReserveCash ??
+    data.reserve_future_trips?.cash ??
+    reserveFromExplainCash ??
+    0;
+  const future_trips_reserve_card =
+    data.future_trips_reserve_card ??
+    data.futureTripsReserveCard ??
+    data.reserve_future_trips?.card ??
+    reserveFromExplainCard ??
+    0;
+  const future_trips_reserve_total =
+    data.future_trips_reserve_total ??
+    data.futureTripsReserveTotal ??
+    data.reserve_future_trips?.total ??
+    (Number(future_trips_reserve_cash || 0) + Number(future_trips_reserve_card || 0));
   
   // Trip status
   const all_trips_finished = Boolean(data.all_trips_finished ?? data.allTripsFinished ?? true);
@@ -162,6 +212,28 @@ export function normalizeSummary(data) {
 
   // Explain section (human-readable breakdown)
   const explain = data.explain ?? null;
+
+  // Motivation withhold (daily shift-close preview)
+  const rawWithhold = data.motivation_withhold ?? data.motivationWithhold ?? null;
+  const motivation_withhold = rawWithhold
+    ? {
+        weekly_amount_raw: Number(rawWithhold.weekly_amount_raw ?? rawWithhold.weeklyAmountRaw ?? 0),
+        weekly_amount: Number(rawWithhold.weekly_amount ?? rawWithhold.weeklyAmount ?? 0),
+        season_amount: Number(rawWithhold.season_amount ?? rawWithhold.seasonAmount ?? 0),
+        season_amount_base: Number(rawWithhold.season_amount_base ?? rawWithhold.seasonAmountBase ?? 0),
+        season_amount_from_rounding: Number(rawWithhold.season_amount_from_rounding ?? rawWithhold.seasonAmountFromRounding ?? 0),
+        weekly_rounding_to_season_amount: Number(rawWithhold.weekly_rounding_to_season_amount ?? rawWithhold.weeklyRoundingToSeasonAmount ?? 0),
+        dispatcher_rounding_to_season_amount: Number(rawWithhold.dispatcher_rounding_to_season_amount ?? rawWithhold.dispatcherRoundingToSeasonAmount ?? 0),
+        payouts_rounding_to_season_amount: Number(rawWithhold.payouts_rounding_to_season_amount ?? rawWithhold.payoutsRoundingToSeasonAmount ?? 0),
+        rounding_to_season_amount_total: Number(rawWithhold.rounding_to_season_amount_total ?? rawWithhold.roundingToSeasonAmountTotal ?? 0),
+        dispatcher_amount_total: Number(rawWithhold.dispatcher_amount_total ?? rawWithhold.dispatcherAmountTotal ?? 0),
+        fund_total_original: Number(rawWithhold.fund_total_original ?? rawWithhold.fundTotalOriginal ?? 0),
+        fund_total_after_withhold: Number(rawWithhold.fund_total_after_withhold ?? rawWithhold.fundTotalAfterWithhold ?? 0),
+        dispatcher_percent_total: Number(rawWithhold.dispatcher_percent_total ?? rawWithhold.dispatcherPercentTotal ?? 0),
+        dispatcher_percent_per_person: Number(rawWithhold.dispatcher_percent_per_person ?? rawWithhold.dispatcherPercentPerPerson ?? 0),
+        active_dispatchers_count: Number(rawWithhold.active_dispatchers_count ?? rawWithhold.activeDispatchersCount ?? 0),
+      }
+    : null;
 
   const cashbox = {
     cash_in_cashbox: cash_in_cashbox !== null ? Number(cash_in_cashbox) : null,
@@ -208,6 +280,15 @@ export function normalizeSummary(data) {
     salary_paid_cash: Number(salary_paid_cash),
     salary_paid_card: Number(salary_paid_card),
     salary_paid_total: Number(salary_paid_total),
+    sellers_debt_total: sellers_debt_total !== null ? Number(sellers_debt_total) : null,
+    owner_cash_available: owner_cash_available !== null ? Number(owner_cash_available) : null,
+    owner_cash_available_without_future_reserve: owner_cash_available_without_future_reserve !== null ? Number(owner_cash_available_without_future_reserve) : null,
+    owner_cash_available_after_future_reserve_cash: owner_cash_available_after_future_reserve_cash !== null ? Number(owner_cash_available_after_future_reserve_cash) : null,
+    owner_cash_available_after_reserve_and_funds_cash: owner_cash_available_after_reserve_and_funds_cash !== null ? Number(owner_cash_available_after_reserve_and_funds_cash) : null,
+    funds_withhold_cash_today: funds_withhold_cash_today !== null ? Number(funds_withhold_cash_today) : null,
+    future_trips_reserve_cash: Number(future_trips_reserve_cash),
+    future_trips_reserve_card: Number(future_trips_reserve_card),
+    future_trips_reserve_total: Number(future_trips_reserve_total),
     
     // Trip status
     all_trips_finished,
@@ -227,6 +308,9 @@ export function normalizeSummary(data) {
 
     // Explain section (human-readable breakdown)
     explain,
+
+    // Motivation withhold details
+    motivation_withhold,
   };
 }
 

@@ -652,6 +652,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
                 <button
                   type="button"
                   onClick={() => { setPrepaymentMethod('cash'); setPrepaymentCashStr(''); setPrepaymentCardStr(''); setPrepaymentMethodError(''); }}
+                  data-testid="prepay-method-cash"
                   className={`py-1 rounded-lg font-medium transition-colors ${prepaymentMethod === 'cash' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
                 >
                   Нал
@@ -659,6 +660,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
                 <button
                   type="button"
                   onClick={() => { setPrepaymentMethod('card'); setPrepaymentCashStr(''); setPrepaymentCardStr(''); setPrepaymentMethodError(''); }}
+                  data-testid="prepay-method-card"
                   className={`py-1 rounded-lg font-medium transition-colors ${prepaymentMethod === 'card' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
                 >
                   Карта
@@ -677,6 +679,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
                     }
                     setPrepaymentMethodError('');
                   }}
+                  data-testid="prepay-method-mixed"
                   className={`py-1 rounded-lg font-medium transition-colors ${prepaymentMethod === 'mixed' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-blue-300 hover:bg-blue-200 active:bg-blue-300'}`}
                 >
                   Комбо
@@ -694,6 +697,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
                       inputMode="numeric"
                       value={prepaymentCashStr}
                       onChange={(e) => { setPrepaymentCashStr(e.target.value); setPrepaymentMethodError(''); }}
+                      data-testid="prepay-cash-input"
                       className="shadow appearance-none border rounded w-full py-1 px-2 text-black font-bold leading-tight focus:outline-none focus:shadow-outline"
                     />
                   </div>
@@ -706,6 +710,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
                       inputMode="numeric"
                       value={prepaymentCardStr}
                       onChange={(e) => { setPrepaymentCardStr(e.target.value); setPrepaymentMethodError(''); }}
+                      data-testid="prepay-card-input"
                       className="shadow appearance-none border rounded w-full py-1 px-2 text-black font-bold leading-tight focus:outline-none focus:shadow-outline"
                     />
                   </div>

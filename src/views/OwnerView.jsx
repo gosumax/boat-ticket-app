@@ -615,6 +615,11 @@ function PresetChip({ active, onClick, label }) {
 export default function OwnerView() {
   const { logout } = useAuth();
   const [tab, setTab] = useState("money"); // money | compare | boats | sellers | motivation | settings | load | export
+  const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
+
+  const handleSettingsSaved = () => {
+    setSettingsRefreshKey(k => k + 1);
+  };
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
@@ -629,14 +634,14 @@ export default function OwnerView() {
         Выйти
       </button>
       <main className="pb-24">
-        {tab === "money" && <OwnerMoneyView />}
-        {tab === "compare" && <OwnerComparePeriodsView />}
-        {tab === "boats" && <OwnerBoatsView />}
-        {tab === "sellers" && <OwnerSellersView />}
-        {tab === "motivation" && <OwnerMotivationView />}
-        {tab === "settings" && <OwnerSettingsView />}
-        {tab === "load" && <OwnerLoadView />}
-        {tab === "export" && <OwnerExportView />}
+        {tab === "money" && <div data-testid="owner-screen-money"><OwnerMoneyView /></div>}
+        {tab === "compare" && <div data-testid="owner-screen-compare"><OwnerComparePeriodsView /></div>}
+        {tab === "boats" && <div data-testid="owner-screen-boats"><OwnerBoatsView /></div>}
+        {tab === "sellers" && <div data-testid="owner-screen-sellers"><OwnerSellersView /></div>}
+        {tab === "motivation" && <div data-testid="owner-screen-motivation"><OwnerMotivationView onOpenSettings={() => setTab("settings")} settingsRefreshKey={settingsRefreshKey} /></div>}
+        {tab === "settings" && <div data-testid="owner-screen-settings"><OwnerSettingsView onSettingsSaved={handleSettingsSaved} /></div>}
+        {tab === "load" && <div data-testid="owner-screen-load"><OwnerLoadView /></div>}
+        {tab === "export" && <div data-testid="owner-screen-export"><OwnerExportView /></div>}
       </main>
 
       <OwnerBottomTabs tab={tab} setTab={setTab} />
@@ -662,6 +667,7 @@ function OwnerBottomTabs({ tab, setTab }) {
             icon="₽"
             active={tab === "money"}
             onClick={() => go("money")}
+            dataTestId="owner-tab-money"
             alwaysLabel
           />
           <TabButton
@@ -669,6 +675,7 @@ function OwnerBottomTabs({ tab, setTab }) {
             icon="◆"
             active={tab === "compare"}
             onClick={() => go("compare")}
+            dataTestId="owner-tab-compare"
             alwaysLabel
           />
           <TabButton
@@ -676,6 +683,7 @@ function OwnerBottomTabs({ tab, setTab }) {
             icon="⛴"
             active={tab === "boats"}
             onClick={() => go("boats")}
+            dataTestId="owner-tab-boats"
             alwaysLabel
           />
           <TabButton
@@ -683,6 +691,7 @@ function OwnerBottomTabs({ tab, setTab }) {
             icon="👤"
             active={tab === "sellers"}
             onClick={() => go("sellers")}
+            dataTestId="owner-tab-sellers"
             alwaysLabel
           />
           <TabButton
@@ -701,48 +710,56 @@ function OwnerBottomTabs({ tab, setTab }) {
             icon="₽"
             active={tab === "money"}
             onClick={() => go("money")}
+            dataTestId="owner-tab-money"
           />
           <TabButton
             label="Сравнение"
             icon="◆"
             active={tab === "compare"}
             onClick={() => go("compare")}
+            dataTestId="owner-tab-compare"
           />
           <TabButton
             label="Лодки"
             icon="⛴"
             active={tab === "boats"}
             onClick={() => go("boats")}
+            dataTestId="owner-tab-boats"
           />
           <TabButton
             label="Продавцы"
             icon="👤"
             active={tab === "sellers"}
             onClick={() => go("sellers")}
+            dataTestId="owner-tab-sellers"
           />
           <TabButton
             label="Мотивация"
             icon="🏆"
             active={tab === "motivation"}
             onClick={() => go("motivation")}
+            dataTestId="owner-tab-motivation"
           />
           <TabButton
             label="Настройки"
             icon="⚙"
             active={tab === "settings"}
             onClick={() => go("settings")}
+            dataTestId="owner-tab-settings"
           />
           <TabButton
             label="Загрузка"
             icon="⬆"
             active={tab === "load"}
             onClick={() => go("load")}
+            dataTestId="owner-tab-load"
           />
           <TabButton
             label="Экспорт"
             icon="⇩"
             active={tab === "export"}
             onClick={() => go("export")}
+            dataTestId="owner-tab-export"
           />
         </div>
       </div>
@@ -764,24 +781,28 @@ function OwnerBottomTabs({ tab, setTab }) {
                   icon="🏆"
                   active={tab === "motivation"}
                   onClick={() => go("motivation")}
+            dataTestId="owner-tab-motivation"
                 />
                 <MoreItem
                   label="Настройки"
                   icon="⚙"
                   active={tab === "settings"}
                   onClick={() => go("settings")}
+            dataTestId="owner-tab-settings"
                 />
                 <MoreItem
                   label="Загрузка"
                   icon="⬆"
                   active={tab === "load"}
                   onClick={() => go("load")}
+            dataTestId="owner-tab-load"
                 />
                 <MoreItem
                   label="Экспорт"
                   icon="⇩"
                   active={tab === "export"}
                   onClick={() => go("export")}
+            dataTestId="owner-tab-export"
                 />
               </div>
             </div>
@@ -792,11 +813,12 @@ function OwnerBottomTabs({ tab, setTab }) {
   );
 }
 
-function TabButton({ label, icon, active, onClick, alwaysLabel = false }) {
+function TabButton({ label, icon, active, onClick, alwaysLabel = false, dataTestId = undefined }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      data-testid={dataTestId}
       className={[
         "flex items-center justify-center gap-2 rounded-2xl border px-2 py-2 text-sm",
         active
@@ -832,3 +854,4 @@ function MoreItem({ label, icon, active, onClick }) {
     </button>
   );
 }
+

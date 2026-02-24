@@ -150,6 +150,83 @@ function recalcPendingForTransfer(presaleId, slotUid, boatSlotId, totalPrice, pr
 }
 import { authenticateToken, canSell, canDispatchManageSlots } from './auth.js';
 import { getDatabaseFilePath } from './db.js';
+import { assertShiftOpen, SHIFT_CLOSED_CODE } from './shift-guard.mjs';
+
+function getLocalBusinessDay() {
+  return db.prepare(`SELECT DATE('now','localtime') AS d`).get()?.d || null;
+}
+
+function respondShiftClosedIfNeeded(res, error) {
+  if (error?.status === 409 && error?.code === SHIFT_CLOSED_CODE) {
+    const payload = error?.payload || {
+      ok: false,
+      code: SHIFT_CLOSED_CODE,
+      business_day: error?.business_day || null,
+      message: error?.message || 'Shift is closed',
+    };
+    return res.status(409).json(payload);
+  }
+  return null;
+}
+
+function resolveBusinessDayFromSlot(slotUid, boatSlotId = null) {
+  const parsed = parseSlotUid(slotUid);
+  if (parsed?.source === 'generated') {
+    const row = db.prepare('SELECT trip_date FROM generated_slots WHERE id = ?').get(parsed.id);
+    if (row?.trip_date) return row.trip_date;
+  } else if (parsed?.source === 'manual') {
+    const row = db.prepare('SELECT trip_date FROM boat_slots WHERE id = ?').get(parsed.id);
+    if (row?.trip_date) return row.trip_date;
+  }
+
+  if (boatSlotId != null) {
+    const row = db.prepare('SELECT trip_date FROM boat_slots WHERE id = ?').get(boatSlotId);
+    if (row?.trip_date) return row.trip_date;
+  }
+
+  return getLocalBusinessDay();
+}
+
+function resolveBusinessDayForPresaleRow(presale) {
+  const explicit = String(presale?.business_day || '').trim();
+  if (explicit) return explicit;
+  return resolveBusinessDayFromSlot(presale?.slot_uid, presale?.boat_slot_id);
+}
+
+function assertShiftOpenForPresaleDays(presaleId, primaryBusinessDay, extraBusinessDays = []) {
+  const days = new Set();
+  const primary = String(primaryBusinessDay || '').trim();
+  if (primary) days.add(primary);
+
+  for (const day of extraBusinessDays || []) {
+    const normalized = String(day || '').trim();
+    if (normalized) days.add(normalized);
+  }
+
+  const ledgerDays = db.prepare(`
+    SELECT DISTINCT business_day
+    FROM money_ledger
+    WHERE presale_id = ?
+      AND status = 'POSTED'
+      AND business_day IS NOT NULL
+  `).all(presaleId);
+
+  for (const row of ledgerDays) {
+    const normalized = String(row?.business_day || '').trim();
+    if (normalized) days.add(normalized);
+  }
+
+  if (days.size === 0) {
+    const fallbackDay = getLocalBusinessDay();
+    if (fallbackDay) days.add(fallbackDay);
+  }
+
+  for (const day of days) {
+    assertShiftOpen(day);
+  }
+
+  return Array.from(days);
+}
 // ===== SLOT SEATS RECALC (TICKETS SOURCE OF TRUTH) =====
 function recalcSlotSeatsLeft(db, boat_slot_id) {
   try {
@@ -1265,6 +1342,7 @@ if (breakdown) {
   if (!presaleBusinessDay) {
     presaleBusinessDay = db.prepare(`SELECT DATE('now','localtime') AS d`).get()?.d || null;
   }
+  assertShiftOpen(presaleBusinessDay);
 
   // 3) Create presale
   // For generated slots, do NOT count occupied seats via boat_slots (it aggregates by time-only).
@@ -1723,6 +1801,8 @@ return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedT
       }
     });
   } catch (error) {
+    const shiftClosedResponse = respondShiftClosedIfNeeded(res, error);
+    if (shiftClosedResponse) return shiftClosedResponse;
     console.error('[PRESALE_CREATE_500]', { slotUid: req.body?.slotUid, message: error.message, stack: error.stack });
     if (error?.message === 'CAPACITY_EXCEEDED') {
       return res.status(409).json({ ok: false, code: 'CAPACITY_EXCEEDED', message: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РјРµСЃС‚ РІ СЂРµР№СЃРµ', details: error.details || null });
@@ -1841,7 +1921,7 @@ router.get('/presales/:id', authenticateToken, canSell, (req, res) => {
     if (isNaN(presaleId)) {
       return res.status(400).json({ error: 'Invalid presale ID' });
     }
-    
+
     // Get the presale with its associated slot and boat info
     const presale = db.prepare(`
       SELECT 
@@ -2672,7 +2752,7 @@ router.patch('/presales/:id/payment', authenticateToken, canSell, (req, res) => 
     
     // Get the presale to check remaining amount and ownership
     const presale = db.prepare(`
-      SELECT total_price, prepayment_amount, seller_id
+      SELECT total_price, prepayment_amount, seller_id, business_day, slot_uid, boat_slot_id
       FROM presales
       WHERE id = ?
     `).get(presaleId);
@@ -2687,6 +2767,9 @@ router.patch('/presales/:id/payment', authenticateToken, canSell, (req, res) => 
     if (!isOwner && !isPrivileged) {
       return res.status(403).json({ error: 'Insufficient permissions to update payment for another seller\'s presale' });
     }
+
+    const presaleBusinessDay = resolveBusinessDayForPresaleRow(presale);
+    assertShiftOpenForPresaleDays(presaleId, presaleBusinessDay);
     
     const remainingAmount = presale.total_price - presale.prepayment_amount;
     
@@ -2718,6 +2801,8 @@ router.patch('/presales/:id/payment', authenticateToken, canSell, (req, res) => 
     
     res.json(updatedPresale);
   } catch (error) {
+    const shiftClosedResponse = respondShiftClosedIfNeeded(res, error);
+    if (shiftClosedResponse) return shiftClosedResponse;
     console.error('[SELLING_500] route=/api/selling/presales/:id/payment method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
     res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
@@ -2740,7 +2825,7 @@ router.patch('/presales/:id/accept-payment', authenticateToken, canSell, (req, r
              total_price, prepayment_amount, prepayment_comment, status, tickets_json,
              payment_method, payment_cash_amount, payment_card_amount,
              (total_price - prepayment_amount) as remaining_amount,
-             seller_id,
+             seller_id, business_day, slot_uid,
              created_at, updated_at
       FROM presales 
       WHERE id = ?
@@ -2762,6 +2847,9 @@ router.patch('/presales/:id/accept-payment', authenticateToken, canSell, (req, r
     if (presale.status !== 'ACTIVE') {
       return res.status(400).json({ error: 'Cannot accept payment for this status' });
     }
+
+    const presaleBusinessDay = resolveBusinessDayForPresaleRow(presale);
+    assertShiftOpenForPresaleDays(presaleId, presaleBusinessDay);
     
     // Accept remaining payment with method tracking
 const remainingToPay = Number(presale.remaining_amount || 0);
@@ -2844,10 +2932,14 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
 
         const totalAccepted = Math.round((Number(cashAmount || 0) + Number(cardAmount || 0)) || 0);
 
-        // Get seller_id from presales (source of truth), not from req.user (dispatcher)
+        // Preserve seller flow, but attribute dispatcher/admin/owner accepted revenue
+        // to the actual acting user so shift-close per-user stats remain correct.
         const presaleSeller = db.prepare(
           "SELECT seller_id FROM presales WHERE id = ?"
         ).get(presaleId);
+        const ledgerSellerId = userRole === 'seller'
+          ? (presaleSeller?.seller_id ?? userId ?? null)
+          : (userId ?? presaleSeller?.seller_id ?? null);
 
         let ledgerType = 'SALE_ACCEPTED';
         if (Number(cashAmount) > 0 && Number(cardAmount) > 0) ledgerType = 'SALE_ACCEPTED_MIXED';
@@ -2871,7 +2963,7 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
           type: ledgerType,
           method: method || null,
           amount: totalAccepted,
-          seller_id: presaleSeller?.seller_id ?? null,
+          seller_id: ledgerSellerId,
           business_day: bd
         });
       }
@@ -2973,6 +3065,8 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
     
     res.json(updatedPresale);
   } catch (error) {
+    const shiftClosedResponse = respondShiftClosedIfNeeded(res, error);
+    if (shiftClosedResponse) return shiftClosedResponse;
     console.error('[SELLING_500] route=/api/selling/presales/:id/accept-payment method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
     res.status(500).json({ error: 'РћС€РёР±РєР° РїСЂРё РїСЂРёРЅСЏС‚РёРё РѕРїР»Р°С‚С‹' });
   }
@@ -2986,6 +3080,17 @@ router.patch('/presales/:id/cancel', authenticateToken, canSell, (req, res) => {
     if (!Number.isFinite(presaleId) || presaleId <= 0) {
       return res.status(400).json({ error: 'Invalid presale ID' });
     }
+
+    const presaleGuardRow = db.prepare(`
+      SELECT id, business_day, slot_uid, boat_slot_id
+      FROM presales
+      WHERE id = ?
+    `).get(presaleId);
+    if (!presaleGuardRow) {
+      return res.status(404).json({ error: 'Presale not found' });
+    }
+    const presaleBusinessDay = resolveBusinessDayForPresaleRow(presaleGuardRow);
+    assertShiftOpenForPresaleDays(presaleId, presaleBusinessDay);
 
     // Atomic cancel:
     // 1) presale.status -> CANCELLED
@@ -3115,6 +3220,8 @@ router.patch('/presales/:id/cancel', authenticateToken, canSell, (req, res) => {
 
     return res.json({ ...updatedPresale, ...result });
   } catch (error) {
+    const shiftClosedResponse = respondShiftClosedIfNeeded(res, error);
+    if (shiftClosedResponse) return shiftClosedResponse;
     const code = error?.code && Number.isFinite(Number(error.code)) ? Number(error.code) : 500;
     if (code !== 500) return res.status(code).json({ error: error.message });
     console.error('[SELLING_500] route=/api/selling/presales/:id/cancel method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
@@ -3131,6 +3238,21 @@ router.patch('/presales/:id/move', authenticateToken, canDispatchManageSlots, (r
     if (isNaN(presaleId) || !target_slot_id) {
       return res.status(400).json({ error: 'Invalid presale ID or target slot ID' });
     }
+
+    const presaleGuardRow = db.prepare(`
+      SELECT id, business_day, slot_uid, boat_slot_id
+      FROM presales
+      WHERE id = ?
+    `).get(presaleId);
+    if (!presaleGuardRow) {
+      return res.status(404).json({ error: 'Presale not found' });
+    }
+    const presaleBusinessDay = resolveBusinessDayForPresaleRow(presaleGuardRow);
+    const targetSlotIdNum = Number(target_slot_id);
+    const targetManualSlot = db.prepare(`SELECT trip_date FROM boat_slots WHERE id = ?`).get(targetSlotIdNum);
+    const targetGeneratedSlot = targetManualSlot ? null : db.prepare(`SELECT trip_date FROM generated_slots WHERE id = ?`).get(targetSlotIdNum);
+    const targetBusinessDay = targetManualSlot?.trip_date || targetGeneratedSlot?.trip_date || null;
+    assertShiftOpenForPresaleDays(presaleId, presaleBusinessDay, targetBusinessDay ? [targetBusinessDay] : []);
     
     // Use transaction to ensure atomicity: update presale AND adjust seat counts
     const transaction = db.transaction((presaleId, targetSlotId) => {
@@ -3321,6 +3443,8 @@ router.patch('/presales/:id/move', authenticateToken, canDispatchManageSlots, (r
     
     res.json(updatedPresale);
   } catch (error) {
+    const shiftClosedResponse = respondShiftClosedIfNeeded(res, error);
+    if (shiftClosedResponse) return shiftClosedResponse;
     console.error('[SELLING_500] route=/api/selling/presales/:id/move method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
     if (error?.message === 'CAPACITY_EXCEEDED') {
       return res.status(409).json({ ok: false, code: 'CAPACITY_EXCEEDED', message: 'РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РјРµСЃС‚ РІ СЂРµР№СЃРµ', details: error.details || null });
@@ -3342,6 +3466,17 @@ router.patch('/presales/:id/seats', authenticateToken, canDispatchManageSlots, (
     if (number_of_seats === undefined || !Number.isInteger(number_of_seats) || number_of_seats < 1) {
       return res.status(400).json({ error: 'РљРѕР»РёС‡РµСЃС‚РІРѕ РјРµСЃС‚ РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ С†РµР»С‹Рј С‡РёСЃР»РѕРј РЅРµ РјРµРЅРµРµ 1' });
     }
+
+    const presaleGuardRow = db.prepare(`
+      SELECT id, business_day, slot_uid, boat_slot_id
+      FROM presales
+      WHERE id = ?
+    `).get(presaleId);
+    if (!presaleGuardRow) {
+      return res.status(404).json({ error: 'Р‘СЂРѕРЅСЊ РЅРµ РЅР°Р№РґРµРЅР°' });
+    }
+    const presaleBusinessDay = resolveBusinessDayForPresaleRow(presaleGuardRow);
+    assertShiftOpenForPresaleDays(presaleId, presaleBusinessDay);
     
     // Use transaction to ensure atomicity: update presale AND adjust slot seats
     const transaction = db.transaction((presaleId, newSeats) => {
@@ -3436,6 +3571,8 @@ router.patch('/presales/:id/seats', authenticateToken, canDispatchManageSlots, (
     
     res.json(updatedPresale);
   } catch (error) {
+    const shiftClosedResponse = respondShiftClosedIfNeeded(res, error);
+    if (shiftClosedResponse) return shiftClosedResponse;
     console.error('[SELLING_500] route=/api/selling/presales/:id/seats method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
     res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
@@ -3451,12 +3588,15 @@ router.patch('/presales/:id/used', authenticateToken, canDispatchManageSlots, (r
     
     // Get current presale to check status
     const currentPresale = db.prepare(`
-      SELECT status FROM presales WHERE id = ?
+      SELECT status, business_day, slot_uid, boat_slot_id FROM presales WHERE id = ?
     `).get(presaleId);
     
     if (!currentPresale) {
       return res.status(404).json({ error: 'Presale not found' });
     }
+
+    const presaleBusinessDay = resolveBusinessDayForPresaleRow(currentPresale);
+    assertShiftOpenForPresaleDays(presaleId, presaleBusinessDay);
     
     // Define which statuses are eligible for boarding ("active purchases")
     const eligibleStatuses = ['ACTIVE', 'CONFIRMED', 'PAID', 'PARTIALLY_PAID'];
@@ -3505,6 +3645,8 @@ router.patch('/presales/:id/used', authenticateToken, canDispatchManageSlots, (r
     
     res.json(updatedPresale);
   } catch (error) {
+    const shiftClosedResponse = respondShiftClosedIfNeeded(res, error);
+    if (shiftClosedResponse) return shiftClosedResponse;
     console.error('[SELLING_500] route=/api/selling/presales/:id/used method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
     res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
@@ -3517,6 +3659,17 @@ router.patch('/presales/:id/refund', authenticateToken, canDispatchManageSlots, 
     if (isNaN(presaleId)) {
       return res.status(400).json({ error: 'Invalid presale ID' });
     }
+
+    const presaleGuardRow = db.prepare(`
+      SELECT id, business_day, slot_uid, boat_slot_id
+      FROM presales
+      WHERE id = ?
+    `).get(presaleId);
+    if (!presaleGuardRow) {
+      return res.status(404).json({ error: 'Presale not found' });
+    }
+    const presaleBusinessDay = resolveBusinessDayForPresaleRow(presaleGuardRow);
+    assertShiftOpenForPresaleDays(presaleId, presaleBusinessDay);
     
     // Use transaction to ensure atomicity: update presale status AND update tickets AND adjust slot capacity
     const transaction = db.transaction((presaleId) => {
@@ -3622,6 +3775,8 @@ router.patch('/presales/:id/refund', authenticateToken, canDispatchManageSlots, 
     
     res.json(updatedPresale);
   } catch (error) {
+    const shiftClosedResponse = respondShiftClosedIfNeeded(res, error);
+    if (shiftClosedResponse) return shiftClosedResponse;
     console.error('[SELLING_500] route=/api/selling/presales/:id/refund method=PATCH id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
     res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
   }
@@ -3630,6 +3785,10 @@ router.patch('/presales/:id/refund', authenticateToken, canDispatchManageSlots, 
 router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, (req, res) => {
   try {
     const presaleId = Number(req.params.id);
+    const decision = String(req.body?.decision || 'REFUND').trim().toUpperCase();
+    if (decision !== 'REFUND' && decision !== 'FUND') {
+      return res.status(400).json({ error: 'Invalid decision. Use REFUND or FUND' });
+    }
 
     const presale = db.prepare(`SELECT * FROM presales WHERE id = ?`).get(presaleId);
     if (!presale) return res.status(404).json({ error: 'Presale not found' });
@@ -3638,6 +3797,9 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
     if (['REFUNDED', 'CANCELLED', 'CANCELLED_TRIP_PENDING'].includes(presale.status)) {
       return res.status(400).json({ error: 'Cannot delete this presale in current status' });
     }
+
+    const presaleBusinessDay = resolveBusinessDayForPresaleRow(presale);
+    assertShiftOpenForPresaleDays(presaleId, presaleBusinessDay);
 
     const transaction = db.transaction(() => {
       // 1) РїРѕРјРµС‡Р°РµРј РїСЂРµСЃРµР№Р» РєР°Рє CANCELLED (СЌС‚Рѕ вЂњСЃР¶РµС‡СЊ Р±РёР»РµС‚вЂќ)
@@ -3709,6 +3871,23 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
         console.warn('[DELETE_PRESALE] canonical VOID skipped:', e?.message || e);
       }
 
+      // 2.2) If dispatcher selected "to season fund", move presale prepayment to season fund
+      // instead of returning it to customer.
+      const prepaymentAmount = Number(presale.prepayment_amount || 0);
+      if (decision === 'FUND' && prepaymentAmount > 0) {
+        db.prepare(`
+          INSERT INTO money_ledger
+            (business_day, kind, method, amount, status, seller_id, presale_id, slot_id, event_time, type, decision_final)
+          VALUES
+            (?, 'FUND', 'INTERNAL', ?, 'POSTED', NULL, ?, ?, CURRENT_TIMESTAMP, 'SEASON_PREPAY_DELETE', 'FUND')
+        `).run(
+          presaleBusinessDay || getLocalBusinessDay(),
+          prepaymentAmount,
+          presaleId,
+          presale.boat_slot_id ?? null
+        );
+      }
+
       // 3) РѕРїСЂРµРґРµР»СЏРµРј СЃР»РѕС‚ (manual/generated) Рё РІРѕР·РІСЂР°С‰Р°РµРј РјРµСЃС‚Р° (clamp 0..capacity)
       const slotUid = presale.slot_uid ? String(presale.slot_uid) : null;
 
@@ -3765,6 +3944,8 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
     const result = transaction();
     return res.json(result);
   } catch (e) {
+    const shiftClosedResponse = respondShiftClosedIfNeeded(res, e);
+    if (shiftClosedResponse) return shiftClosedResponse;
     console.error('[DELETE_PRESALE] failed', e);
     return res.status(500).json({ error: 'Internal error' });
   }
@@ -3998,11 +4179,18 @@ router.patch('/tickets/:ticketId/refund', authenticateToken, canDispatchManageSl
 router.patch('/tickets/:ticketId/delete', authenticateToken, canDispatchManageSlots, (req, res) => {
   try {
     const ticketId = req.params.ticketId;
+    const decision = String(req.body?.decision || 'REFUND').trim().toUpperCase();
+    if (decision !== 'REFUND' && decision !== 'FUND') {
+      return res.status(400).json({ error: 'Invalid decision. Use REFUND or FUND' });
+    }
 
     const refundTransaction = db.transaction(() => {
       const ticket = db.prepare(`
         SELECT
           t.*,
+          p.status as presale_status,
+          p.prepayment_amount as presale_prepayment_amount,
+          p.total_price as presale_total_price,
           p.slot_uid as presale_slot_uid,
           p.boat_slot_id as presale_boat_slot_id
         FROM tickets t
@@ -4084,6 +4272,10 @@ router.patch('/tickets/:ticketId/delete', authenticateToken, canDispatchManageSl
 
       const newSeats = activeTickets.length;
       const newTotal = activeTickets.reduce((sum, t) => sum + Number(t.price ?? 0), 0);
+      const oldPrepay = Number(ticket.presale_prepayment_amount ?? 0);
+      const newPrepay = Math.max(0, Math.min(oldPrepay, newTotal));
+      const fullDeletion = newSeats === 0;
+      const moveToSeasonFund = fullDeletion && decision === 'FUND' && oldPrepay > 0;
 
       // Recalculate tickets_json by counting ACTIVE tickets by type
       let cAdult = 0, cTeen = 0, cChild = 0;
@@ -4100,11 +4292,97 @@ router.patch('/tickets/:ticketId/delete', authenticateToken, canDispatchManageSl
 
       console.log('[TICKET_DELETE recalc presale]', { presaleId, newSeats, newTotal, newTicketsJson });
 
+      // If this was the last active ticket in presale, fully cancel presale finance and optionally move prepayment to season fund.
+      if (fullDeletion) {
+        try {
+          const ledgerExists = db
+            .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='money_ledger'`)
+            .get();
+          if (ledgerExists) {
+            const nets = db.prepare(`
+              SELECT business_day, kind, method, seller_id, slot_id, SUM(amount) AS net_amount
+              FROM money_ledger
+              WHERE presale_id = ? AND status = 'POSTED'
+              GROUP BY business_day, kind, method, seller_id, slot_id
+              HAVING net_amount <> 0
+            `).all(presaleId);
+
+            const insReverse = db.prepare(`
+              INSERT INTO money_ledger
+                (business_day, kind, method, amount, status, seller_id, presale_id, slot_id, event_time, type, decision_final)
+              VALUES
+                (?, ?, ?, ?, 'POSTED', ?, ?, ?, CURRENT_TIMESTAMP, 'SALE_CANCEL_REVERSE', 'CANCELLED')
+            `);
+
+            for (const r of nets) {
+              const bd = r.business_day || db.prepare(`SELECT DATE('now','localtime') AS d`).get().d;
+              insReverse.run(
+                bd,
+                r.kind,
+                r.method,
+                -Number(r.net_amount || 0),
+                r.seller_id ?? null,
+                presaleId,
+                r.slot_id ?? ticket.presale_boat_slot_id ?? null
+              );
+            }
+          }
+        } catch (e) {
+          console.warn('[TICKET_DELETE] money_ledger reverse skipped:', e?.message || e);
+        }
+      }
+
+      // Keep EXPECT_PAYMENT in sync with new order totals.
+      db.prepare(`DELETE FROM money_ledger WHERE presale_id = ? AND kind = 'EXPECT_PAYMENT'`).run(presaleId);
+      const remainingAfterDelete = Math.max(0, newTotal - newPrepay);
+      if (!fullDeletion && remainingAfterDelete > 0) {
+        const tripDay = resolveBusinessDayFromSlot(ticket.presale_slot_uid, ticket.presale_boat_slot_id);
+        db.prepare(`
+          INSERT INTO money_ledger
+          (presale_id, slot_id, trip_day, kind, method, amount, status, type)
+          VALUES (?, ?, ?, 'EXPECT_PAYMENT', NULL, ?, 'POSTED', 'PENDING')
+        `).run(presaleId, ticket.presale_boat_slot_id ?? null, tripDay, remainingAfterDelete);
+      }
+
+      if (fullDeletion) {
+        try {
+          const canonExists = db
+            .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`)
+            .get();
+          if (canonExists) {
+            db.prepare(`
+              UPDATE sales_transactions_canonical
+              SET status = 'VOID'
+              WHERE presale_id = ? AND status = 'VALID'
+            `).run(presaleId);
+          }
+        } catch (e) {
+          console.warn('[TICKET_DELETE] canonical VOID skipped:', e?.message || e);
+        }
+
+        if (moveToSeasonFund) {
+          const businessDay = resolveBusinessDayFromSlot(ticket.presale_slot_uid, ticket.presale_boat_slot_id);
+          db.prepare(`
+            INSERT INTO money_ledger
+              (business_day, kind, method, amount, status, seller_id, presale_id, slot_id, event_time, type, decision_final)
+            VALUES
+              (?, 'FUND', 'INTERNAL', ?, 'POSTED', NULL, ?, ?, CURRENT_TIMESTAMP, 'SEASON_PREPAY_DELETE', 'FUND')
+          `).run(
+            businessDay || getLocalBusinessDay(),
+            oldPrepay,
+            presaleId,
+            ticket.presale_boat_slot_id ?? null
+          );
+        }
+      }
+
+      const presaleStatusNext = fullDeletion ? 'CANCELLED' : 'ACTIVE';
+      const prepayNext = fullDeletion ? 0 : newPrepay;
       db.prepare(`
         UPDATE presales
-        SET number_of_seats = ?, total_price = ?, tickets_json = ?, updated_at = CURRENT_TIMESTAMP
+        SET number_of_seats = ?, total_price = ?, prepayment_amount = ?, tickets_json = ?, status = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).run(newSeats, newTotal, newTicketsJson, presaleId);
+      `).run(newSeats, newTotal, prepayNext, newTicketsJson, presaleStatusNext, presaleId);
 
       // Return updated presale in response for verification
       const updatedPresale = db.prepare('SELECT * FROM presales WHERE id = ?').get(presaleId);
@@ -4890,6 +5168,16 @@ router.post('/presales/:id/transfer', authenticateToken, canSellOrDispatch, (req
 
     if (!toSlotUid) return res.status(400).json({ error: 'to_slot_uid required' });
 
+    const presale = db.prepare(`
+      SELECT id, business_day, slot_uid, boat_slot_id
+      FROM presales
+      WHERE id = ?
+    `).get(presaleId);
+    if (!presale) return res.status(404).json({ error: 'Presale not found' });
+    const sourceBusinessDay = resolveBusinessDayForPresaleRow(presale);
+    const targetBusinessDay = resolveBusinessDayFromSlot(toSlotUid);
+    assertShiftOpenForPresaleDays(presaleId, sourceBusinessDay, targetBusinessDay ? [targetBusinessDay] : []);
+
     const tx = db.transaction(() => {
       const result = doTransferPresaleToSlot(presaleId, toSlotUid);
       if (result?.error) throw Object.assign(new Error(result.error), { code: result.code || 400 });
@@ -4899,6 +5187,8 @@ router.post('/presales/:id/transfer', authenticateToken, canSellOrDispatch, (req
     const result = tx();
     res.json({ success: true, ...result });
   } catch (error) {
+    const shiftClosedResponse = respondShiftClosedIfNeeded(res, error);
+    if (shiftClosedResponse) return shiftClosedResponse;
     const code = error?.code && Number.isFinite(Number(error.code)) ? Number(error.code) : 500;
     res.status(code === 500 ? 500 : code).json({ error: error.message || 'Failed to transfer presale' });
   }
@@ -4913,11 +5203,14 @@ router.patch('/presales/:id/transfer', authenticateToken, canSellOrDispatch, (re
     if (!toSlotUid) return res.status(400).json({ error: 'to_slot_uid required' });
 
     // Check ownership before transfer
-    const presale = db.prepare('SELECT id, seller_id FROM presales WHERE id = ?').get(presaleId);
+    const presale = db.prepare('SELECT id, seller_id, business_day, slot_uid, boat_slot_id FROM presales WHERE id = ?').get(presaleId);
     if (!presale) return res.status(404).json({ error: 'Presale not found' });
     if (presale.seller_id !== req.user.id) {
       return res.status(403).json({ error: 'Forbidden' });
     }
+    const sourceBusinessDay = resolveBusinessDayForPresaleRow(presale);
+    const targetBusinessDay = resolveBusinessDayFromSlot(toSlotUid);
+    assertShiftOpenForPresaleDays(presaleId, sourceBusinessDay, targetBusinessDay ? [targetBusinessDay] : []);
 
     const tx = db.transaction(() => {
       const result = doTransferPresaleToSlot(presaleId, toSlotUid);
@@ -4928,6 +5221,8 @@ router.patch('/presales/:id/transfer', authenticateToken, canSellOrDispatch, (re
     const result = tx();
     res.json({ success: true, ...result });
   } catch (error) {
+    const shiftClosedResponse = respondShiftClosedIfNeeded(res, error);
+    if (shiftClosedResponse) return shiftClosedResponse;
     const code = error?.code && Number.isFinite(Number(error.code)) ? Number(error.code) : 500;
     res.status(code === 500 ? 500 : code).json({ error: error.message || 'Failed to transfer presale' });
   }
@@ -4936,7 +5231,18 @@ router.patch('/presales/:id/transfer', authenticateToken, canSellOrDispatch, (re
 
 router.patch('/presales/:id/cancel-trip-pending', authenticateToken, canSellOrDispatch, (req, res) => {
   try {
-    const presaleId = req.params.id;
+    const presaleId = Number(req.params.id);
+    if (!Number.isFinite(presaleId) || presaleId <= 0) {
+      return res.status(400).json({ error: 'Invalid presale ID' });
+    }
+    const presaleGuardRow = db.prepare(
+      'SELECT id, boat_slot_id, slot_uid, business_day FROM presales WHERE id = ?'
+    ).get(presaleId);
+    if (!presaleGuardRow) {
+      return res.status(404).json({ error: 'Presale not found' });
+    }
+    const presaleBusinessDay = resolveBusinessDayForPresaleRow(presaleGuardRow);
+    assertShiftOpenForPresaleDays(presaleId, presaleBusinessDay);
 
     const cancelTransaction = db.transaction(() => {
       const presale = db.prepare(
@@ -5038,6 +5344,8 @@ router.patch('/presales/:id/cancel-trip-pending', authenticateToken, canSellOrDi
 
     res.json({ success: true, message: 'Presale marked as cancelled trip pending' });
   } catch (error) {
+    const shiftClosedResponse = respondShiftClosedIfNeeded(res, error);
+    if (shiftClosedResponse) return shiftClosedResponse;
     console.error('Error marking presale as cancelled trip pending:', error);
     res.status(500).json({ error: 'Failed to mark presale as cancelled trip pending' });
   }

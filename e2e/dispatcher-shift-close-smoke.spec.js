@@ -43,6 +43,17 @@ test.describe('Dispatcher Shift Close Smoke', () => {
       expect(sourceText).toContain('snapshot');
     }
     
+    // Check motivation_withhold block visibility (if present)
+    const withholdBlock = page.locator('[data-testid="shiftclose-withhold-weekly"]');
+    if (await withholdBlock.count() > 0) {
+      console.log('Motivation withhold block found');
+      // Verify testid elements exist
+      await expect(page.locator('[data-testid="shiftclose-withhold-season"]')).toBeVisible();
+      await expect(page.locator('[data-testid="shiftclose-withhold-dispatcher"]')).toBeVisible();
+      await expect(page.locator('[data-testid="shiftclose-withhold-fund-original"]')).toBeVisible();
+      await expect(page.locator('[data-testid="shiftclose-withhold-fund-after"]')).toBeVisible();
+    }
+    
     // Take screenshot for evidence
     await page.screenshot({ path: 'test-results/shift-close-smoke.png' });
   });

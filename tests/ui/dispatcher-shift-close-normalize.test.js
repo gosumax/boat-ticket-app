@@ -164,6 +164,30 @@ describe('normalizeSummary', () => {
     expect(result.sellers[0].terminal_debt).toBe(500);
   });
 
+  it('normalizes future reserve and reserve-adjusted owner cash fields', () => {
+    const input = {
+      owner_cash_available: 5000,
+      owner_cash_available_after_future_reserve_cash: 3800,
+      future_trips_reserve_cash: 1200,
+      future_trips_reserve_card: 800,
+      future_trips_reserve_total: 2000,
+      explain: {
+        liabilities: {
+          future_trips_reserve_cash: 1200,
+          future_trips_reserve_terminal: 800,
+        },
+      },
+    };
+
+    const result = normalizeSummary(input);
+
+    expect(result.owner_cash_available).toBe(5000);
+    expect(result.owner_cash_available_after_future_reserve_cash).toBe(3800);
+    expect(result.future_trips_reserve_cash).toBe(1200);
+    expect(result.future_trips_reserve_card).toBe(800);
+    expect(result.future_trips_reserve_total).toBe(2000);
+  });
+
   it('handles null/undefined input gracefully', () => {
     expect(normalizeSummary(null)).toBeNull();
     expect(normalizeSummary(undefined)).toBeNull();
@@ -246,6 +270,36 @@ describe('normalizeSummary', () => {
     // Top-level convenience
     expect(result.cash_in_cashbox).toBe(1500);
     expect(result.expected_sellers_cash_due).toBe(1500);
+  });
+
+  it('normalizes motivation_withhold extended rounding fields', () => {
+    const input = {
+      business_day: '2026-02-25',
+      motivation_withhold: {
+        weekly_amount_raw: 123.45,
+        weekly_amount: 100,
+        season_amount: 89.6,
+        season_amount_base: 75,
+        season_amount_from_rounding: 14.6,
+        weekly_rounding_to_season_amount: 23.45,
+        dispatcher_rounding_to_season_amount: 1.15,
+        payouts_rounding_to_season_amount: 3.0,
+        rounding_to_season_amount_total: 27.6,
+        dispatcher_amount_total: 50,
+        fund_total_original: 1000,
+        fund_total_after_withhold: 760.4,
+      },
+    };
+
+    const result = normalizeSummary(input);
+
+    expect(result.motivation_withhold).toBeDefined();
+    expect(result.motivation_withhold.weekly_amount_raw).toBe(123.45);
+    expect(result.motivation_withhold.weekly_amount).toBe(100);
+    expect(result.motivation_withhold.season_amount).toBe(89.6);
+    expect(result.motivation_withhold.season_amount_base).toBe(75);
+    expect(result.motivation_withhold.rounding_to_season_amount_total).toBe(27.6);
+    expect(result.motivation_withhold.fund_total_after_withhold).toBe(760.4);
   });
 });
 

@@ -11,10 +11,11 @@ const SellerHome = () => {
   };
 
   return (
-    <div className="flex flex-col items-center min-h-screen bg-gradient-to-b from-blue-50 to-blue-100 p-4">
+    <div className="flex flex-col items-center min-h-screen bg-gradient-to-b from-blue-50 to-blue-100 p-4" data-testid="seller-home-screen">
       <div className="w-full max-w-md flex justify-end mb-8">
         <button
           onClick={handleLogout}
+          data-testid="seller-home-logout"
           className="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-medium transition-colors"
         >
           Выйти
@@ -29,6 +30,7 @@ const SellerHome = () => {
       <div className="w-full max-w-sm space-y-4">
         <button
           onClick={() => navigate('/seller?start=type')}
+          data-testid="seller-home-sell-btn"
           className="w-full py-5 text-xl font-medium rounded-xl bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 transition-all shadow-lg"
         >
           Продать билет
@@ -36,6 +38,7 @@ const SellerHome = () => {
 
         <button
           onClick={() => navigate('/dispatcher')}
+          data-testid="seller-home-schedule-btn"
           className="w-full py-5 text-xl font-medium rounded-xl bg-green-600 text-white hover:bg-green-700 active:bg-green-800 transition-all shadow-lg"
         >
           Расписание
@@ -43,6 +46,7 @@ const SellerHome = () => {
 
         <button
           onClick={() => navigate('/seller/earnings')}
+          data-testid="seller-home-earnings-btn"
           className="w-full py-5 text-xl font-medium rounded-xl bg-yellow-600 text-white hover:bg-yellow-700 active:bg-yellow-800 transition-all shadow-lg"
         >
           Мои продажи
@@ -50,6 +54,7 @@ const SellerHome = () => {
 
         <button
           onClick={() => navigate('/seller/media')}
+          data-testid="seller-home-media-btn"
           className="w-full py-5 text-xl font-medium rounded-xl bg-purple-600 text-white hover:bg-purple-700 active:bg-purple-800 transition-all shadow-lg"
         >
           Фото|видео

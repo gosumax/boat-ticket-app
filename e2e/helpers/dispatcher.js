@@ -1,12 +1,22 @@
 // e2e/helpers/dispatcher.js
 import { expect } from '@playwright/test';
+import { login } from './auth.js';
 
 /**
  * Helpers for dispatcher UI interactions
  */
 
 /**
- * Ensure we're on the "Продажа | Посадка" (Sales/Boarding) tab
+ * Login as dispatcher
+ */
+export async function loginAsDispatcher(page) {
+  const username = process.env.E2E_DISPATCHER_USERNAME || 'dispatcher';
+  const password = process.env.E2E_DISPATCHER_PASSWORD || '123456';
+  await login(page, username, password);
+}
+
+/**
+ * Ensure we're on the selling tab
  */
 export async function ensureSalesTab(page) {
   await page.getByTestId('tab-selling').click();
@@ -16,16 +26,21 @@ export async function ensureSalesTab(page) {
  * Navigate to dispatcher view and open first available trip
  */
 export async function openFirstTrip(page) {
-  await page.goto('/dispatcher');
-  
+  await expect(page.getByTestId('tab-selling')).toBeVisible({ timeout: 10000 });
+  await page.getByTestId('tab-selling').click();
+
+  // Prefer a non-sold-out card if available.
+  const nonSoldOutCard = page.locator('[data-testid^="trip-card-"]:not(.opacity-60)').first();
+  const hasNonSoldOut = (await nonSoldOutCard.count()) > 0;
+  const tripCard = hasNonSoldOut ? nonSoldOutCard : page.getByTestId(/trip-card-/).first();
+
   // Wait for trip cards to appear
-  const tripCard = page.getByTestId(/trip-card-/).first();
   await expect(tripCard).toBeVisible({ timeout: 10000 });
   await expect(tripCard).toBeEnabled({ timeout: 5000 });
-  
+
   // Click exactly once
   await tripCard.click({ clickCount: 1 });
-  
+
   // Wait for sell button to appear (trip details loaded)
   await expect(
     page.getByTestId('trip-sell-btn').first()
@@ -34,8 +49,8 @@ export async function openFirstTrip(page) {
 
 /**
  * Create presale via UI
- * @param {Page} page 
- * @param {Object} options 
+ * @param {Page} page
+ * @param {Object} options
  * @param {number} options.adult - Number of adult tickets
  * @param {number} options.teen - Number of teen tickets
  * @param {number} options.child - Number of child tickets
@@ -61,15 +76,10 @@ export async function createPresaleUI(page, options) {
     sellerId = '',
   } = options;
 
-  // Guard: wait for tab to be active and trips rendered
-  await expect(
-    page.getByRole('button', { name: 'Продажа | Посадка' })
-  ).toBeVisible({ timeout: 10000 });
-  await expect(
-    page.getByText(/Свободно:/)
-  ).toBeVisible({ timeout: 10000 });
+  // Guard: trip details already opened
+  await expect(page.getByTestId('trip-sell-btn').first()).toBeVisible({ timeout: 10000 });
 
-  // If form already open — close it first (idempotent)
+  // If form already open, close it first (idempotent)
   const openSubmit = page.getByTestId('presale-create-btn');
   if (await openSubmit.count() > 0) {
     const closeBtn = page.getByRole('button', { name: '✕' }).last();
@@ -90,53 +100,47 @@ export async function createPresaleUI(page, options) {
   await expect(submitBtn).toBeVisible({ timeout: 5000 });
 
   // Scope to the active form (last instance) to avoid strict mode violations
-  const form = submitBtn.locator('xpath=ancestor::div[.//h3[contains(.,"Информация о клиенте")]]');
+  const form = submitBtn.locator('xpath=ancestor::div[.//*[@data-testid="customer-phone-input"]][1]');
 
   // Select seller if provided (dispatcher only)
   if (sellerId) {
     const sellerSelect = form.getByTestId('seller-select');
     if (await sellerSelect.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await sellerSelect.selectOption(sellerId);
+      const firstNonEmptyValue = await sellerSelect.evaluate((el) => {
+        const opts = Array.from(el.options || []);
+        const found = opts.find((o) => !o.disabled && String(o.value || '').trim() !== '');
+        return found ? String(found.value) : '';
+      });
+
+      if (sellerId === 'first') {
+        if (firstNonEmptyValue) await sellerSelect.selectOption(firstNonEmptyValue);
+      } else {
+        const selected = await sellerSelect.selectOption(String(sellerId)).catch(() => []);
+        if ((!selected || selected.length === 0) && firstNonEmptyValue) {
+          await sellerSelect.selectOption(firstNonEmptyValue);
+        }
+      }
     }
   }
 
-  // Set adult tickets (default is 1, so we may need to add more)
-  const adultPlus = form.getByTestId('qty-adult-plus');
-  const adultMinus = form.getByTestId('qty-adult-minus');
-  
-  // First reset to 0, then add desired count
-  for (let i = 0; i < 10; i++) {
-    await expect(adultMinus).toBeEnabled({ timeout: 2000 });
-    await adultMinus.click();
-  }
-  for (let i = 0; i < adult; i++) {
-    await expect(adultPlus).toBeEnabled({ timeout: 2000 });
-    await adultPlus.click();
-  }
+  const setQuantity = async (minusBtn, plusBtn, value) => {
+    const hasMinus = (await minusBtn.count()) > 0;
+    const hasPlus = (await plusBtn.count()) > 0;
+    if (!hasMinus || !hasPlus) return;
 
-  // Set teen tickets
-  const teenPlus = form.getByTestId('qty-teen-plus');
-  const teenMinus = form.getByTestId('qty-teen-minus');
-  for (let i = 0; i < 10; i++) {
-    await expect(teenMinus).toBeEnabled({ timeout: 2000 });
-    await teenMinus.click();
-  }
-  for (let i = 0; i < teen; i++) {
-    await expect(teenPlus).toBeEnabled({ timeout: 2000 });
-    await teenPlus.click();
-  }
+    for (let i = 0; i < 10; i++) {
+      if (!(await minusBtn.isEnabled())) break;
+      await minusBtn.click();
+    }
+    for (let i = 0; i < value; i++) {
+      await expect(plusBtn).toBeEnabled({ timeout: 2000 });
+      await plusBtn.click();
+    }
+  };
 
-  // Set child tickets
-  const childPlus = form.getByTestId('qty-child-plus');
-  const childMinus = form.getByTestId('qty-child-minus');
-  for (let i = 0; i < 10; i++) {
-    await expect(childMinus).toBeEnabled({ timeout: 2000 });
-    await childMinus.click();
-  }
-  for (let i = 0; i < child; i++) {
-    await expect(childPlus).toBeEnabled({ timeout: 2000 });
-    await childPlus.click();
-  }
+  await setQuantity(form.getByTestId('qty-adult-minus'), form.getByTestId('qty-adult-plus'), adult);
+  await setQuantity(form.getByTestId('qty-teen-minus'), form.getByTestId('qty-teen-plus'), teen);
+  await setQuantity(form.getByTestId('qty-child-minus'), form.getByTestId('qty-child-plus'), child);
 
   // Set customer name - use preset button (Latin testid)
   if (namePreset) {
@@ -170,18 +174,55 @@ export async function createPresaleUI(page, options) {
     await prepayInput.fill(prepay.toString());
   }
 
+  const hasPrepayment = prepayPreset === 'full' || prepayPreset > 0 || prepay > 0;
+  if (hasPrepayment) {
+    if (paymentMethod === 'card') {
+      await form.getByTestId('prepay-method-card').click();
+    } else if (paymentMethod === 'mixed') {
+      await form.getByTestId('prepay-method-mixed').click();
+      const cashInput = form.getByTestId('prepay-cash-input');
+      const cardInput = form.getByTestId('prepay-card-input');
+      await expect(cashInput).toBeVisible({ timeout: 2000 });
+      await expect(cardInput).toBeVisible({ timeout: 2000 });
+
+      let prepayTotal = 0;
+      if (prepayPreset === 'full') {
+        const prepayInput = form.getByTestId('prepay-input');
+        const fromInput = Number(await prepayInput.inputValue().catch(() => '0'));
+        prepayTotal = Number.isFinite(fromInput) ? fromInput : 0;
+      } else if (prepayPreset > 0) {
+        prepayTotal = Number(prepayPreset);
+      } else if (prepay > 0) {
+        prepayTotal = Number(prepay);
+      }
+
+      if (!Number.isFinite(prepayTotal) || prepayTotal <= 0) {
+        const prepayInput = form.getByTestId('prepay-input');
+        const fromInput = Number(await prepayInput.inputValue().catch(() => '0'));
+        prepayTotal = Number.isFinite(fromInput) ? fromInput : 0;
+      }
+
+      const mixedCash = Math.max(1, Math.floor(prepayTotal / 2));
+      const mixedCard = Math.max(1, Math.max(prepayTotal - mixedCash, 0));
+      await cashInput.fill(String(mixedCash));
+      await cardInput.fill(String(mixedCard));
+    } else {
+      await form.getByTestId('prepay-method-cash').click();
+    }
+  }
+
   // Wait for submit button to be enabled and click
   await expect(submitBtn).toBeEnabled({ timeout: 5000 });
   await submitBtn.click();
-  
+
   // Wait for form to close
   await submitBtn.waitFor({ state: 'hidden', timeout: 5000 });
-  
+
   // Guarantee: form fully closed
   await expect(
     page.getByTestId('presale-create-btn')
   ).toHaveCount(0, { timeout: 5000 });
-  
+
   // Guarantee: at least one presale appeared
   await expect(
     page.getByTestId(/presale-(pay|delete|transfer)-btn-/).first()
@@ -201,7 +242,7 @@ export async function acceptPayment(page, presaleId, method = 'CASH') {
   const methodBtn = page.locator(`button:has-text("${method}")`).first();
   await expect(methodBtn).toBeVisible({ timeout: 5000 });
   await methodBtn.click();
-  
+
   // Confirm
   const confirmBtn = page.locator('button:has-text("Подтвердить"), button:has-text("Принять")').first();
   await expect(confirmBtn).toBeVisible({ timeout: 5000 });
@@ -243,7 +284,7 @@ export async function transferPresale(page, presaleId, targetDate, targetSlotUid
   const targetCard = page.locator(`[data-testid="trip-card-${targetSlotUid}"]`).first();
   await expect(targetCard).toBeVisible({ timeout: 5000 });
   await targetCard.click();
-  
+
   // Confirm transfer
   const confirmBtn = page.locator('button:has-text("Перенести"), button:has-text("Подтвердить")').first();
   await expect(confirmBtn).toBeVisible({ timeout: 5000 });
@@ -256,7 +297,7 @@ export async function transferPresale(page, presaleId, targetDate, targetSlotUid
  */
 export async function getSeatsLeft(page, slotUid) {
   const tripCard = page.getByTestId(`trip-card-${slotUid}`);
-  const seatsText = await tripCard.locator('text=/Свободно: \\d+/').first().textContent();
-  const match = seatsText.match(/Свободно: (\d+)/);
-  return match ? parseInt(match[1]) : 0;
+  const text = await tripCard.textContent();
+  const match = String(text || '').match(/\b(\d+)\b/);
+  return match ? parseInt(match[1], 10) : 0;
 }

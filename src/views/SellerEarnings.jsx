@@ -58,18 +58,20 @@ const SellerEarnings = () => {
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-50">
+    <div className="flex flex-col min-h-screen bg-gray-50" data-testid="seller-earnings-screen">
       {/* Header */}
       <div className="bg-blue-600 text-white p-4 flex justify-between items-center shadow-md">
         <button 
           onClick={() => navigate(-1)}
+          data-testid="seller-earnings-back"
           className="text-white hover:text-blue-200 transition-colors"
         >
           ← Назад
         </button>
-        <h1 className="text-xl font-bold">Мои продажи</h1>
+        <h1 className="text-xl font-bold" data-testid="seller-earnings-title">Мои продажи</h1>
         <button 
           onClick={handleLogout}
+          data-testid="seller-earnings-logout"
           className="bg-blue-700 hover:bg-blue-800 text-white px-3 py-1 rounded font-medium transition-colors"
         >
           Выйти
@@ -89,3 +91,4 @@ const SellerEarnings = () => {
 };
 
 export default SellerEarnings;
+

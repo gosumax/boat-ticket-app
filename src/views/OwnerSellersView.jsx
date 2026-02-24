@@ -118,7 +118,7 @@ export default function OwnerSellersView() {
     <div className="min-h-screen bg-neutral-950 text-neutral-100 px-3 pt-3 pb-24 space-y-3">
       <div className="flex items-center justify-between">
         <div className="text-xl font-extrabold tracking-tight">Продавцы</div>
-        <div className="text-[11px] text-neutral-500">owner</div>
+        <div className="text-[11px] text-neutral-500">владелец</div>
       </div>
 
       <SegmentedChips
@@ -154,12 +154,13 @@ export default function OwnerSellersView() {
       <div className="grid grid-cols-2 gap-2">
         <StatCard
           title="Прогноз (все)"
+          testId="owner-sellers-total-forecast"
           value={formatRUB(payload.totals.revenue_forecast)}
           accent="emerald"
         />
-        <StatCard title="Оплачено" value={formatRUB(payload.totals.revenue_paid)} />
-        <StatCard title="Ожидает оплаты" value={formatRUB(payload.totals.revenue_pending)} />
-        <StatCard title="Активных продавцов" value={formatInt(activeSellers)} />
+        <StatCard testId="owner-sellers-total-paid" title="Оплачено" value={formatRUB(payload.totals.revenue_paid)} />
+        <StatCard testId="owner-sellers-total-pending" title="Ожидает оплаты" value={formatRUB(payload.totals.revenue_pending)} />
+        <StatCard testId="owner-sellers-active-count" title="Активных продавцов" value={formatInt(activeSellers)} />
       </div>
 
       {/* Список продавцов */}
@@ -179,7 +180,7 @@ export default function OwnerSellersView() {
         )}
 
         {!loading && !error && payload.items.length > 0 && (
-          <div className="space-y-2">
+          <div className="space-y-2" data-testid="owner-sellers-list">
             {payload.items.map((s, idx) => (
               <SellerCard
                 key={s.seller_id}
@@ -195,7 +196,7 @@ export default function OwnerSellersView() {
   );
 }
 
-function StatCard({ title, value, accent }) {
+function StatCard({ title, value, accent, testId }) {
   const vCls =
     accent === "amber"
       ? "text-amber-300"
@@ -204,7 +205,7 @@ function StatCard({ title, value, accent }) {
       : "text-neutral-100";
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+    <div data-testid={testId} className="rounded-xl border border-white/10 bg-white/5 p-3">
       <div className="text-[11px] text-neutral-500">{title}</div>
       <div className={["mt-1 text-lg font-extrabold tracking-tight", vCls].join(" ")}>{value}</div>
     </div>
@@ -213,9 +214,11 @@ function StatCard({ title, value, accent }) {
 
 function SellerCard({ rank, seller, isTop3 }) {
   const [expanded, setExpanded] = useState(false);
+  const sellerId = seller.seller_id;
 
   return (
     <div
+      data-testid={`owner-seller-card-${sellerId}`}
       className={[
         "rounded-xl border p-3 transition-colors cursor-pointer",
         isTop3
@@ -247,7 +250,7 @@ function SellerCard({ rank, seller, isTop3 }) {
               {seller.seller_name || `Seller ${seller.seller_id}`}
             </div>
             {isTop3 && (
-              <div className="text-[10px] text-amber-400 font-semibold">ТОП</div>
+              <div className="text-[10px] text-amber-400 font-semibold">Топ</div>
             )}
           </div>
         </div>
@@ -255,7 +258,7 @@ function SellerCard({ rank, seller, isTop3 }) {
         {/* Forecast - main metric */}
         <div className="text-right shrink-0">
           <div className="text-[10px] text-neutral-500">Прогноз</div>
-          <div className="text-lg font-extrabold tracking-tight text-emerald-300">
+          <div data-testid={`owner-seller-forecast-${sellerId}`} className="text-lg font-extrabold tracking-tight text-emerald-300">
             {formatRUB(seller.revenue_forecast)}
           </div>
         </div>
@@ -263,8 +266,8 @@ function SellerCard({ rank, seller, isTop3 }) {
 
       {/* Quick stats row */}
       <div className="mt-2 flex items-center gap-4 text-xs text-neutral-400">
-        <span>Оплачено: <span className="text-neutral-200 font-semibold">{formatRUB(seller.revenue_paid)}</span></span>
-        <span>Pending: <span className="text-neutral-200">{formatRUB(seller.revenue_pending)}</span></span>
+        <span>Оплачено: <span data-testid={`owner-seller-paid-${sellerId}`} className="text-neutral-200 font-semibold">{formatRUB(seller.revenue_paid)}</span></span>
+        <span>Ожидает оплаты: <span data-testid={`owner-seller-pending-${sellerId}`} className="text-neutral-200">{formatRUB(seller.revenue_pending)}</span></span>
       </div>
 
       {/* Secondary stats: per-shift and share */}
@@ -275,13 +278,13 @@ function SellerCard({ rank, seller, isTop3 }) {
 
       {/* Expanded details */}
       {expanded && (
-        <div className="mt-3 pt-3 border-t border-white/10">
+        <div className="mt-3 pt-3 border-t border-white/10" data-testid={`owner-seller-details-${sellerId}`}>
           <div className="grid grid-cols-2 gap-2">
-            <MiniStat label="Билетов всего" value={formatInt(seller.tickets_total)} />
-            <MiniStat label="Билетов оплачено" value={formatInt(seller.tickets_paid)} />
-            <MiniStat label="Билетов pending" value={formatInt(seller.tickets_pending)} />
-            <MiniStat label="Смен" value={formatInt(seller.shifts_count)} />
-            <MiniStat label="Средний чек" value={formatRUB(seller.avg_check_paid)} />
+            <MiniStat testId={`owner-seller-tickets-total-${sellerId}`} label="Билетов всего" value={formatInt(seller.tickets_total)} />
+            <MiniStat testId={`owner-seller-tickets-paid-${sellerId}`} label="Билетов оплачено" value={formatInt(seller.tickets_paid)} />
+            <MiniStat testId={`owner-seller-tickets-pending-${sellerId}`} label="Билетов в ожидании" value={formatInt(seller.tickets_pending)} />
+            <MiniStat testId={`owner-seller-shifts-${sellerId}`} label="Смен" value={formatInt(seller.shifts_count)} />
+            <MiniStat testId={`owner-seller-avg-check-${sellerId}`} label="Средний чек" value={formatRUB(seller.avg_check_paid)} />
           </div>
         </div>
       )}
@@ -294,9 +297,9 @@ function SellerCard({ rank, seller, isTop3 }) {
   );
 }
 
-function MiniStat({ label, value }) {
+function MiniStat({ label, value, testId }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-black/30 p-2">
+    <div data-testid={testId} className="rounded-lg border border-white/10 bg-black/30 p-2">
       <div className="text-[10px] text-neutral-500">{label}</div>
       <div className="text-sm font-semibold mt-0.5">{value}</div>
     </div>

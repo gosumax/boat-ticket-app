@@ -33,14 +33,22 @@ function formatDuration(durationMinutes) {
 
 const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChange }) => {
   const todayIso = useMemo(() => toISODate(new Date()), []);
-  const tomorrowIso = useMemo(() => toISODate(new Date(Date.now() + 24 * 60 * 60 * 1000)), []);
-  const afterTomorrowIso = useMemo(() => toISODate(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)), []);
+  const tomorrowIso = useMemo(() => {
+    const d = new Date(`${todayIso}T00:00:00`);
+    d.setDate(d.getDate() + 1);
+    return toISODate(d);
+  }, [todayIso]);
+  const afterTomorrowIso = useMemo(() => {
+    const d = new Date(`${todayIso}T00:00:00`);
+    d.setDate(d.getDate() + 2);
+    return toISODate(d);
+  }, [todayIso]);
 
   const active = selectedDate || todayIso;
   const visibleTrips = useMemo(() => trips.filter(t => isSellableTrip(t, 10)), [trips]);
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col" data-testid="seller-select-trip-screen">
       <h2 className="text-2xl font-bold text-gray-800 mb-4 text-center">Выберите рейс</h2>
 
       {/* Фильтр дат */}
@@ -49,6 +57,7 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
           <button
             type="button"
             onClick={() => onDateChange && onDateChange(todayIso)}
+            data-testid="seller-trip-date-today"
             className={`py-2 rounded-lg font-medium ${
               active === todayIso ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800'
             }`}
@@ -58,6 +67,7 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
           <button
             type="button"
             onClick={() => onDateChange && onDateChange(tomorrowIso)}
+            data-testid="seller-trip-date-tomorrow"
             className={`py-2 rounded-lg font-medium ${
               active === tomorrowIso ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800'
             }`}
@@ -67,6 +77,7 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
           <button
             type="button"
             onClick={() => onDateChange && onDateChange(afterTomorrowIso)}
+            data-testid="seller-trip-date-day2"
             className={`py-2 rounded-lg font-medium ${
               active === afterTomorrowIso ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800'
             }`}
@@ -79,13 +90,14 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
           type="date"
           value={active}
           onChange={(e) => onDateChange && onDateChange(e.target.value)}
+          data-testid="seller-trip-date-input"
           className="w-full px-3 py-2 border rounded-lg border-gray-300"
         />
       </div>
 
       <div className="space-y-4">
         {loading ? (
-          <div className="space-y-4">
+          <div className="space-y-4" data-testid="seller-trip-loading">
             {[1, 2, 3].map(i => (
               <div key={i} className="bg-white rounded-xl shadow-md p-6 animate-pulse h-24" />
             ))}
@@ -118,6 +130,9 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
                 <div
                   key={trip.slot_uid}
                   onClick={() => onSelect({ ...trip, seatsLeft })}
+                  data-testid={`seller-trip-card-${trip.slot_uid}`}
+                  data-trip-type={trip?.boat_type || ''}
+                  data-trip-date={trip?.trip_date || ''}
                   className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 flex justify-between gap-4 cursor-pointer hover:shadow-md active:shadow-sm active:scale-[0.99] transition"
                 >
                   {/* Левая часть */}
@@ -142,19 +157,19 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
                         <span className="w-2 h-2 bg-green-500 rounded-full" />
                         Свободно
                       </span>
-                      <span className="font-bold">{seatsLeft}</span>
+                      <span data-testid={`seller-trip-free-${trip.slot_uid}`} className="font-bold">{seatsLeft}</span>
                     </div>
 
                     <div className="flex justify-between text-sm mb-1">
                       <span className="text-gray-700">Занято</span>
                       <span className="font-bold">
-                        <span className="text-red-600">{sold}</span> / {capacity}
+                        <span data-testid={`seller-trip-sold-${trip.slot_uid}`} className="text-red-600">{sold}</span> / <span data-testid={`seller-trip-capacity-${trip.slot_uid}`}>{capacity}</span>
                       </span>
                     </div>
 
                     <div className="flex justify-between text-xs text-gray-600 mb-1">
                       <span>Заполнено</span>
-                      <span>{percent}%</span>
+                      <span data-testid={`seller-trip-load-${trip.slot_uid}`}>{percent}%</span>
                     </div>
 
                     <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
@@ -169,7 +184,7 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
             })}
 
             {visibleTrips.length === 0 && (
-              <div className="text-center py-8 text-gray-500">
+              <div data-testid="seller-trip-empty" className="text-center py-8 text-gray-500">
                 Нет доступных рейсов
               </div>
             )}
@@ -180,6 +195,7 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
       <div className="mt-6">
         <button
           onClick={onBack}
+          data-testid="seller-trip-back"
           className="w-full py-3 bg-gray-300 text-gray-800 rounded-lg font-medium"
         >
           Назад

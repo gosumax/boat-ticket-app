@@ -164,7 +164,7 @@ const SelectSeats = ({
           customerName: localCustomerName,
           customerPhone: localCustomerPhone
         },
-        ts: Date.now()
+        ts: new Date().toISOString()
       });
     }
 
@@ -190,7 +190,7 @@ const SelectSeats = ({
               message: 'Form validation failed',
               debug: validationErrors
             },
-            ts: Date.now()
+            ts: new Date().toISOString()
           });
         }
         return;
@@ -222,7 +222,7 @@ const SelectSeats = ({
             message: error.message,
             stack: error.stack
           },
-          ts: Date.now()
+          ts: new Date().toISOString()
         });
       }
       console.error('Error in handleConfirm:', error);
@@ -255,7 +255,6 @@ const SelectSeats = ({
     
     // Also check prepayment validity
     return hasName && hasValidPhone && hasValidSeats && isPrepaymentValid && hasValidTicketBreakdown;
-  sValidTicketBreakdown;
   })();
   
   // Update prepayment error message
@@ -270,7 +269,7 @@ const SelectSeats = ({
   }, [prepaymentAmount, totalPrice]);
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col" data-testid="seller-select-seats-screen">
       <h2 className="text-2xl font-extrabold text-gray-900 mb-5 text-center">Количество мест</h2>
 
       {/* Trip Details */}
@@ -308,19 +307,21 @@ const SelectSeats = ({
               <button
                 type="button"
                 onClick={() => decrementTicket('adult')}
+                data-testid="seller-seats-adult-minus"
                 disabled={ticketBreakdown.adult <= 0}
                 className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
               >
                 −
               </button>
 
-              <span className="w-8 text-center text-2xl font-extrabold text-gray-900 tabular-nums">
+              <span data-testid="seller-seats-adult-value" className="w-8 text-center text-2xl font-extrabold text-gray-900 tabular-nums">
                 {ticketBreakdown.adult}
               </span>
 
               <button
                 type="button"
                 onClick={() => incrementTicket('adult')}
+                data-testid="seller-seats-adult-plus"
                 disabled={(ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child) >= getSlotAvailable(trip)}
                 className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
               >
@@ -337,19 +338,21 @@ const SelectSeats = ({
                 <button
                   type="button"
                   onClick={() => decrementTicket('teen')}
+                  data-testid="seller-seats-teen-minus"
                   disabled={ticketBreakdown.teen <= 0}
                   className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
                 >
                   −
                 </button>
 
-                <span className="w-8 text-center text-2xl font-extrabold text-gray-900 tabular-nums">
+                <span data-testid="seller-seats-teen-value" className="w-8 text-center text-2xl font-extrabold text-gray-900 tabular-nums">
                   {ticketBreakdown.teen}
                 </span>
 
                 <button
                   type="button"
                   onClick={() => incrementTicket('teen')}
+                  data-testid="seller-seats-teen-plus"
                   disabled={(ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child) >= getSlotAvailable(trip)}
                   className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
                 >
@@ -366,19 +369,21 @@ const SelectSeats = ({
               <button
                 type="button"
                 onClick={() => decrementTicket('child')}
+                data-testid="seller-seats-child-minus"
                 disabled={ticketBreakdown.child <= 0}
                 className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
               >
                 −
               </button>
 
-              <span className="w-8 text-center text-2xl font-extrabold text-gray-900 tabular-nums">
+              <span data-testid="seller-seats-child-value" className="w-8 text-center text-2xl font-extrabold text-gray-900 tabular-nums">
                 {ticketBreakdown.child}
               </span>
 
               <button
                 type="button"
                 onClick={() => incrementTicket('child')}
+                data-testid="seller-seats-child-plus"
                 disabled={(ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child) >= getSlotAvailable(trip)}
                 className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
               >
@@ -390,7 +395,7 @@ const SelectSeats = ({
 
         <div className="mt-5 text-center">
           <p className="font-bold text-gray-900">
-            Итого: <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-300 bg-white text-gray-900 tabular-nums">{seats}</span> мест
+            Итого: <span data-testid="seller-seats-total-count" className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-300 bg-white text-gray-900 tabular-nums">{seats}</span> мест
           </p>
           <p className="text-sm text-gray-600 mt-1">Максимум {getSlotAvailable(trip)} мест доступно</p>
         </div>
@@ -457,6 +462,7 @@ const SelectSeats = ({
           <input
             id="customerName"
             type="text"
+            data-testid="seller-customer-name-input"
             value={localCustomerName}
             onChange={handleNameChange}
             onBlur={() => setTouched(prev => ({ ...prev, customerName: true }))}
@@ -473,6 +479,7 @@ const SelectSeats = ({
           <input
             id="customerPhone"
             type="tel"
+            data-testid="seller-customer-phone-input"
             value={localCustomerPhone}
             onChange={handlePhoneChange}
             onBlur={() => setTouched(prev => ({ ...prev, customerPhone: true }))}
@@ -511,6 +518,7 @@ const SelectSeats = ({
           <input
             id="prepayment"
             type="number"
+            data-testid="seller-prepayment-input"
             value={localPrepaymentStr}
             onChange={handlePrepaymentChange}
             className="shadow-sm border border-gray-300 rounded-xl w-full py-3 px-3 text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
@@ -530,6 +538,7 @@ const SelectSeats = ({
               <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
+                  data-testid="seller-prepayment-method-cash"
                   onClick={() => {
                     if (setPrepaymentMethod) setPrepaymentMethod('cash');
                     if (setPrepaymentMethodError) setPrepaymentMethodError('');
@@ -545,6 +554,7 @@ const SelectSeats = ({
 
                 <button
                   type="button"
+                  data-testid="seller-prepayment-method-card"
                   onClick={() => {
                     if (setPrepaymentMethod) setPrepaymentMethod('card');
                     if (setPrepaymentMethodError) setPrepaymentMethodError('');
@@ -560,6 +570,7 @@ const SelectSeats = ({
 
                 <button
                   type="button"
+                  data-testid="seller-prepayment-method-mixed"
                   onClick={() => {
                     if (setPrepaymentMethod) setPrepaymentMethod('mixed');
                     if (setPrepaymentMethodError) setPrepaymentMethodError('');
@@ -581,6 +592,7 @@ const SelectSeats = ({
                 <div className="mt-2 grid grid-cols-2 gap-2">
                   <input
                     type="number"
+                    data-testid="seller-prepayment-mixed-cash"
                     value={prepaymentCashStr || ''}
                     onChange={(e) => setPrepaymentCashStr && setPrepaymentCashStr(e.target.value)}
                     placeholder="Нал"
@@ -588,6 +600,7 @@ const SelectSeats = ({
                   />
                   <input
                     type="number"
+                    data-testid="seller-prepayment-mixed-card"
                     value={prepaymentCardStr || ''}
                     onChange={(e) => setPrepaymentCardStr && setPrepaymentCardStr(e.target.value)}
                     placeholder="Карта"
@@ -608,7 +621,7 @@ const SelectSeats = ({
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 mb-4">
         <div className="flex items-center justify-between">
           <span className="text-gray-900 font-bold">Итого:</span>
-          <span className="text-blue-700 font-extrabold text-xl tabular-nums">{formatRUB(totalPrice)}</span>
+          <span data-testid="seller-order-total" className="text-blue-700 font-extrabold text-xl tabular-nums">{formatRUB(totalPrice)}</span>
         </div>
         {lastError && (
           <div className="mt-3 rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-800">
@@ -622,6 +635,7 @@ const SelectSeats = ({
         <button
           onClick={onBack}
           type="button"
+          data-testid="seller-seats-back"
           className="flex-1 py-4 text-lg font-bold rounded-xl bg-gray-200 text-gray-900 hover:bg-gray-300 active:bg-gray-400 shadow"
         >
           Назад
@@ -630,6 +644,7 @@ const SelectSeats = ({
         <button
           onClick={handleConfirm}
           type="button"
+          data-testid="seller-seats-create-presale"
           disabled={!isFormValid || isSubmitting}
           className={`flex-1 py-4 text-lg font-bold rounded-xl shadow transform transition ${
             isFormValid && !isSubmitting

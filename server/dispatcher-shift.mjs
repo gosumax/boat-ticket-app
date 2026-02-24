@@ -3,6 +3,7 @@ import db from './db.js';
 import { allTripsFinished } from './dispatcher-shift-ledger.mjs';
 import { updateSellerMotivationState, getStreakMultiplier, getSellerState } from './seller-motivation-state.mjs';
 import { saveDayStats, updateSeasonStatsFromDay } from './season-stats.mjs';
+import { calcMotivationDay } from './motivation/engine.mjs';
 
 const router = express.Router();
 
@@ -38,6 +39,69 @@ function isShiftClosed(businessDay) {
     return !!row;
   } catch {
     return false;  // Table doesn't exist or error
+  }
+}
+
+function hasColumn(tableName, columnName) {
+  try {
+    const cols = db.prepare(`PRAGMA table_info(${tableName})`).all().map(r => r.name);
+    return cols.includes(columnName);
+  } catch {
+    return false;
+  }
+}
+
+function calcFutureTripsReserveForBusinessDay(businessDay) {
+  try {
+    const tripDayExpr = hasColumn('presales', 'business_day')
+      ? "COALESCE(p.business_day, DATE(p.created_at))"
+      : 'DATE(p.created_at)';
+    const hasCashAmt = hasColumn('money_ledger', 'cash_amount');
+    const hasCardAmt = hasColumn('money_ledger', 'card_amount');
+    const mixedCashExpr = hasCashAmt ? 'COALESCE(ml.cash_amount, 0)' : 'COALESCE(p.payment_cash_amount, ml.amount)';
+    const mixedCardExpr = hasCardAmt ? 'COALESCE(ml.card_amount, 0)' : 'COALESCE(p.payment_card_amount, 0)';
+
+    const row = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE
+          WHEN ${tripDayExpr} > ?
+            THEN CASE
+              WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH') OR ml.method = 'CASH' THEN ml.amount
+              WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') OR ml.method = 'MIXED' THEN ${mixedCashExpr}
+              ELSE 0
+            END
+          ELSE 0 END), 0) AS reserve_cash,
+        COALESCE(SUM(CASE
+          WHEN ${tripDayExpr} > ?
+            THEN CASE
+              WHEN ml.type IN ('SALE_PREPAYMENT_CARD','SALE_ACCEPTED_CARD') OR ml.method = 'CARD' THEN ml.amount
+              WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') OR ml.method = 'MIXED' THEN ${mixedCardExpr}
+              ELSE 0
+            END
+          ELSE 0 END), 0) AS reserve_card,
+        COALESCE(SUM(CASE WHEN (${tripDayExpr}) IS NULL THEN 1 ELSE 0 END), 0) AS unresolved_trip_day_count
+      FROM money_ledger ml
+      LEFT JOIN presales p ON p.id = ml.presale_id
+      WHERE ml.business_day = ?
+        AND ml.status = 'POSTED'
+        AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+        AND ml.type IN (
+          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+        )
+    `).get(businessDay, businessDay, businessDay);
+
+    const cash = Number(row?.reserve_cash || 0);
+    const card = Number(row?.reserve_card || 0);
+    const unresolvedTripDayCount = Number(row?.unresolved_trip_day_count || 0);
+    return {
+      cash,
+      card,
+      total: cash + card,
+      unresolvedTripDayCount,
+    };
+  } catch {
+    return { cash: 0, card: 0, total: 0, unresolvedTripDayCount: 0 };
   }
 }
 
@@ -321,7 +385,7 @@ router.post('/close', (req, res) => {
           END), 0) AS collected_card
         FROM money_ledger
         WHERE status = 'POSTED'
-          AND kind = 'SELLER_SHIFT'
+          AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
           AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
           AND business_day = ?
       `).get(businessDay);
@@ -336,7 +400,6 @@ router.post('/close', (req, res) => {
           COALESCE(SUM(CASE
             WHEN ml.method = 'CASH' THEN ml.amount
             WHEN ml.method = 'MIXED' THEN COALESCE(p.payment_cash_amount, 0)
-            WHEN ml.method = 'CARD' THEN ml.amount
             ELSE 0
           END), 0) AS collected_cash,
           COALESCE(SUM(CASE
@@ -347,7 +410,7 @@ router.post('/close', (req, res) => {
         FROM money_ledger ml
         LEFT JOIN presales p ON p.id = ml.presale_id
         WHERE ml.status = 'POSTED'
-          AND ml.kind = 'SELLER_SHIFT'
+          AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
           AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
           AND ml.business_day = ?
       `).get(businessDay);
@@ -364,7 +427,7 @@ router.post('/close', (req, res) => {
         COALESCE(SUM(CASE WHEN method = 'CARD' THEN ABS(amount) ELSE 0 END), 0) AS refund_card
       FROM money_ledger
       WHERE status = 'POSTED'
-        AND kind = 'SELLER_SHIFT'
+        AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
         AND type = 'SALE_CANCEL_REVERSE'
         AND business_day = ?
     `).get(businessDay);
@@ -391,28 +454,84 @@ router.post('/close', (req, res) => {
     const depositCash = Number(depositRow?.deposit_cash || 0);
     const depositCard = Number(depositRow?.deposit_card || 0);
 
-    // Sellers data
+    // Sellers/dispatchers data for snapshot UI ("По продавцам")
+    const mixedCashExpr = hasCashAmt ? 'COALESCE(ml.cash_amount, 0)' : 'COALESCE(p.payment_cash_amount, 0)';
+    const mixedCardExpr = hasCardAmt ? 'COALESCE(ml.card_amount, 0)' : 'COALESCE(p.payment_card_amount, 0)';
     const sellersRows = db.prepare(`
       SELECT
         ml.seller_id,
-        COALESCE(SUM(CASE WHEN ml.kind = 'SELLER_SHIFT' AND ml.type LIKE 'SALE_%' THEN ml.amount ELSE 0 END), 0) AS accepted,
-        COALESCE(SUM(CASE WHEN ml.kind = 'DISPATCHER_SHIFT' AND ml.type LIKE 'DEPOSIT_TO_OWNER%' THEN ml.amount ELSE 0 END), 0) AS deposited
+        COALESCE(SUM(CASE
+          WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED')
+          THEN ml.amount ELSE 0 END), 0) AS collected_total,
+        COALESCE(SUM(CASE
+          WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH') THEN ml.amount
+          WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') THEN ${mixedCashExpr}
+          WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ml.method = 'CASH' THEN ml.amount
+          WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ml.method = 'MIXED' THEN -${mixedCashExpr}
+          ELSE 0 END), 0) AS collected_cash,
+        COALESCE(SUM(CASE
+          WHEN ml.type IN ('SALE_PREPAYMENT_CARD','SALE_ACCEPTED_CARD') THEN ml.amount
+          WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') THEN ${mixedCardExpr}
+          WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ml.method = 'CARD' THEN ml.amount
+          WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ml.method = 'MIXED' THEN -${mixedCardExpr}
+          ELSE 0 END), 0) AS collected_card,
+        COALESCE(SUM(CASE
+          WHEN ml.type = 'DEPOSIT_TO_OWNER_CASH' THEN ml.amount
+          WHEN ml.type LIKE 'DEPOSIT_TO_OWNER%' AND ml.method = 'CASH' THEN ml.amount
+          ELSE 0 END), 0) AS deposit_cash,
+        COALESCE(SUM(CASE
+          WHEN ml.type = 'DEPOSIT_TO_OWNER_CARD' THEN ml.amount
+          WHEN ml.type LIKE 'DEPOSIT_TO_OWNER%' AND ml.method = 'CARD' THEN ml.amount
+          ELSE 0 END), 0) AS deposit_card
       FROM money_ledger ml
+      LEFT JOIN presales p ON p.id = ml.presale_id
       WHERE ml.business_day = ?
         AND ml.status = 'POSTED'
         AND ml.seller_id IS NOT NULL
+        AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
       GROUP BY ml.seller_id
     `).all(businessDay);
     
-    const sellers = (sellersRows || []).map(r => ({
-      seller_id: r.seller_id,
-      accepted: Number(r.accepted || 0),
-      deposited: Number(r.deposited || 0),
-      balance: Number(r.accepted || 0) - Number(r.deposited || 0),
-      cash_balance: Number(r.accepted || 0) - Number(r.deposited || 0),
-      terminal_debt: 0,
-      status: (Number(r.accepted || 0) - Number(r.deposited || 0)) === 0 ? 'CLOSED' : 'DEBT'
-    }));
+    const sellers = (sellersRows || []).map(r => {
+      const collectedCashByUser = Number(r.collected_cash || 0);
+      const collectedCardByUser = Number(r.collected_card || 0);
+      const depositCashByUser = Number(r.deposit_cash || 0);
+      const depositCardByUser = Number(r.deposit_card || 0);
+      const cashDue = collectedCashByUser - depositCashByUser;
+      const terminalDue = collectedCardByUser - depositCardByUser;
+      const balance = cashDue + terminalDue;
+      const status = balance === 0 ? 'CLOSED' : balance > 0 ? 'DEBT' : 'OVERPAID';
+
+      let sellerName = `Продавец #${r.seller_id}`;
+      let sellerRole = 'seller';
+      try {
+        const userRow = db.prepare('SELECT username, role FROM users WHERE id = ?').get(r.seller_id);
+        if (userRow?.role) sellerRole = String(userRow.role);
+        if (userRow?.username) {
+          sellerName = sellerRole === 'dispatcher' ? `Диспетчер: ${userRow.username}` : userRow.username;
+        }
+      } catch {}
+
+      return {
+        seller_id: Number(r.seller_id || 0),
+        seller_name: sellerName,
+        name: sellerName,
+        role: sellerRole,
+        accepted: Number(r.collected_total || 0),
+        deposited: depositCashByUser + depositCardByUser,
+        balance,
+        cash_balance: cashDue,
+        terminal_debt: terminalDue,
+        terminal_due_to_owner: terminalDue,
+        status,
+        collected_total: Number(r.collected_total || 0),
+        collected_cash: collectedCashByUser,
+        collected_card: collectedCardByUser,
+        deposit_cash: depositCashByUser,
+        deposit_card: depositCardByUser,
+        cash_due_to_owner: cashDue
+      };
+    });
 
     // Salary payouts from money_ledger (DISPATCHER_SHIFT)
     const salaryPaidRow = db.prepare(`
@@ -428,7 +547,30 @@ router.post('/close', (req, res) => {
     const salaryPaidCash = Number(salaryPaidRow?.salary_paid_cash || 0);
     const salaryPaidCard = Number(salaryPaidRow?.salary_paid_card || 0);
     const salaryPaidTotal = salaryPaidCash + salaryPaidCard;
-    const salaryDue = 0;  // TEMP: will come from motivation engine
+    
+    // Salary due from motivation engine + per-seller breakdown
+    let salaryDue = 0;
+    let payoutsByUserId = new Map();
+    try {
+      const motivationResult = calcMotivationDay(db, businessDay);
+      if (motivationResult?.data?.payouts) {
+        for (const p of motivationResult.data.payouts) {
+          payoutsByUserId.set(Number(p.user_id), p);
+        }
+        salaryDue = motivationResult.data.payouts.reduce((sum, p) => sum + Number(p.total || 0), 0);
+      }
+    } catch (e) {
+      salaryDue = 0;
+    }
+    
+    // Add per-seller salary fields to sellers_json
+    for (const s of sellers) {
+      const sid = Number(s.seller_id);
+      const payout = payoutsByUserId.get(sid);
+      s.salary_due = Number(payout?.total || 0);
+      s.salary_due_total = Number(payout?.total || 0);
+      s.salary_accrued = Number(payout?.total || 0);
+    }
 
     // --- CASHBOX SANITY CHECK ---
     // Ensure cashbox_json column exists
@@ -437,11 +579,21 @@ router.post('/close', (req, res) => {
     // Cash in cashbox = net_cash - deposit_cash - salary_paid_cash
     const cash_in_cashbox = netCash - depositCash - salaryPaidCash;
 
-    // Expected sellers cash due = sum of positive cash_due_to_owner (balance)
+    // Expected sellers cash due = sum of positive cash_due_to_owner
     const expected_sellers_cash_due = sellers.reduce((sum, s) => {
-      const due = Math.max(0, Number(s.balance || s.cash_balance || 0));
+      const due = Math.max(0, Number(s.cash_due_to_owner ?? s.cash_balance ?? s.balance ?? 0));
       return sum + due;
     }, 0);
+
+    const sellers_debt_total = sellers.reduce((sum, s) => {
+      const cashDue = Math.max(0, Number(s.cash_due_to_owner ?? s.cash_balance ?? s.balance ?? 0));
+      const terminalDue = Math.max(0, Number(s.terminal_due_to_owner ?? s.terminal_debt ?? 0));
+      return sum + cashDue + terminalDue;
+    }, 0);
+
+    const futureTripsReserve = calcFutureTripsReserveForBusinessDay(businessDay);
+    const owner_cash_available = netTotal - salaryDue - sellers_debt_total;
+    const owner_cash_available_after_future_reserve_cash = owner_cash_available - Number(futureTripsReserve.cash || 0);
 
     // Cash discrepancy = cash_in_cashbox - expected_sellers_cash_due
     const cash_discrepancy = cash_in_cashbox - expected_sellers_cash_due;
@@ -465,7 +617,13 @@ router.post('/close', (req, res) => {
       deposits_cash_total: depositCash,
       salary_paid_cash: salaryPaidCash,
       cash_discrepancy,
-      warnings
+      warnings,
+      future_trips_reserve_cash: Number(futureTripsReserve.cash || 0),
+      future_trips_reserve_card: Number(futureTripsReserve.card || 0),
+      future_trips_reserve_total: Number(futureTripsReserve.total || 0),
+      future_trips_reserve_unresolved_trip_day_count: Number(futureTripsReserve.unresolvedTripDayCount || 0),
+      owner_cash_available,
+      owner_cash_available_after_future_reserve_cash
     });
 
     // Insert snapshot
@@ -516,6 +674,66 @@ router.post('/close', (req, res) => {
     );
 
     console.log(`[SHIFT_CLOSE] business_day=${businessDay} closed_by=${userId} total_revenue=${totalRevenue} collected=${collectedTotal}`);
+
+    // --- INSERT WITHHOLD LEDGER ENTRIES (idempotent, race-safe) ---
+    // SOFT-LOCK: Check if day is already locked (has WITHHOLD entries)
+    const isDayLocked = db.prepare(`
+      SELECT 1 FROM money_ledger
+      WHERE business_day = ? AND kind = 'FUND' AND type IN ('WITHHOLD_WEEKLY', 'WITHHOLD_SEASON') AND status = 'POSTED'
+      LIMIT 1
+    `).get(businessDay);
+    
+    if (isDayLocked) {
+      console.log(`[SHIFT_CLOSE] Day ${businessDay} is already locked, skipping withhold recalculation`);
+    } else {
+      // Get withhold amounts from motivation engine
+      try {
+        const motivationResult = calcMotivationDay(db, businessDay);
+        const weeklyAmount = Number(motivationResult?.data?.withhold?.weekly_amount || 0);
+        const seasonAmount = Number(motivationResult?.data?.withhold?.season_amount || 0);
+        
+        const now = new Date().toISOString();
+        
+        // Use transaction for atomic check-and-insert (prevents race condition)
+        const insertWithhold = db.transaction(() => {
+          // Check WEEKLY
+          const existingWeekly = db.prepare(`
+            SELECT 1 FROM money_ledger 
+            WHERE business_day = ? AND kind = 'FUND' AND type = 'WITHHOLD_WEEKLY' AND status = 'POSTED'
+            LIMIT 1
+          `).get(businessDay);
+          
+          if (!existingWeekly && weeklyAmount > 0) {
+            db.prepare(`
+              INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time, decision_final)
+              VALUES ('FUND', 'WITHHOLD_WEEKLY', 'INTERNAL', ?, 'POSTED', NULL, ?, ?, 1)
+            `).run(weeklyAmount, businessDay, now);
+            console.log(`[SHIFT_CLOSE] Inserted WITHHOLD_WEEKLY ledger: ${weeklyAmount} for ${businessDay}`);
+          }
+          
+          // Check SEASON
+          const existingSeason = db.prepare(`
+            SELECT 1 FROM money_ledger 
+            WHERE business_day = ? AND kind = 'FUND' AND type = 'WITHHOLD_SEASON' AND status = 'POSTED'
+            LIMIT 1
+          `).get(businessDay);
+          
+          if (!existingSeason && seasonAmount > 0) {
+            db.prepare(`
+              INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time, decision_final)
+              VALUES ('FUND', 'WITHHOLD_SEASON', 'INTERNAL', ?, 'POSTED', NULL, ?, ?, 1)
+            `).run(seasonAmount, businessDay, now);
+            console.log(`[SHIFT_CLOSE] Inserted WITHHOLD_SEASON ledger: ${seasonAmount} for ${businessDay}`);
+          }
+        });
+        
+        // Execute transaction
+        insertWithhold();
+      } catch (withholdError) {
+        console.error('[SHIFT_CLOSE_WITHHOLD_LEDGER_ERROR]', withholdError);
+        // Don't fail the shift close if withhold ledger insertion fails
+      }
+    }
 
     // Get closed_at from the inserted row
     const closedRow = db.prepare(`SELECT closed_at FROM shift_closures WHERE business_day = ? LIMIT 1`).get(businessDay);

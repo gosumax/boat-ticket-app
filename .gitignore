@@ -34,5 +34,11 @@ database.sqlite
 database.sqlite-wal
 database.sqlite-shm
 server/database.sqlite*
-server/h.txt 
-.env 
+server/h.txt
+.env
+_owner_mjs.diff.txt*
+server/.mjs
+/=
+/cd
+/curl
+/\{

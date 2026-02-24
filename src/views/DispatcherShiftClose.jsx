@@ -1,6 +1,4 @@
 import { useState, useEffect, useMemo, Fragment } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../utils/apiClient';
 import { formatRUB } from '../utils/currency';
 import normalizeSummary from '../utils/normalizeSummary';
@@ -9,8 +7,6 @@ const COMMISSION_PERCENT = 13; // Temporary commission rate
 
 // Backend сдачи денег: пытаемся использовать реальный endpoint.
 // Если endpoint недоступен — UI продолжит работать в локальном (мок) режиме.
-const BACKEND_DEPOSIT_ENABLED_DEFAULT = true;
-
 function toLocalBusinessDay(d = new Date()) {
   const dt = new Date(d);
   const y = dt.getFullYear();
@@ -19,17 +15,28 @@ function toLocalBusinessDay(d = new Date()) {
   return `${y}-${m}-${day}`;
 }
 
+function formatRUBPrecise(v) {
+  const n = Number(v || 0);
+  try {
+    return new Intl.NumberFormat('ru-RU', {
+      style: 'currency',
+      currency: 'RUB',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(n);
+  } catch {
+    return `${n.toFixed(2)} ₽`;
+  }
+}
+
 const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
-  const navigate = useNavigate();
-  const { logout: authLogout } = useAuth();
-  
-  // Mock data for shift closing
+  // Shift data
   const [dailySummary, setDailySummary] = useState(null);
   const [sellersData, setSellersData] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Флаг доступности backend-эндпоинтов сдачи.
-  const [backendDepositEnabled, setBackendDepositEnabled] = useState(BACKEND_DEPOSIT_ENABLED_DEFAULT);
+  const [loadError, setLoadError] = useState('');
+  const [reloading, setReloading] = useState(false);
 
   // Черновики сумм сдачи (локально, пока backend не подключён)
   // drafts[sellerId] = { cash: string|number, terminal: string|number }
@@ -71,45 +78,6 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
 
   // Explain section (human-readable breakdown)
   const [explainData, setExplainData] = useState(null);
-
-  // Function to generate mock data
-  const generateMockData = () => {
-    // Mock daily summary
-    const mockSummary = {
-      totalRevenue: 125000,
-      cashRevenue: 75000,
-      cardRevenue: 50000,
-      unassigned: 0,
-      commissionPaid: 16250 // 13% of total revenue
-    };
-    
-    // Mock sellers data
-    // Поля под закрытие смены:
-    //  - cashRemaining: сколько налички/предоплат осталось у продавца (надо сдать)
-    //  - terminalDebt: сколько "долг по терминалу" осталось у продавца (надо закрыть)
-    const mockSellers = [
-      { id: 1, name: 'Иванова А.', totalSales: 35000, cashSales: 20000, cardSales: 15000, cashHanded: 15000, terminalHanded: 0, cashRemaining: 5000, terminalDebt: 15000 },
-      { id: 2, name: 'Петров Б.', totalSales: 28000, cashSales: 18000, cardSales: 10000, cashHanded: 12000, terminalHanded: 0, cashRemaining: 6000, terminalDebt: 10000 },
-      { id: 3, name: 'Сидорова В.', totalSales: 42000, cashSales: 25000, cardSales: 17000, cashHanded: 15000, terminalHanded: 0, cashRemaining: 10000, terminalDebt: 17000 },
-      { id: 4, name: 'Козлов Г.', totalSales: 20000, cashSales: 12000, cardSales: 8000, cashHanded: 0, terminalHanded: 0, cashRemaining: 12000, terminalDebt: 8000 },
-    ];
-    
-    setDailySummary(mockSummary);
-    setSellersData(mockSellers);
-    // Инициализация черновиков (по умолчанию пусто)
-    const draftsInit = {};
-    const salaryDueInit = {};
-    const salaryPaidInit = {};
-    for (const s of mockSellers) {
-      draftsInit[s.id] = { cash: '', terminal: '' };
-      salaryDueInit[s.id] = '';
-      salaryPaidInit[s.id] = 0;
-    }
-    setDepositDrafts(draftsInit);
-    setSalaryDueDrafts(salaryDueInit);
-    setSalaryPaid(salaryPaidInit);
-    setLoading(false);
-  };
 
   const loadSummaryFromBackend = async (businessDay) => {
     const day = businessDay || toLocalBusinessDay();
@@ -199,16 +167,32 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     setDailySummary(summary);
     setSellersData(sellers);
     setDepositDrafts(draftsInit);
+    setLoadError('');
     setLoading(false);
+  };
+
+  const refreshSummary = async (businessDay) => {
+    const day = businessDay || normalizedSummary?.business_day || dailySummary?.businessDay || toLocalBusinessDay();
+    setReloading(true);
+    setLoadError('');
+    try {
+      await loadSummaryFromBackend(day);
+    } catch (e) {
+      const msg = e?.response?.error || e?.response?.message || e?.message || 'Не удалось загрузить данные смены';
+      setLoadError(msg);
+      setLoading(false);
+    } finally {
+      setReloading(false);
+    }
   };
   
   // Helper: handle API error, check for SHIFT_CLOSED, reload summary
   const handleApiError = async (error, operation) => {
-    const errData = error?.body || error?.data || {};
+    const errData = error?.response || error?.body || error?.data || {};
     if (errData?.code === 'SHIFT_CLOSED' || error?.status === 409) {
       // Shift was closed - reload summary to update UI
       const businessDay = normalizedSummary?.business_day || dailySummary?.businessDay || toLocalBusinessDay();
-      await loadSummaryFromBackend(businessDay);
+      await refreshSummary(businessDay);
       return { handled: true, shiftClosed: true };
     }
     console.error(`[${operation}] Error:`, error);
@@ -216,16 +200,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   };
 
   useEffect(() => {
-    (async () => {
-      try {
-        await loadSummaryFromBackend(toLocalBusinessDay());
-        setBackendDepositEnabled(true);
-      } catch (e) {
-        // backend not ready yet — keep UI usable
-        setBackendDepositEnabled(false);
-        generateMockData();
-      }
-    })();
+    refreshSummary(toLocalBusinessDay());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -282,6 +257,59 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     const remaining = Math.max(0, due - paid);
     return { due, paid, remaining };
   }, [salaryDue, salaryPaidTotal]);
+
+  const ownerCashAvailable = useMemo(() => {
+    return Number(
+      normalizedSummary?.net_cash ??
+      dailySummary?.netCash ??
+      0
+    );
+  }, [normalizedSummary, dailySummary]);
+
+  const futureTripsReserveCash = useMemo(() => {
+    return Number(
+      normalizedSummary?.future_trips_reserve_cash ??
+      explainData?.liabilities?.future_trips_reserve_cash ??
+      explainData?.liabilities?.prepayment_future_cash ??
+      0
+    );
+  }, [normalizedSummary, explainData]);
+
+  const futureTripsReserveCard = useMemo(() => {
+    return Number(
+      normalizedSummary?.future_trips_reserve_card ??
+      explainData?.liabilities?.future_trips_reserve_terminal ??
+      explainData?.liabilities?.prepayment_future_terminal ??
+      0
+    );
+  }, [normalizedSummary, explainData]);
+
+  const futureTripsReserveTotal = useMemo(
+    () => futureTripsReserveCash + futureTripsReserveCard,
+    [futureTripsReserveCash, futureTripsReserveCard]
+  );
+
+  const ownerCashAvailableAfterReserve = useMemo(() => {
+    return ownerCashAvailable - futureTripsReserveCash;
+  }, [ownerCashAvailable, futureTripsReserveCash]);
+
+  const fundsWithholdCashToday = useMemo(() => {
+    const fromServer = normalizedSummary?.funds_withhold_cash_today;
+    if (fromServer !== null && fromServer !== undefined) {
+      return Number(fromServer);
+    }
+    const withhold = normalizedSummary?.motivation_withhold;
+    if (!withhold) return 0;
+    return (
+      Number(withhold.weekly_amount || 0) +
+      Number(withhold.season_amount || 0) +
+      Number(withhold.dispatcher_amount_total || 0)
+    );
+  }, [normalizedSummary]);
+
+  const ownerCashHandoverFinal = useMemo(() => {
+    return ownerCashAvailableAfterReserve - fundsWithholdCashToday;
+  }, [ownerCashAvailableAfterReserve, fundsWithholdCashToday]);
   
   // Cash in cashbox calculation - use server truth if available, else fallback to local calculation
   const cashInCashbox = useMemo(() => {
@@ -330,13 +358,6 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     const amount = Math.max(0, Number(raw || 0));
     if (!amount) return;
 
-    if (!backendDepositEnabled) {
-      // Fallback: local update only
-      setSalaryPaidTotal((prev) => prev + amount);
-      setSalaryDraftBySellerId((prev) => ({ ...prev, [sellerId]: '' }));
-      return;
-    }
-
     try {
       const business_day = normalizedSummary?.business_day ?? dailySummary?.businessDay ?? toLocalBusinessDay();
       await apiClient.request('/dispatcher/shift/deposit', {
@@ -348,15 +369,12 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
           amount,
         },
       });
-      await loadSummaryFromBackend(business_day);
+      await refreshSummary(business_day);
       setSalaryDraftBySellerId((prev) => ({ ...prev, [sellerId]: '' }));
     } catch (e) {
       const result = await handleApiError(e, 'SALARY_PAYOUT');
       if (result.handled) return;
-      // Fallback: backend not available
-      setBackendDepositEnabled(false);
-      setSalaryPaidTotal((prev) => prev + amount);
-      setSalaryDraftBySellerId((prev) => ({ ...prev, [sellerId]: '' }));
+      alert('Не удалось провести выплату зарплаты. Проверь соединение и попробуй снова.');
     }
   };
 
@@ -366,23 +384,6 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     const raw = depositDrafts?.[sellerId]?.cash;
     const amount = Math.max(0, Number(raw || 0));
     if (!amount) return;
-
-    if (!backendDepositEnabled) {
-      // Пока backend не подключён — имитируем проведение локально, чтобы диспетчер понимал итог.
-      setSellersData((prev) =>
-        prev.map((x) => {
-          if (x.id !== sellerId) return x;
-          const newRem = Math.max(0, Number(x.cashRemaining || 0) - amount);
-          return {
-            ...x,
-            cashHanded: Number(x.cashHanded || 0) + amount,
-            cashRemaining: newRem,
-          };
-        })
-      );
-      setDraftValue(sellerId, 'cash', '');
-      return;
-    }
 
     try {
       const business_day = normalizedSummary?.business_day ?? dailySummary?.businessDay ?? toLocalBusinessDay();
@@ -395,25 +396,12 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
           amount,
         },
       });
-      await loadSummaryFromBackend(business_day);
+      await refreshSummary(business_day);
       setDraftValue(sellerId, 'cash', '');
     } catch (e) {
       const result = await handleApiError(e, 'CASH_DEPOSIT');
       if (result.handled) return;
-      // Фоллбек: backend не готов/недоступен
-      setBackendDepositEnabled(false);
-      setSellersData((prev) =>
-        prev.map((x) => {
-          if (x.id !== sellerId) return x;
-          const newRem = Math.max(0, Number(x.cashRemaining || 0) - amount);
-          return {
-            ...x,
-            cashHanded: Number(x.cashHanded || 0) + amount,
-            cashRemaining: newRem,
-          };
-        })
-      );
-      setDraftValue(sellerId, 'cash', '');
+      alert('Не удалось провести сдачу наличных. Проверь соединение и попробуй снова.');
     }
   };
 
@@ -423,22 +411,6 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     const raw = depositDrafts?.[sellerId]?.terminal;
     const amount = Math.max(0, Number(raw || 0));
     if (!amount) return;
-
-    if (!backendDepositEnabled) {
-      setSellersData((prev) =>
-        prev.map((x) => {
-          if (x.id !== sellerId) return x;
-          const newRem = Math.max(0, Number(x.terminalDebt || 0) - amount);
-          return {
-            ...x,
-            terminalHanded: Number(x.terminalHanded || 0) + amount,
-            terminalDebt: newRem,
-          };
-        })
-      );
-      setDraftValue(sellerId, 'terminal', '');
-      return;
-    }
 
     try {
       const business_day = normalizedSummary?.business_day ?? dailySummary?.businessDay ?? toLocalBusinessDay();
@@ -451,28 +423,16 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
           amount,
         },
       });
-      await loadSummaryFromBackend(business_day);
+      await refreshSummary(business_day);
       setDraftValue(sellerId, 'terminal', '');
     } catch (e) {
       const result = await handleApiError(e, 'TERMINAL_CLOSE');
       if (result.handled) return;
-      setBackendDepositEnabled(false);
-      setSellersData((prev) =>
-        prev.map((x) => {
-          if (x.id !== sellerId) return x;
-          const newRem = Math.max(0, Number(x.terminalDebt || 0) - amount);
-          return {
-            ...x,
-            terminalHanded: Number(x.terminalHanded || 0) + amount,
-            terminalDebt: newRem,
-          };
-        })
-      );
-      setDraftValue(sellerId, 'terminal', '');
+      alert('Не удалось закрыть терминальный долг. Проверь соединение и попробуй снова.');
     }
   };
 
-  const handleShiftClose = () => {
+  const handleShiftClose = async () => {
     if (!allChecked) {
       alert('Отметь все пункты подтверждения перед закрытием смены.');
       return;
@@ -485,11 +445,49 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
       alert('Нельзя закрыть смену: есть несданные суммы у продавцов.');
       return;
     }
-    if (window.confirm('Вы уверены, что хотите закрыть смену?')) {
+    if (!window.confirm('Вы уверены, что хотите закрыть смену?')) return;
+
+    const business_day = normalizedSummary?.business_day ?? dailySummary?.businessDay ?? toLocalBusinessDay();
+
+    try {
+      await apiClient.request('/dispatcher/shift/close', {
+        method: 'POST',
+        body: { business_day },
+      });
+
+      // Success: ok:true
       setShiftClosed(true);
-      localStorage.setItem('dispatcher_shiftClosed', 'true');
       if (setGlobalShiftClosed) setGlobalShiftClosed(true);
+      try { localStorage.setItem('dispatcher_shiftClosed', 'true'); } catch {}
       alert('Смена закрыта');
+
+      // Refetch summary to switch to snapshot source
+      await refreshSummary(business_day);
+    } catch (e) {
+      const errData = e?.response || e?.body || e?.data || {};
+      const status = e?.status;
+
+      // 409: already closed (idempotent)
+      if (status === 409 || errData?.code === 'SHIFT_CLOSED') {
+        setShiftClosed(true);
+        if (setGlobalShiftClosed) setGlobalShiftClosed(true);
+        try { localStorage.setItem('dispatcher_shiftClosed', 'true'); } catch {}
+        await refreshSummary(business_day);
+        alert('Смена уже закрыта');
+        return;
+      }
+
+      // 400: validation error (open trips, etc.)
+      if (status === 400) {
+        const msg = errData?.error || errData?.message || JSON.stringify(errData);
+        alert(`Нельзя закрыть смену: ${msg}`);
+        return;
+      }
+
+      // Other errors
+      console.error('shift close failed', e);
+      const msg = errData?.error || errData?.message || 'Проверь соединение и повтори.';
+      alert(`Ошибка закрытия смены. ${msg}`);
     }
   };
 
@@ -513,19 +511,34 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     : Number(debtSummary.total || 0) > 0
     ? `Есть несданные суммы у продавцов: ${formatRUB(debtSummary.total)}`
     : '';
-
-
-  const logout = () => {
-    authLogout();
-    navigate('/login', { replace: true });
-  };
-
   if (loading) {
     return (
       <div className="min-h-screen bg-neutral-950">
         <div className="p-3">
           <div className="max-w-4xl mx-auto">
             <div className="text-center py-8">Загрузка...</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!dailySummary) {
+    return (
+      <div className="min-h-screen bg-neutral-950">
+        <div className="p-3">
+          <div className="max-w-4xl mx-auto">
+            <div className="bg-neutral-900 rounded-2xl p-4 text-center">
+              <div className="text-red-300 mb-3">Не удалось загрузить данные смены.</div>
+              <button
+                type="button"
+                onClick={() => refreshSummary()}
+                disabled={reloading}
+                className="px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-neutral-200 hover:bg-neutral-900 disabled:opacity-60"
+              >
+                {reloading ? 'Обновление...' : 'Повторить'}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -542,6 +555,14 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-xl font-bold text-neutral-100">ИТОГО ЗА ДЕНЬ</h2>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => refreshSummary()}
+                  disabled={reloading}
+                  className="px-2 py-1 rounded-lg border border-neutral-700 bg-neutral-950 text-neutral-300 text-sm hover:bg-neutral-900 disabled:opacity-60"
+                >
+                  {reloading ? 'Обновление...' : 'Обновить'}
+                </button>
                 {shiftClosed ? (
                   <span className="px-2 py-1 bg-green-900/50 text-green-300 rounded-lg text-sm">
                     ✓ Закрыта ({shiftSource === 'snapshot' ? 'snapshot' : 'live'})
@@ -557,46 +578,52 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
             {/* Closed shift message */}
             {shiftClosed && closedAt && (
               <div className="mb-3 p-2 bg-green-950/50 border border-green-900/50 rounded-lg text-sm text-green-300 text-center">
-                Смена закрыта в {closedAt}. Операции запрещены.
+                Смена закрыта в {closedAt}{closedBy ? ` (id: ${closedBy})` : ''}. Операции запрещены.
               </div>
             )}
+            {loadError ? (
+              <div className="mb-3 p-2 bg-red-950/40 border border-red-900/50 rounded-lg text-sm text-red-300 text-center">
+                Ошибка загрузки смены: {loadError}
+              </div>
+            ) : null}
             
             {/* КАССА ЗА СМЕНУ - компактный блок */}
-            <div className="bg-neutral-950/50 border border-neutral-800 p-4 rounded-lg">
+            <div className="bg-neutral-950/50 border border-neutral-800 p-4 rounded-lg" data-testid="shiftclose-summary">
               <div className="grid grid-cols-3 gap-4 text-center">
                 <div>
                   <div className="text-neutral-400 text-sm">Наличные получено</div>
-                  <div className="text-2xl font-bold text-green-400">{formatRUB(dailySummary.cashRevenue)}</div>
+                  <div data-testid="shiftclose-cash-received" className="text-2xl font-bold text-green-400">{formatRUB(dailySummary.cashRevenue)}</div>
                 </div>
                 <div>
                   <div className="text-neutral-400 text-sm">Терминал получено</div>
-                  <div className="text-2xl font-bold text-blue-400">{formatRUB(dailySummary.cardRevenue)}</div>
+                  <div data-testid="shiftclose-card-received" className="text-2xl font-bold text-blue-400">{formatRUB(dailySummary.cardRevenue)}</div>
                 </div>
                 <div>
                   <div className="text-neutral-400 text-sm">Итого получено</div>
-                  <div className="text-2xl font-bold text-emerald-400">{formatRUB(dailySummary.cashRevenue + dailySummary.cardRevenue)}</div>
+                  <div data-testid="shiftclose-total-received" className="text-2xl font-bold text-emerald-400">{formatRUB(dailySummary.cashRevenue + dailySummary.cardRevenue)}</div>
                 </div>
               </div>
               
-              {/* Предоплаты будущих рейсов */}
-              {explainData && (explainData.liabilities?.prepayment_future_cash > 0 || explainData.liabilities?.prepayment_future_terminal > 0) && (
-                <div className="mt-3 pt-3 border-t border-neutral-800 text-xs text-neutral-500 text-center">
-                  <span 
-                    className="cursor-help text-neutral-500 hover:text-neutral-300" 
-                    title="Это деньги, полученные сегодня за рейсы в будущие дни. Это не 'заработано', это обязательство: при отмене делается возврат предоплаты."
-                  >?</span>
-                  {' '}Предоплаты будущих рейсов: {formatRUB((explainData.liabilities?.prepayment_future_cash || 0) + (explainData.liabilities?.prepayment_future_terminal || 0))}
-                </div>
-              )}
+              {/* Резерв будущих рейсов */}
+              <div className="mt-3 pt-3 border-t border-neutral-800 text-xs text-neutral-500 text-center">
+                <span
+                  className="cursor-help text-neutral-500 hover:text-neutral-300"
+                  title="Это деньги, полученные сегодня за рейсы в будущие дни. Это обязательство до факта поездки/возможного возврата."
+                >?</span>
+                {' '}Резерв будущих рейсов:
+                {' '}нал {formatRUB(futureTripsReserveCash)}
+                {' '}| карта {formatRUB(futureTripsReserveCard)}
+                {' '}| итого {formatRUB(futureTripsReserveTotal)}
+              </div>
             </div>
 
             {/* ОПЕРАЦИИ НА ЗАКРЫТИЕ */}
             <div className="mt-3 bg-neutral-950/30 border border-neutral-800 p-3 rounded-lg">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                 {/* Собрать с продавцов */}
                 <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
                   <span className="text-neutral-400">Собрать с продавцов:</span>
-                  <span className={`text-lg font-bold ${debtSummary.total > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                  <span data-testid="shiftclose-sellers-debt-total" className={`text-lg font-bold ${debtSummary.total > 0 ? 'text-red-400' : 'text-green-400'}`}>
                     {formatRUB(debtSummary.total)}
                   </span>
                 </div>
@@ -604,17 +631,50 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                 {/* К выдаче зарплат */}
                 <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
                   <span className="text-neutral-400">К выдаче зарплат:</span>
-                  <span className="text-lg font-bold text-blue-400">
-                    {formatRUB(salaryPaidTotal > 0 ? salaryPaidTotal : dailySummary.commissionPaid || 0)}
+                  <span data-testid="shiftclose-salary-due-remaining" className="text-lg font-bold text-blue-400" title={`Уже выплачено: ${formatRUB(salaryPaidTotal)} (нал: ${formatRUB(salaryPaidCash)}, терминал: ${formatRUB(salaryPaidCard)})`}>
+                    {formatRUB(salarySummary.remaining)}
                   </span>
                 </div>
-                
-                {/* К сдаче owner'у */}
-                <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
-                  <span className="text-neutral-400">К сдаче owner'у:</span>
-                  <span className="text-lg font-bold text-purple-400">
-                    {formatRUB(dailySummary.netTotal)}
-                  </span>
+              </div>
+
+              <div className="mt-3 rounded-xl border border-emerald-700/60 bg-emerald-950/40 p-4 text-center">
+                <div className="text-sm font-semibold text-neutral-100">Сдать owner наличными сегодня</div>
+                <div data-testid="shiftclose-owner-final-kpi" className={`mt-1 text-4xl font-extrabold tracking-tight ${ownerCashHandoverFinal < 0 ? 'text-red-300' : 'text-emerald-300'}`}>
+                  {formatRUB(ownerCashHandoverFinal)}
+                </div>
+                <div data-testid="shiftclose-owner-final-kpi-formula" className="mt-1 text-xs text-neutral-300">
+                  Нал получено − резерв (нал) − фонды (нал, если применимо) = сдать owner
+                </div>
+                <div className="mt-1 text-[11px] text-neutral-400">Эта цифра = "Можно забрать из кассы" в Owner → Деньги.</div>
+              </div>
+
+              <div className="mt-3 rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
+                <div className="text-xs uppercase tracking-wide text-neutral-400">Детали расчёта</div>
+                <div className="mt-2 space-y-2 text-xs">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-neutral-400">К сдаче owner'у (без учёта резерва):</span>
+                    <span data-testid="shiftclose-owner-cash-available" className={`font-semibold ${ownerCashAvailable < 0 ? 'text-red-300' : 'text-neutral-200'}`}>
+                      {formatRUB(ownerCashAvailable)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-neutral-400">Минус резерв будущих рейсов (нал):</span>
+                    <span data-testid="shiftclose-future-reserve-cash" className="font-semibold text-amber-300">
+                      {formatRUB(futureTripsReserveCash)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-neutral-400">К сдаче owner'у (с учётом резерва):</span>
+                    <span data-testid="shiftclose-owner-cash-after-reserve" className={`font-semibold ${ownerCashAvailableAfterReserve < 0 ? 'text-red-300' : 'text-neutral-200'}`}>
+                      {formatRUB(ownerCashAvailableAfterReserve)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-neutral-400">Фондовые обязательства сегодня (нал):</span>
+                    <span data-testid="shiftclose-funds-withhold-cash-today" className="font-semibold text-purple-300">
+                      {formatRUB(fundsWithholdCashToday)}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -625,6 +685,47 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                 <div className="text-neutral-400 text-sm">Возвраты</div>
                 <div className="text-xl font-bold text-red-400">{formatRUB(dailySummary.refundTotal)}</div>
                 <div className="mt-1 text-xs text-neutral-500">Нал: {formatRUB(dailySummary.refundCash)} | Терминал: {formatRUB(dailySummary.refundCard)}</div>
+              </div>
+            )}
+          
+            {/* Motivation withhold breakdown */}
+            {normalizedSummary?.motivation_withhold && (
+              <div className="mt-3 bg-purple-950/30 border border-purple-900/50 p-3 rounded-lg">
+                <div className="text-sm font-semibold text-purple-300 mb-2">Удержания из фонда мотивации</div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+                  <div data-testid="shiftclose-withhold-weekly" className="flex flex-col">
+                    <span className="text-neutral-400">Weekly фонд</span>
+                    <span className="text-lg font-bold text-purple-300">{formatRUBPrecise(normalizedSummary.motivation_withhold.weekly_amount)}</span>
+                  </div>
+                  <div data-testid="shiftclose-withhold-season" className="flex flex-col">
+                    <span className="text-neutral-400">Season фонд</span>
+                    <span className="text-lg font-bold text-purple-300">{formatRUBPrecise(normalizedSummary.motivation_withhold.season_amount)}</span>
+                  </div>
+                  <div data-testid="shiftclose-withhold-dispatcher" className="flex flex-col">
+                    <span className="text-neutral-400">Бонус диспетчерам</span>
+                    <span className="text-lg font-bold text-purple-300">
+                      {formatRUB(normalizedSummary.motivation_withhold.dispatcher_amount_total)}
+                      <span className="text-xs text-neutral-500 ml-1">(активных: {normalizedSummary.motivation_withhold.active_dispatchers_count})</span>
+                    </span>
+                  </div>
+                  <div data-testid="shiftclose-withhold-fund-original" className="flex flex-col">
+                    <span className="text-neutral-400">Фонд до удержаний</span>
+                    <span className="text-lg font-bold text-neutral-200">{formatRUB(normalizedSummary.motivation_withhold.fund_total_original)}</span>
+                  </div>
+                  <div data-testid="shiftclose-withhold-fund-after" className="flex flex-col">
+                    <span className="text-neutral-400">Фонд после удержаний</span>
+                    <span className="text-lg font-bold text-emerald-300">{formatRUB(normalizedSummary.motivation_withhold.fund_total_after_withhold)}</span>
+                  </div>
+                  <div data-testid="shiftclose-withhold-rounding-season" className="flex flex-col">
+                    <span className="text-neutral-400">Округления → Season</span>
+                    <span className="text-lg font-bold text-amber-300">
+                      {formatRUBPrecise(normalizedSummary.motivation_withhold.rounding_to_season_amount_total)}
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-2 text-xs text-neutral-500">
+                  Удержание на диспетчеров: {(normalizedSummary.motivation_withhold.dispatcher_percent_total * 100).toFixed(2)}% (на одного: {(normalizedSummary.motivation_withhold.dispatcher_percent_per_person * 100).toFixed(2)}%)
+                </div>
               </div>
             )}
           
@@ -652,7 +753,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
           </div>
           
           {/* По продавцам - wider on desktop */}
-          <div className="lg:-mx-4 xl:-mx-8">
+          <div className="lg:-mx-4 xl:-mx-8" data-testid="shiftclose-sellers-section">
             <div className="lg:px-4 xl:px-8">
               <div className="bg-neutral-900 rounded-2xl p-3 lg:p-4">
                 <div className="flex items-start justify-between gap-3 mb-2">
@@ -701,7 +802,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                     if (sellersForRender.length === 0) {
                       return (
                         <tr>
-                          <td colSpan={5} className="py-4 text-center text-neutral-500">
+                          <td colSpan={5} className="py-4 text-center text-neutral-500" data-testid="shiftclose-sellers-empty">
                             Нет данных по продавцам за этот день
                           </td>
                         </tr>
@@ -733,13 +834,13 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
 
                       return (
                         <Fragment key={s.id}>
-                          <tr className="border-b hover:bg-neutral-950">
+                          <tr className="border-b hover:bg-neutral-950" data-testid={`shiftclose-seller-row-${s.id}`}>
                             <td className="py-3">{s.name}</td>
                             <td className="py-3">
-                              <span className={`inline-flex items-center px-2 py-1 rounded-md border text-xs ${stClass}`}>{stLabel}</span>
+                              <span data-testid={`shiftclose-seller-status-${s.id}`} className={`inline-flex items-center px-2 py-1 rounded-md border text-xs ${stClass}`}>{stLabel}</span>
                             </td>
-                            <td className={`text-right py-3 ${cashRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>{formatRUB(cashRem)}</td>
-                            <td className={`text-right py-3 ${termRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>{formatRUB(termRem)}</td>
+                            <td data-testid={`shiftclose-seller-cash-remaining-${s.id}`} className={`text-right py-3 ${cashRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>{formatRUB(cashRem)}</td>
+                            <td data-testid={`shiftclose-seller-terminal-debt-${s.id}`} className={`text-right py-3 ${termRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>{formatRUB(termRem)}</td>
                             <td className="py-3 text-right">
                               <button
                                 type="button"

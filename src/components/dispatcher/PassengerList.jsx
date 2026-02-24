@@ -576,7 +576,17 @@ const loadTransferOptions = async (ctx) => {
     setConfirmError(null);
   };
 
-  const handleTicketOperation = async (ticketId, action) => {
+  const findPresaleByTicketId = (ticketId) => {
+    for (const [psId, ticketData] of Object.entries(tickets)) {
+      const ticketList = ticketData?.tickets || ticketData;
+      if (Array.isArray(ticketList) && ticketList.some(t => t?.id == ticketId)) {
+        return presales.find(p => p.id == psId) || null;
+      }
+    }
+    return null;
+  };
+
+  const handleTicketOperation = async (ticketId, action, decision = null) => {
     setConfirmLoading(true);
     setConfirmError(null);
 
@@ -605,28 +615,6 @@ const loadTransferOptions = async (ctx) => {
       return;
     }
 
-    // If deleting the LAST ACTIVE ticket of a presale that has prepayment,
-    // require dispatcher decision: refund prepay vs send to seasonal fund.
-    // NOTE: for partial deletion (2 -> 1), modal must NOT appear and prepay stays on order.
-    if (action === 'delete' && presaleForTicket && presaleIdForTicket != null) {
-      const prepay = safeToInt(presaleForTicket?.prepayment_amount, 0);
-      if (prepay > 0) {
-        const presaleTickets = getPresaleTicketsArray(presaleIdForTicket, tickets);
-        const activeCnt = presaleTickets.filter(t => getTicketStatus(t) === 'ACTIVE').length;
-
-        if (activeCnt <= 1) {
-          // close generic confirm modal and open prepay decision modal
-          setConfirmBoardingOpen(false);
-          setPendingTicketOperation(null);
-          setConfirmLoading(false);
-          setPrepayDecisionError(null);
-          setPrepayDecisionCtx({ presaleId: presaleIdForTicket, ticketId, prepayAmount: prepay });
-          setPrepayDecisionOpen(true);
-          return;
-        }
-      }
-    }
-
     try {
       let updatedTicket;
       if (action === 'use') {
@@ -637,7 +625,8 @@ const loadTransferOptions = async (ctx) => {
         // transfer is handled via Transfer Modal (requires destination slot)
         throw new Error('Перенос требует выбора рейса');
       } else if (action === 'delete') {
-        updatedTicket = await apiClient.deleteTicket(ticketId);
+        const payload = decision ? { decision: String(decision).toUpperCase() } : undefined;
+        updatedTicket = await apiClient.deleteTicket(ticketId, payload);
       }
 
       // Immediately reload tickets for this presale so UI updates without page refresh
@@ -734,14 +723,7 @@ const loadTransferOptions = async (ctx) => {
 
   const handleTicketActionClick = (ticketId, action) => {
     // Find presale by ticket (to validate status)
-    let presaleForTicket = null;
-    for (const [psId, ticketData] of Object.entries(tickets)) {
-      const ticketList = ticketData?.tickets || ticketData;
-      if (Array.isArray(ticketList) && ticketList.some(t => t?.id == ticketId)) {
-        presaleForTicket = presales.find(p => p.id == psId);
-        break;
-      }
-    }
+    const presaleForTicket = findPresaleByTicketId(ticketId);
 
     if (presaleForTicket && !ALLOWED_PRESALE_STATUSES_FOR_TICKET_OPS.includes(presaleForTicket.status)) {
       setConfirmError('Билет недоступен для действия');
@@ -765,7 +747,18 @@ const loadTransferOptions = async (ctx) => {
     if (pendingTicketOperation) {
       // Handle ticket operation
       const { ticketId, action } = pendingTicketOperation;
-      await handleTicketOperation(ticketId, action);
+      const ticketPresale = findPresaleByTicketId(ticketId);
+      const prepay = safeToInt(ticketPresale?.prepayment_amount, 0);
+      if (action === 'delete' && prepay > 0) {
+        const d = String(decision || '').toUpperCase();
+        if (d !== 'REFUND' && d !== 'FUND') {
+          setConfirmError('Р’С‹Р±РµСЂРё: РІРµСЂРЅСѓС‚СЊ РїСЂРµРґРѕРїР»Р°С‚Сѓ РёР»Рё РѕС‚РїСЂР°РІРёС‚СЊ РІ СЃРµР·РѕРЅРЅС‹Р№ С„РѕРЅРґ');
+          return;
+        }
+        await handleTicketOperation(ticketId, action, d);
+      } else {
+        await handleTicketOperation(ticketId, action);
+      }
     } else {
       // Handle presale operation
       const idToUse = pendingPassengerId || pendingPresaleGroup?.id;
@@ -884,7 +877,12 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
         } catch (e) {}
       } catch (error) {
         console.error('Error performing presale operation:', error);
-        setConfirmError(error?.message || 'Ошибка операции');
+        // Handle SHIFT_CLOSED guard
+        if (error?.status === 409 && error?.response?.code === 'SHIFT_CLOSED') {
+          setConfirmError('Нельзя отменить продажу: смена за этот день уже закрыта. Обратитесь к owner.');
+        } else {
+          setConfirmError(error?.message || 'Ошибка операции');
+        }
         setConfirmLoading(false);
       }
     }
@@ -1427,8 +1425,14 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
       {(() => {
         const idToUse = pendingPassengerId || pendingPresaleGroup?.id;
         const presaleToOperate = idToUse ? presales.find(p => p.id == idToUse) : null;
-        const prepay = safeToInt(presaleToOperate?.prepayment_amount, 0);
-        const mode = (!pendingTicketOperation && pendingPresaleOperation === 'delete' && prepay > 0)
+        const ticketPresale = pendingTicketOperation ? findPresaleByTicketId(pendingTicketOperation.ticketId) : null;
+        const prepay = pendingTicketOperation
+          ? safeToInt(ticketPresale?.prepayment_amount, 0)
+          : safeToInt(presaleToOperate?.prepayment_amount, 0);
+        const mode = (
+          (!pendingTicketOperation && pendingPresaleOperation === 'delete' && prepay > 0) ||
+          (pendingTicketOperation?.action === 'delete' && prepay > 0)
+        )
           ? 'prepay_decision'
           : 'boarding';
 

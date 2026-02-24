@@ -91,10 +91,7 @@ export function ensureOwnerRoleAndUser(db, { username = 'owner', password = 'own
         VALUES (?, ?, ?, ?)
       `);
       stmt.run(username, hashedPassword, 'owner', 1);
-      console.log('[OWNER_SETUP] Initial owner user created:');
-      console.log(`Username: ${username}`);
-      console.log(`Password: ${password}`);
-      console.log('Please change this password immediately!');
+      console.log('[OWNER_SETUP] Initial owner user created.');
     }
   } catch (e) {
     console.error('[OWNER_SETUP] Failed:', e?.message);

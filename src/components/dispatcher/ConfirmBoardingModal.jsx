@@ -25,7 +25,10 @@ const ConfirmBoardingModal = ({
     : 'После подтверждения посадки возврат по этому билету будет недоступен.';
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+    <div
+      className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+      data-testid={isPrepayDecision ? 'dispatcher-prepay-decision-modal' : 'dispatcher-confirm-modal'}
+    >
       <div className="bg-white p-6 rounded-lg max-w-sm w-full">
         <h3 className="font-semibold text-lg mb-2">{title}</h3>
 
@@ -40,6 +43,7 @@ const ConfirmBoardingModal = ({
             className="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300 transition-colors"
             onClick={onClose}
             disabled={loading}
+            data-testid="dispatcher-confirm-cancel"
           >
             Отмена
           </button>
@@ -52,6 +56,7 @@ const ConfirmBoardingModal = ({
                 }`}
                 onClick={() => onConfirm?.('REFUND')}
                 disabled={loading}
+                data-testid="dispatcher-prepay-decision-refund"
               >
                 {loading ? '...' : 'Вернуть клиенту'}
               </button>
@@ -62,6 +67,7 @@ const ConfirmBoardingModal = ({
                 }`}
                 onClick={() => onConfirm?.('FUND')}
                 disabled={loading}
+                data-testid="dispatcher-prepay-decision-fund"
               >
                 {loading ? '...' : 'В сезонный фонд'}
               </button>
@@ -73,6 +79,7 @@ const ConfirmBoardingModal = ({
               }`}
               onClick={() => onConfirm?.()}
               disabled={loading}
+              data-testid="dispatcher-confirm-submit"
             >
               {loading ? 'Подтверждение...' : 'Подтвердить'}
             </button>

@@ -12,6 +12,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import apiClient from "../utils/apiClient.js";
 import { useOwnerData } from "../contexts/OwnerDataContext.jsx";
+import {
+  OWNER_MONEY_FUNDS_CASH_ONLY_HINT_TEXT,
+  shouldShowFundsCashOnlyHint,
+} from "../utils/ownerMoneyFundsHint.js";
+import {
+  OWNER_MONEY_MAIN_KPI_FORMULA,
+  OWNER_MONEY_MAIN_KPI_TITLE,
+} from "../utils/ownerMoneyKpi.js";
 
 function formatRUB(v) {
   const n = Number(v || 0);
@@ -250,6 +258,29 @@ export default function OwnerMoneyView() {
   const netTotal = Number(money.totals?.net_total || revenue);
   const netCash = Number(money.totals?.net_cash || cash);
   const netCard = Number(money.totals?.net_card || card);
+  const futureTripsReserveCash = Number(money.totals?.future_trips_reserve_cash || 0);
+  const futureTripsReserveCard = Number(money.totals?.future_trips_reserve_card || 0);
+  const futureTripsReserveTotal = Number(money.totals?.future_trips_reserve_total || (futureTripsReserveCash + futureTripsReserveCard));
+  const ownerAvailableCashBeforeReserve = Number(money.totals?.owner_available_cash_before_future_reserve ?? netCash);
+  const ownerAvailableCashAfterReserve = Number(money.totals?.owner_available_cash_after_future_reserve ?? (ownerAvailableCashBeforeReserve - futureTripsReserveCash));
+  const fundsWithholdWeeklyToday = Number(money.totals?.funds_withhold_weekly_today || 0);
+  const fundsWithholdSeasonToday = Number(money.totals?.funds_withhold_season_today || 0);
+  const fundsWithholdDispatcherBonusToday = Number(money.totals?.funds_withhold_dispatcher_bonus_today || 0);
+  const fundsWithholdRoundingToSeasonToday = Number(money.totals?.funds_withhold_rounding_to_season_today || 0);
+  const fundsWithholdTotalToday = Number(
+    money.totals?.funds_withhold_total_today ||
+    (fundsWithholdWeeklyToday + fundsWithholdSeasonToday + fundsWithholdDispatcherBonusToday)
+  );
+  const fundsWithholdCashToday = Number(money.totals?.funds_withhold_cash_today || fundsWithholdTotalToday);
+  const fundsWithholdCardToday = Number(money.totals?.funds_withhold_card_today || 0);
+  const showFundsCashOnlyHint = shouldShowFundsCashOnlyHint({
+    fundsWithholdCardToday,
+    fundsWithholdTotalToday,
+  });
+  const cashTakeawayAfterReserveAndFunds = Number(
+    money.totals?.cash_takeaway_after_reserve_and_funds ??
+    (ownerAvailableCashAfterReserve - fundsWithholdCashToday)
+  );
 
   const tickets = Number(money.totals?.tickets || boats.totals?.tickets || 0);
   const trips = Number(money.totals?.trips || boats.totals?.trips || 0);
@@ -318,7 +349,7 @@ export default function OwnerMoneyView() {
             <div>
               <div className="text-[11px] text-neutral-500">Чистый результат</div>
               <div className="text-[10px] text-neutral-600">Собрано минус возвраты за выбранный период</div>
-              <div className="mt-1 text-4xl font-extrabold tracking-tight text-emerald-400">{formatRUB(netTotal)}</div>
+              <div data-testid="owner-money-net-total" className="mt-1 text-4xl font-extrabold tracking-tight text-emerald-400">{formatRUB(netTotal)}</div>
             </div>
             <div className="text-[11px] text-neutral-500 text-right">
               {money.range?.from && money.range?.to ? (
@@ -333,26 +364,77 @@ export default function OwnerMoneyView() {
           </div>
 
           <div className="mt-3 grid grid-cols-2 gap-2">
-            <MiniCard label="Наличные" value={formatRUB(netCash)} />
-            <MiniCard label="Карта" value={formatRUB(netCard)} />
+            <MiniCard testId="owner-money-net-cash" label="Наличные" value={formatRUB(netCash)} />
+            <MiniCard testId="owner-money-net-card" label="Карта" value={formatRUB(netCard)} />
           </div>
+        </Card>
+
+        <Card className="col-span-2">
+          <div className="text-[11px] text-neutral-500">Обязательства</div>
+          <div className="mt-2 text-xs text-neutral-400">Резерв будущих рейсов</div>
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            <MiniCard testId="owner-money-future-reserve-cash" label="Наличные" value={formatRUB(futureTripsReserveCash)} />
+            <MiniCard testId="owner-money-future-reserve-card" label="Карта" value={formatRUB(futureTripsReserveCard)} />
+            <MiniCard testId="owner-money-future-reserve-total" label="Итого резерв" value={formatRUB(futureTripsReserveTotal)} />
+          </div>
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <MiniCard
+              testId="owner-money-available-before-reserve"
+              label="Нал получено сегодня (до резерва)"
+              value={formatRUB(ownerAvailableCashBeforeReserve)}
+            />
+            <div data-testid="owner-money-available-after-reserve" className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
+              <div className="text-[11px] text-neutral-500">Нал после резерва (справочно)</div>
+              <div className={`mt-1 text-lg font-extrabold tracking-tight ${ownerAvailableCashAfterReserve < 0 ? 'text-red-300' : 'text-neutral-100'}`}>
+                {formatRUB(ownerAvailableCashAfterReserve)}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 text-xs text-neutral-400">Обязательства фондов сегодня</div>
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <MiniCard testId="owner-money-funds-weekly" label="Weekly фонд" value={formatRUB(fundsWithholdWeeklyToday)} />
+            <MiniCard testId="owner-money-funds-season" label="Season фонд" value={formatRUB(fundsWithholdSeasonToday)} />
+            <MiniCard testId="owner-money-funds-dispatcher-bonus" label="Бонусы диспетчерам" value={formatRUB(fundsWithholdDispatcherBonusToday)} />
+            <MiniCard testId="owner-money-funds-rounding" label="Округления (в составе season)" value={formatRUB(fundsWithholdRoundingToSeasonToday)} />
+            <MiniCard testId="owner-money-funds-total" label="Итого обязательств фондов" value={formatRUB(fundsWithholdTotalToday)} />
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <MiniCard testId="owner-money-funds-cash" label="Cash-часть обязательств" value={formatRUB(fundsWithholdCashToday)} />
+            <MiniCard testId="owner-money-funds-card" label="Card-часть обязательств" value={formatRUB(fundsWithholdCardToday)} />
+          </div>
+          <div className="mt-2 text-[10px] text-neutral-500">Split cash/card: метрики удержаний показаны по способу оплаты.</div>
+          {showFundsCashOnlyHint && (
+            <div data-testid="owner-money-funds-cash-only-hint" className="mt-1 text-[10px] text-neutral-400">
+              {OWNER_MONEY_FUNDS_CASH_ONLY_HINT_TEXT}
+            </div>
+          )}
+        </Card>
+
+        <Card className="col-span-2">
+          <div data-testid="owner-money-main-kpi-title" className="text-[13px] font-semibold text-neutral-100">{OWNER_MONEY_MAIN_KPI_TITLE}</div>
+          <div data-testid="owner-money-main-kpi" className={`mt-1 text-5xl font-extrabold tracking-tight ${cashTakeawayAfterReserveAndFunds < 0 ? 'text-red-200' : 'text-cyan-200'}`}>
+            {formatRUB(cashTakeawayAfterReserveAndFunds)}
+          </div>
+          <div data-testid="owner-money-main-kpi-formula" className="mt-1 text-[11px] text-neutral-300/90">{OWNER_MONEY_MAIN_KPI_FORMULA}</div>
+          <div data-testid="owner-money-dispatcher-kpi-link" className="mt-1 text-[10px] text-neutral-400">Это = "сдать owner" у диспетчера.</div>
         </Card>
 
         {/* 2️⃣ Оборот (до возвратов) */}
         <Card>
           <div className="text-[11px] text-neutral-500">Оборот</div>
           <div className="text-[10px] text-neutral-600">Все деньги до возвратов</div>
-          <div className="mt-1 text-2xl font-extrabold tracking-tight">{formatRUB(revenue)}</div>
+          <div data-testid="owner-money-collected-total" className="mt-1 text-2xl font-extrabold tracking-tight">{formatRUB(revenue)}</div>
           <div className="mt-3 grid grid-cols-2 gap-2">
-            <MiniCard label="Наличные" value={formatRUB(cash)} />
-            <MiniCard label="Карта" value={formatRUB(card)} />
+            <MiniCard testId="owner-money-collected-cash" label="Наличные" value={formatRUB(cash)} />
+            <MiniCard testId="owner-money-collected-card" label="Карта" value={formatRUB(card)} />
           </div>
         </Card>
 
         {/* 3️⃣ Возвраты */}
         <Card>
           <div className="text-[11px] text-neutral-500">Возвраты за период</div>
-          <div className="mt-1 text-2xl font-extrabold tracking-tight text-red-400">{formatRUB(refundTotal)}</div>
+          <div data-testid="owner-money-refund-total" className="mt-1 text-2xl font-extrabold tracking-tight text-red-400">{formatRUB(refundTotal)}</div>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <MiniCard label="Наличные" value={formatRUB(refundCash)} />
             <MiniCard label="Карта" value={formatRUB(refundCard)} />
@@ -362,10 +444,10 @@ export default function OwnerMoneyView() {
         {/* 4️⃣ Trip-метрики */}
         <Card>
           <div className="text-[11px] text-neutral-500">Билеты и рейсы</div>
-          <div className="mt-1 text-2xl font-extrabold tracking-tight">{formatInt(tickets)} билетов</div>
+          <div data-testid="owner-money-tickets-total" className="mt-1 text-2xl font-extrabold tracking-tight">{formatInt(tickets)} билетов</div>
           <div className="mt-3 grid grid-cols-2 gap-2">
-            <Pill label="Рейсов" value={formatInt(trips)} />
-            <Pill label="Загрузка" value={fillPercent ? `${formatInt(fillPercent)}%` : "—"} accent="amber" />
+            <Pill testId="owner-money-trips-total" label="Рейсов" value={formatInt(trips)} />
+            <Pill testId="owner-money-fill-percent" label="Загрузка" value={fillPercent ? `${formatInt(fillPercent)}%` : "—"} accent="amber" />
           </div>
         </Card>
 
@@ -373,9 +455,10 @@ export default function OwnerMoneyView() {
         <Card>
           <div className="text-[11px] text-neutral-500">Ожидает оплаты</div>
           <div className="text-[10px] text-neutral-600">По дате рейса</div>
-          <div className="mt-1 text-2xl font-extrabold tracking-tight text-amber-300">{formatRUB(pendingAmount)}</div>
+          <div data-testid="owner-money-pending-total" className="mt-1 text-2xl font-extrabold tracking-tight text-amber-300">{formatRUB(pendingAmount)}</div>
           <div className="mt-1 text-[10px] text-neutral-500">За рейсы в "{preset}"</div>
         </Card>
+
       </div>
 
       {/* Pending (today / tomorrow / day2) — показываем только для "Сегодня" */}
@@ -524,20 +607,20 @@ function Card({ children, className = "" }) {
   );
 }
 
-function MiniCard({ label, value }) {
+function MiniCard({ label, value, testId }) {
   return (
-    <div className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
+    <div data-testid={testId} className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
       <div className="text-[11px] text-neutral-500">{label}</div>
       <div className="mt-1 text-lg font-extrabold tracking-tight">{value}</div>
     </div>
   );
 }
 
-function Pill({ label, value, accent }) {
+function Pill({ label, value, accent, testId }) {
   const vCls =
     accent === "amber" ? "text-amber-300" : accent === "emerald" ? "text-emerald-300" : "text-neutral-100";
   return (
-    <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 px-2 py-2">
+    <div data-testid={testId} className="rounded-xl border border-neutral-800 bg-neutral-950/40 px-2 py-2">
       <div className="text-[10px] text-neutral-500">{label}</div>
       <div className={["mt-1 text-sm font-semibold", vCls].join(" ")}>{value}</div>
     </div>

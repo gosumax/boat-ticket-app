@@ -12,6 +12,8 @@ const __dirname = path.dirname(__filename);
 // ENV OVERRIDE для тестов: process.env.DB_FILE
 const DB_FILE = process.env.DB_FILE || path.join(__dirname, "..", "database.sqlite");
 const SALT_ROUNDS = 10;
+const ADMIN_SEED_PASSWORD = process.env.ADMIN_SEED_PASSWORD || 'admin123';
+const OWNER_SEED_PASSWORD = process.env.OWNER_SEED_PASSWORD || 'owner123';
 
 // Initialize database
 let db;
@@ -51,7 +53,7 @@ try {
   `);
 
   // Ensure OWNER role and seed owner user (safe migration)
-  ensureOwnerRoleAndUser(db, { username: 'owner', password: 'owner123', saltRounds: SALT_ROUNDS });
+  ensureOwnerRoleAndUser(db, { username: 'owner', password: OWNER_SEED_PASSWORD, saltRounds: SALT_ROUNDS });
 
   
   // Create boats table
@@ -1014,30 +1016,25 @@ if (presalesSlotUidCheck.count === 0) {
   try {
     const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get();
     if (userCount.count === 0) {
-      const hashedPassword = bcrypt.hashSync('admin123', SALT_ROUNDS);
+      const hashedPassword = bcrypt.hashSync(ADMIN_SEED_PASSWORD, SALT_ROUNDS);
       const stmt = db.prepare(`
         INSERT INTO users (username, password_hash, role, is_active)
         VALUES (?, ?, ?, ?)
       `);
       stmt.run('admin', hashedPassword, 'admin', 1);
-      console.log('Initial admin user created:');
-      console.log('Username: admin');
-      console.log('Password: admin123');
-      console.log('Please change this password immediately!');
+      console.log('Initial admin user created.');
     }
     
     // Seed initial owner user if no owner user exists
     const ownerUser = db.prepare('SELECT id FROM users WHERE username = ?').get('owner');
     if (!ownerUser) {
-      const hashedPassword = bcrypt.hashSync('owner123', SALT_ROUNDS);
+      const hashedPassword = bcrypt.hashSync(OWNER_SEED_PASSWORD, SALT_ROUNDS);
       const stmt = db.prepare(`
         INSERT INTO users (username, password_hash, role, is_active)
         VALUES (?, ?, ?, ?)
       `);
       stmt.run('owner', hashedPassword, 'owner', 1);
-      console.log('Initial owner user created:');
-      console.log('Username: owner');
-      console.log('Password: owner123');
+      console.log('Initial owner user created.');
     }
     
     // Seed initial boats ONLY if BOTH boats AND slots tables are empty
@@ -1830,6 +1827,32 @@ try {
   }
 } catch (e) {
   console.log('[OWNER_SETTINGS] init failed:', e?.message || e);
+}
+
+/* =========================
+   OWNER SETTINGS V2: add settings_json column
+   For existing databases that have owner_settings without settings_json.
+========================= */
+try {
+  const ownerSettingsV2Check = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'owner_settings_v2_settings_json'").get();
+  if (ownerSettingsV2Check.count === 0) {
+    console.log('[OWNER_SETTINGS_V2] Checking settings_json column...');
+    
+    const osCols = db.prepare("PRAGMA table_info(owner_settings)").all().map(r => r.name);
+    
+    if (!osCols.includes('settings_json')) {
+      db.exec("ALTER TABLE owner_settings ADD COLUMN settings_json TEXT");
+      console.log('[OWNER_SETTINGS_V2] Added settings_json column');
+    }
+    
+    // Ensure row id=1 exists
+    db.prepare("INSERT OR IGNORE INTO owner_settings (id, settings_json) VALUES (1, '{}')").run();
+    
+    db.prepare("INSERT INTO settings (key, value) VALUES ('owner_settings_v2_settings_json', 'true')").run();
+    console.log('[OWNER_SETTINGS_V2] Migration complete');
+  }
+} catch (e) {
+  console.log('[OWNER_SETTINGS_V2] migration failed:', e?.message || e);
 }
 
 /* =========================

@@ -113,8 +113,13 @@ async function getBcrypt() {
 async function safeComparePassword(plain, stored) {
   if (typeof plain !== 'string' || typeof stored !== 'string') return false;
 
-  // If DB stores plain passwords (dev), support it:
-  if (!stored.startsWith('$2')) return plain === stored;
+  // Legacy plaintext passwords are allowed only in explicit compatibility mode.
+  if (!stored.startsWith('$2')) {
+    const allowLegacyPlain =
+      process.env.NODE_ENV === 'test' ||
+      process.env.ALLOW_LEGACY_PLAIN_PASSWORDS === 'true';
+    return allowLegacyPlain ? plain === stored : false;
+  }
 
   // If DB stores bcrypt hashes, try to use bcryptjs if available:
   const bcrypt = await getBcrypt();

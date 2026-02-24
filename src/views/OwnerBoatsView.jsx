@@ -169,10 +169,11 @@ export default function OwnerBoatsView() {
       )}
 
       <div className="grid grid-cols-2 gap-2 mt-2">
-        <StatCard title="Выручка" value={formatRUB(payload.totals.revenue)} />
-        <StatCard title="Билетов" value={formatInt(payload.totals.tickets)} />
-        <StatCard title="Рейсов" value={formatInt(payload.totals.trips)} />
+        <StatCard testId="owner-boats-total-revenue" title="Выручка" value={formatRUB(payload.totals.revenue)} />
+        <StatCard testId="owner-boats-total-tickets" title="Билетов" value={formatInt(payload.totals.tickets)} />
+        <StatCard testId="owner-boats-total-trips" title="Рейсов" value={formatInt(payload.totals.trips)} />
         <StatCard
+          testId="owner-boats-total-fill"
           title="Загрузка"
           value={payload.totals.fillPercent !== null ? `${payload.totals.fillPercent}%` : '—'}
           accent="amber"
@@ -199,6 +200,7 @@ export default function OwnerBoatsView() {
             {g.boats.map((b) => (
               <DetailRow
                 key={b.boat_id}
+                testId={`owner-boats-row-${b.boat_id}`}
                 name={b.boat_name || `boat#${b.boat_id}`}
                 value={formatRUB(b.revenue)}
                 sub={`Билетов: ${formatInt(b.tickets)} · Рейсов: ${formatInt(b.trips)} · ${b.source || "none"}`}
@@ -211,7 +213,7 @@ export default function OwnerBoatsView() {
   );
 }
 
-function StatCard({ title, value, accent }) {
+function StatCard({ title, value, accent, testId }) {
   const vCls =
     accent === "amber"
       ? "text-amber-300"
@@ -220,7 +222,7 @@ function StatCard({ title, value, accent }) {
       : "text-neutral-100";
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+    <div data-testid={testId} className="rounded-xl border border-white/10 bg-white/5 p-3">
       <div className="text-[11px] text-neutral-500">{title}</div>
       <div className={["mt-1 text-lg font-extrabold tracking-tight", vCls].join(" ")}>{value}</div>
     </div>
@@ -289,9 +291,9 @@ function Group({ title, subtitle, children }) {
   );
 }
 
-function DetailRow({ name, value, sub }) {
+function DetailRow({ name, value, sub, testId }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-black/20 p-3 flex items-center justify-between gap-3 hover:bg-white/5 hover:border-white/20 transition-colors">
+    <div data-testid={testId} className="rounded-xl border border-white/10 bg-black/20 p-3 flex items-center justify-between gap-3 hover:bg-white/5 hover:border-white/20 transition-colors">
       <div className="min-w-0">
         <div className="text-sm font-semibold text-neutral-200 truncate">{name}</div>
         {sub && <div className="text-sm text-white/70 mt-1 leading-tight">{sub}</div>}
