@@ -16,6 +16,7 @@ import * as auth from './auth.js';
 import { calcMotivationDay } from './motivation/engine.mjs';
 
 const authenticateToken = auth.authenticateToken || auth.default || auth;
+const canDispatchManageSlots = auth.canDispatchManageSlots;
 
 const router = express.Router();
 
@@ -84,12 +85,33 @@ function sumPositiveSellerLiabilities(rows = []) {
   }, 0);
 }
 
+function isSellerRole(role) {
+  return String(role || '').toLowerCase() === 'seller';
+}
+
+function isSellerUserId(userId) {
+  const id = Number(userId || 0);
+  if (!Number.isFinite(id) || id <= 0) return false;
+  try {
+    const row = db.prepare('SELECT role FROM users WHERE id = ?').get(id);
+    return isSellerRole(row?.role);
+  } catch {
+    return false;
+  }
+}
+
 function getReserveTripDayExpr() {
   const presaleCols = safeGetColumns('presales');
-  if (hasCol(presaleCols, 'business_day')) {
-    return "COALESCE(p.business_day, DATE(p.created_at))";
+  const ledgerCols = safeGetColumns('money_ledger');
+  const presaleTripDayExpr = hasCol(presaleCols, 'business_day')
+    ? "COALESCE(p.business_day, DATE(p.created_at))"
+    : 'DATE(p.created_at)';
+
+  if (hasCol(ledgerCols, 'trip_day')) {
+    return `COALESCE(NULLIF(ml.trip_day, ''), ${presaleTripDayExpr})`;
   }
-  return 'DATE(p.created_at)';
+
+  return presaleTripDayExpr;
 }
 
 function calcFutureTripsReserveByPaymentDay({ businessDay, ledgerCols, hasLedger, ledgerHasBDay }) {
@@ -102,6 +124,12 @@ function calcFutureTripsReserveByPaymentDay({ businessDay, ledgerCols, hasLedger
   const tripDayExpr = getReserveTripDayExpr();
   const mixedCashExpr = ledgerHasCashAmt ? 'COALESCE(ml.cash_amount, 0)' : 'COALESCE(p.payment_cash_amount, ml.amount)';
   const mixedCardExpr = ledgerHasCardAmt ? 'COALESCE(ml.card_amount, 0)' : 'COALESCE(p.payment_card_amount, 0)';
+  const mixedRefundCashExpr = ledgerHasCashAmt
+    ? "CASE WHEN COALESCE(ml.cash_amount, 0) > 0 THEN ABS(COALESCE(ml.cash_amount, 0)) ELSE ABS(COALESCE(p.payment_cash_amount, 0)) END"
+    : 'ABS(COALESCE(p.payment_cash_amount, 0))';
+  const mixedRefundCardExpr = ledgerHasCardAmt
+    ? "CASE WHEN COALESCE(ml.card_amount, 0) > 0 THEN ABS(COALESCE(ml.card_amount, 0)) ELSE ABS(COALESCE(p.payment_card_amount, 0)) END"
+    : 'ABS(COALESCE(p.payment_card_amount, 0))';
 
   const cashExpr = `CASE
     WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH') OR ml.method = 'CASH' THEN ml.amount
@@ -113,11 +141,35 @@ function calcFutureTripsReserveByPaymentDay({ businessDay, ledgerCols, hasLedger
     WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') OR ml.method = 'MIXED' THEN ${mixedCardExpr}
     ELSE 0
   END`;
+  const refundCashExpr = `CASE
+    WHEN ml.method = 'CASH' THEN ABS(ml.amount)
+    WHEN ml.method = 'MIXED' THEN ${mixedRefundCashExpr}
+    ELSE 0
+  END`;
+  const refundCardExpr = `CASE
+    WHEN ml.method = 'CARD' THEN ABS(ml.amount)
+    WHEN ml.method = 'MIXED' THEN ${mixedRefundCardExpr}
+    ELSE 0
+  END`;
 
   const reserveRow = safeAll(
     `SELECT
-      COALESCE(SUM(CASE WHEN ${tripDayExpr} > ? THEN ${cashExpr} ELSE 0 END), 0) AS reserve_cash,
-      COALESCE(SUM(CASE WHEN ${tripDayExpr} > ? THEN ${cardExpr} ELSE 0 END), 0) AS reserve_card
+      COALESCE(SUM(CASE
+        WHEN ${tripDayExpr} > ? AND ml.type IN (
+          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+        ) THEN ${cashExpr}
+        WHEN ${tripDayExpr} > ? AND ml.type = 'SALE_CANCEL_REVERSE' THEN -(${refundCashExpr})
+        ELSE 0
+      END), 0) AS reserve_cash,
+      COALESCE(SUM(CASE
+        WHEN ${tripDayExpr} > ? AND ml.type IN (
+          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+        ) THEN ${cardExpr}
+        WHEN ${tripDayExpr} > ? AND ml.type = 'SALE_CANCEL_REVERSE' THEN -(${refundCardExpr})
+        ELSE 0
+      END), 0) AS reserve_card
      FROM money_ledger ml
      LEFT JOIN presales p ON p.id = ml.presale_id
      WHERE ml.business_day = ?
@@ -125,9 +177,10 @@ function calcFutureTripsReserveByPaymentDay({ businessDay, ledgerCols, hasLedger
        AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
        AND ml.type IN (
          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
-         'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+         'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
+         'SALE_CANCEL_REVERSE'
        )`,
-    [businessDay, businessDay, businessDay]
+    [businessDay, businessDay, businessDay, businessDay, businessDay]
   )?.[0];
 
   const unresolvedTripDayCount = safeSum(
@@ -152,6 +205,223 @@ function calcFutureTripsReserveByPaymentDay({ businessDay, ledgerCols, hasLedger
     card,
     total: cash + card,
     unresolvedTripDayCount: Number(unresolvedTripDayCount || 0),
+  };
+}
+
+function calcLiveUiLedgerTotals(businessDay) {
+  const defaults = {
+    owner_cash_today: 0,
+    sellers_collect_total: 0,
+    sellers: [],
+  };
+
+  const hasLedger = safeTableExists('money_ledger');
+  if (!hasLedger) return defaults;
+
+  const ledgerCols = safeGetColumns('money_ledger');
+  const ledgerHasBDay = hasCol(ledgerCols, 'business_day');
+  const ledgerHasType = hasCol(ledgerCols, 'type');
+  const ledgerHasSeller = hasCol(ledgerCols, 'seller_id');
+  const ledgerHasStatus = hasCol(ledgerCols, 'status');
+  const ledgerHasKind = hasCol(ledgerCols, 'kind');
+  const ledgerHasMethod = hasCol(ledgerCols, 'method');
+
+  if (!ledgerHasBDay || !ledgerHasType) return defaults;
+
+  const baseWhere = ['ml.business_day = ?'];
+  const baseParams = [businessDay];
+  if (ledgerHasStatus) baseWhere.push("ml.status = 'POSTED'");
+  if (ledgerHasKind) baseWhere.push("ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')");
+  const baseWhereSql = baseWhere.join(' AND ');
+
+  const ownerCashToday = safeSum(
+    `SELECT COALESCE(SUM(
+      CASE
+        WHEN ml.type IN (
+          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+        ) THEN ml.amount
+        WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN -ABS(ml.amount)
+        ELSE 0
+      END
+    ), 0) AS v
+    FROM money_ledger ml
+    WHERE ${baseWhereSql}
+      AND ml.type IN (
+        'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+        'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
+        'SALE_CANCEL_REVERSE'
+      )`,
+    baseParams
+  );
+
+  if (!ledgerHasSeller) {
+    return {
+      owner_cash_today: Number(ownerCashToday || 0),
+      sellers_collect_total: 0,
+      sellers: [],
+    };
+  }
+
+  const hasPresales = safeTableExists('presales');
+  const ledgerHasCashAmount = hasCol(ledgerCols, 'cash_amount');
+  const ledgerHasCardAmount = hasCol(ledgerCols, 'card_amount');
+  const methodExpr = ledgerHasMethod ? 'ml.method' : "''";
+  const mixedCashExpr = ledgerHasCashAmount
+    ? 'COALESCE(ml.cash_amount, 0)'
+    : hasPresales
+    ? 'COALESCE(p.payment_cash_amount, ml.amount)'
+    : 'ml.amount';
+  const mixedCardExpr = ledgerHasCardAmount
+    ? 'COALESCE(ml.card_amount, 0)'
+    : hasPresales
+    ? 'COALESCE(p.payment_card_amount, 0)'
+    : '0';
+  const mixedRefundCashExpr = ledgerHasCashAmount
+    ? `CASE
+         WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 THEN ABS(COALESCE(ml.cash_amount, 0))
+         ${hasPresales ? "WHEN ABS(COALESCE(p.payment_cash_amount, 0)) > 0 THEN ABS(COALESCE(p.payment_cash_amount, 0))" : ''}
+         ELSE ABS(ml.amount)
+       END`
+    : hasPresales
+    ? "CASE WHEN ABS(COALESCE(p.payment_cash_amount, 0)) > 0 THEN ABS(COALESCE(p.payment_cash_amount, 0)) ELSE ABS(ml.amount) END"
+    : 'ABS(ml.amount)';
+  const mixedRefundCardExpr = ledgerHasCardAmount
+    ? `CASE
+         WHEN ABS(COALESCE(ml.card_amount, 0)) > 0 THEN ABS(COALESCE(ml.card_amount, 0))
+         ${hasPresales ? "WHEN ABS(COALESCE(p.payment_card_amount, 0)) > 0 THEN ABS(COALESCE(p.payment_card_amount, 0))" : ''}
+         ELSE 0
+       END`
+    : hasPresales
+    ? 'ABS(COALESCE(p.payment_card_amount, 0))'
+    : '0';
+  const presalesJoinSql = hasPresales ? 'LEFT JOIN presales p ON p.id = ml.presale_id' : '';
+
+  const sellerRows = safeAll(
+    `SELECT
+       ml.seller_id AS seller_id,
+       su.username AS seller_name,
+       COALESCE(SUM(CASE
+         WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH') THEN ml.amount
+         WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') THEN ${mixedCashExpr}
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ${methodExpr} = 'CASH' THEN -ABS(ml.amount)
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ${methodExpr} = 'MIXED' THEN -(${mixedRefundCashExpr})
+         ELSE 0
+       END), 0) AS collected_cash,
+       COALESCE(SUM(CASE
+         WHEN ml.type IN ('SALE_PREPAYMENT_CARD','SALE_ACCEPTED_CARD') THEN ml.amount
+         WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') THEN ${mixedCardExpr}
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ${methodExpr} = 'CARD' THEN -ABS(ml.amount)
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ${methodExpr} = 'MIXED' THEN -(${mixedRefundCardExpr})
+         ELSE 0
+       END), 0) AS collected_card,
+       COALESCE(SUM(CASE
+         WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') THEN ml.amount
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ${methodExpr} = 'MIXED' THEN -ABS(ml.amount)
+         ELSE 0
+       END), 0) AS collected_mixed,
+       COALESCE(SUM(CASE
+         WHEN ml.type IN (
+           'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+           'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+         ) THEN ml.amount
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN -ABS(ml.amount)
+         ELSE 0
+       END), 0) AS collected_total
+     FROM money_ledger ml
+     JOIN users su ON su.id = ml.seller_id AND su.role = 'seller'
+     ${presalesJoinSql}
+     WHERE ${baseWhereSql}
+       AND ml.seller_id IS NOT NULL
+       AND ml.type IN (
+         'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+         'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
+         'SALE_CANCEL_REVERSE'
+       )
+     GROUP BY ml.seller_id, su.username
+     ORDER BY collected_total DESC, ml.seller_id ASC`,
+    baseParams
+  );
+
+  const depositRows = safeAll(
+    `SELECT
+       ml.seller_id AS seller_id,
+       COALESCE(SUM(CASE
+         WHEN ml.type = 'DEPOSIT_TO_OWNER_CASH' ${ledgerHasMethod ? "OR (ml.type LIKE 'DEPOSIT_TO_OWNER%' AND ml.method = 'CASH')" : ''}
+         THEN ml.amount
+         ELSE 0
+       END), 0) AS deposit_cash,
+       COALESCE(SUM(CASE
+         WHEN ml.type = 'DEPOSIT_TO_OWNER_CARD' ${ledgerHasMethod ? "OR (ml.type LIKE 'DEPOSIT_TO_OWNER%' AND ml.method = 'CARD')" : ''}
+         THEN ml.amount
+         ELSE 0
+       END), 0) AS deposit_card,
+       COALESCE(SUM(ml.amount), 0) AS deposit_total
+     FROM money_ledger ml
+     JOIN users su ON su.id = ml.seller_id AND su.role = 'seller'
+     WHERE ${baseWhereSql}
+       AND ml.seller_id IS NOT NULL
+       AND ml.type LIKE 'DEPOSIT_TO_OWNER%'
+     GROUP BY ml.seller_id`,
+    baseParams
+  );
+
+  const salesBySeller = new Map((sellerRows || []).map((r) => [Number(r.seller_id), r]));
+  const depositsBySeller = new Map((depositRows || []).map((r) => [Number(r.seller_id), r]));
+  const sellerIds = Array.from(new Set([
+    ...Array.from(salesBySeller.keys()),
+    ...Array.from(depositsBySeller.keys()),
+  ])).sort((a, b) => a - b);
+
+  const sellers = sellerIds.map((sellerId) => {
+    const sale = salesBySeller.get(sellerId) || {};
+    const dep = depositsBySeller.get(sellerId) || {};
+    const sellerName = String(
+      sale.seller_name ||
+      db.prepare('SELECT username FROM users WHERE id = ?').get(sellerId)?.username ||
+      `Seller #${sellerId}`
+    );
+
+    const collectedCash = Number(sale.collected_cash || 0);
+    const collectedCard = Number(sale.collected_card || 0);
+    const collectedMixed = Number(sale.collected_mixed || 0);
+    const collectedTotal = Number(sale.collected_total || 0);
+    const depositCash = Number(dep.deposit_cash || 0);
+    const depositCard = Number(dep.deposit_card || 0);
+    const depositTotal = Number(dep.deposit_total || 0);
+
+    const cashDueToOwner = collectedCash - depositCash;
+    const terminalDueToOwner = collectedCard - depositCard;
+    const totalDue = cashDueToOwner + terminalDueToOwner;
+
+    return {
+      seller_id: sellerId,
+      seller_name: sellerName,
+      name: sellerName,
+      role: 'seller',
+      accepted: collectedTotal,
+      deposited: depositTotal,
+      balance: totalDue,
+      cash_balance: cashDueToOwner,
+      terminal_debt: terminalDueToOwner,
+      terminal_due_to_owner: terminalDueToOwner,
+      status: totalDue === 0 ? 'CLOSED' : totalDue > 0 ? 'DEBT' : 'OVERPAID',
+      collected_total: collectedTotal,
+      collected_cash: collectedCash,
+      collected_card: collectedCard,
+      collected_mixed: collectedMixed,
+      refund_total: 0,
+      net_total: totalDue,
+      deposit_cash: depositCash,
+      deposit_card: depositCard,
+      cash_due_to_owner: cashDueToOwner,
+    };
+  });
+
+  return {
+    owner_cash_today: Number(ownerCashToday || 0),
+    sellers_collect_total: Number(sumPositiveSellerLiabilities(sellers)),
+    sellers,
   };
 }
 
@@ -201,10 +471,17 @@ export function allTripsFinished(businessDay) {
   return getOpenTripsCount(businessDay) === 0;
 }
 
-router.get('/summary', authenticateToken, (req, res) => {
+router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => {
   const businessDay =
     String(req.query.business_day || req.query.trip_day || req.query.day || '').trim() ||
     getLocalYMD();
+  let liveUiTotalsCache = null;
+  const getLiveUiTotals = () => {
+    if (!liveUiTotalsCache) {
+      liveUiTotalsCache = calcLiveUiLedgerTotals(businessDay);
+    }
+    return liveUiTotalsCache;
+  };
 
 
   // --- Shift closure snapshot (do not recompute past days) ---
@@ -256,6 +533,7 @@ router.get('/summary', authenticateToken, (req, res) => {
     } catch {}
 
     // Enhance sellers with extended contract fields (same as live branch)
+    // and keep only actual sellers in seller money movement tables.
     const sellers = sellersFromSnapshot.map((r) => {
       const accepted = Number(r.accepted || 0);
       const deposited = Number(r.deposited || 0);
@@ -294,6 +572,9 @@ router.get('/summary', authenticateToken, (req, res) => {
         salary_due_total: Number(r.salary_due_total || r.salary_due || 0),
         salary_accrued: Number(r.salary_accrued || r.salary_due_total || 0),
       };
+    }).filter((row) => {
+      if (isSellerRole(row?.role)) return true;
+      return isSellerUserId(row?.seller_id);
     });
 
     const salary_total = Math.round(Number(snap.total_revenue || 0) * 0.13);
@@ -340,32 +621,6 @@ router.get('/summary', authenticateToken, (req, res) => {
     };
 
     const sellersForResponse = [...sellers];
-    if (sellersForResponse.length === 0 && Number(snap.collected_total || 0) > 0) {
-      sellersForResponse.push({
-        seller_id: 0,
-        seller_name: 'Диспетчер (источник выручки)',
-        name: 'Диспетчер (источник выручки)',
-        role: 'dispatcher',
-        accepted: Number(snap.collected_total || 0),
-        deposited: 0,
-        balance: 0,
-        cash_balance: 0,
-        terminal_debt: 0,
-        terminal_due_to_owner: 0,
-        status: 'CLOSED',
-        collected_total: Number(snap.collected_total || 0),
-        collected_cash: Number(snap.collected_cash || 0),
-        collected_card: Number(snap.collected_card || 0),
-        refund_total: 0,
-        net_total: 0,
-        deposit_cash: 0,
-        deposit_card: 0,
-        cash_due_to_owner: 0,
-        salary_due: 0,
-        salary_due_total: 0,
-        salary_accrued: 0,
-      });
-    }
     const sellersAcceptedTotalResponse = sellersForResponse.reduce((sum, r) => sum + Number(r.accepted || 0), 0);
     const sellersDepositedTotalResponse = sellersForResponse.reduce((sum, r) => sum + Number(r.deposited || 0), 0);
     const sellersBalanceTotalResponse = sellersForResponse.reduce((sum, r) => sum + Number(r.balance || 0), 0);
@@ -378,6 +633,8 @@ router.get('/summary', authenticateToken, (req, res) => {
       ? Number(cashboxData.owner_cash_available_after_future_reserve_cash)
       : ownerCashAvailable - futureTripsReserveCash;
     const unresolvedTripDayCount = Number(cashboxData?.future_trips_reserve_unresolved_trip_day_count || 0);
+    const liveUiTotals = getLiveUiTotals();
+    const liveSellersForUi = Array.isArray(liveUiTotals?.sellers) ? liveUiTotals.sellers : [];
 
     return res.json({
       ok: true,
@@ -400,9 +657,12 @@ router.get('/summary', authenticateToken, (req, res) => {
 
       // UI-friendly sellers (from snapshot)
       sellers: sellersForResponse,
+      sellers_live: liveSellersForUi,
       sellers_accepted_total: sellersAcceptedTotalResponse,
       sellers_deposited_total: sellersDepositedTotalResponse,
       sellers_balance_total: sellersBalanceTotalResponse,
+      sellers_collect_total: Number(liveUiTotals?.sellers_collect_total || 0),
+      owner_cash_today: Number(liveUiTotals?.owner_cash_today || 0),
 
       // Dispatcher totals (DISPATCHER_SHIFT kind aggregated)
       dispatcher,
@@ -586,7 +846,7 @@ router.get('/summary', authenticateToken, (req, res) => {
     const mixedCashExpr = ledgerHasCashAmount ? 'COALESCE(ml.cash_amount, 0)' : 'COALESCE(p.payment_cash_amount, 0)';
     const mixedCardExpr = ledgerHasCardAmount ? 'COALESCE(ml.card_amount, 0)' : 'COALESCE(p.payment_card_amount, 0)';
 
-    // Collect per-user cash/card from all sales kinds so dispatcher-only users are visible in UI.
+    // Seller money movement: keep only real sellers (exclude dispatcher/admin/owner users).
     const prepayRows = safeAll(
       `SELECT
         ml.seller_id AS seller_id,
@@ -610,6 +870,7 @@ router.get('/summary', authenticateToken, (req, res) => {
         ),0) AS prepay_card
       FROM money_ledger ml
       LEFT JOIN presales p ON p.id = ml.presale_id
+      JOIN users su ON su.id = ml.seller_id AND su.role = 'seller'
       WHERE ml.business_day = ?
         AND ml.status = 'POSTED'
         AND ml.seller_id IS NOT NULL
@@ -635,7 +896,7 @@ router.get('/summary', authenticateToken, (req, res) => {
     const depCashByMethodExpr = ledgerHasMethod ? "WHEN type LIKE 'DEPOSIT_TO_OWNER%' AND method = 'CASH' THEN amount" : '';
     const depCardByMethodExpr = ledgerHasMethod ? "WHEN type LIKE 'DEPOSIT_TO_OWNER%' AND method = 'CARD' THEN amount" : '';
     const depRows = safeAll(
-      `SELECT seller_id AS seller_id,
+      `SELECT ml.seller_id AS seller_id,
               COALESCE(SUM(CASE
                 WHEN type = 'DEPOSIT_TO_OWNER_CASH' THEN amount
                 ${depCashByMethodExpr}
@@ -646,13 +907,14 @@ router.get('/summary', authenticateToken, (req, res) => {
                 ${depCardByMethodExpr}
                 ELSE 0
               END),0) AS deposit_card
-       FROM money_ledger
+       FROM money_ledger ml
+       JOIN users su ON su.id = ml.seller_id AND su.role = 'seller'
        WHERE business_day = ?
          AND status = 'POSTED'
          AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
          AND type LIKE 'DEPOSIT_TO_OWNER%'
-         AND seller_id IS NOT NULL
-       GROUP BY seller_id`,
+         AND ml.seller_id IS NOT NULL
+       GROUP BY ml.seller_id`,
       [businessDay]
     );
     sellerDepositByMethod = new Map((depRows || []).map(r => [r.seller_id, {
@@ -705,14 +967,16 @@ router.get('/summary', authenticateToken, (req, res) => {
       // per seller (only if seller_id exists)
       if (ledgerHasSeller) {
         const rows = safeAll(
-          `SELECT seller_id AS seller_id,
+          `SELECT ml.seller_id AS seller_id,
                   COALESCE(SUM(amount),0) AS deposit_total,
                   COALESCE(SUM(CASE WHEN ${ledgerHasMethod ? "method = 'CASH'" : `${typeCol} = 'DEPOSIT_TO_OWNER_CASH'`} THEN amount ELSE 0 END),0) AS deposit_cash,
                   COALESCE(SUM(CASE WHEN ${ledgerHasMethod ? "method = 'CARD'" : `${typeCol} = 'DEPOSIT_TO_OWNER_CARD'`} THEN amount ELSE 0 END),0) AS deposit_card
-           FROM money_ledger
+           FROM money_ledger ml
+           JOIN users su ON su.id = ml.seller_id AND su.role = 'seller'
            ${baseWhereSql}
-           GROUP BY seller_id
-           ORDER BY deposit_total DESC, seller_id ASC`,
+           AND ml.seller_id IS NOT NULL
+           GROUP BY ml.seller_id
+           ORDER BY deposit_total DESC, ml.seller_id ASC`,
           params
         );
         ledgerBySeller = rows || [];
@@ -725,13 +989,14 @@ router.get('/summary', authenticateToken, (req, res) => {
   let sellersRaw = [];
   if (hasLedger && ledgerHasBDay && ledgerHasSeller) {
     const activityRows = safeAll(
-      `SELECT DISTINCT seller_id AS seller_id
-       FROM money_ledger
-       WHERE business_day = ?
-         AND status = 'POSTED'
-         AND seller_id IS NOT NULL
-         AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-         AND type IN (
+      `SELECT DISTINCT ml.seller_id AS seller_id
+       FROM money_ledger ml
+       JOIN users su ON su.id = ml.seller_id AND su.role = 'seller'
+       WHERE ml.business_day = ?
+         AND ml.status = 'POSTED'
+         AND ml.seller_id IS NOT NULL
+         AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+         AND ml.type IN (
            'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
            'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
            'SALE_CANCEL_REVERSE'
@@ -739,17 +1004,18 @@ router.get('/summary', authenticateToken, (req, res) => {
       [businessDay]
     );
     const acceptedRows = safeAll(
-      `SELECT seller_id AS seller_id, COALESCE(SUM(amount),0) AS accepted
-       FROM money_ledger
-       WHERE business_day = ?
-         AND status = 'POSTED'
-         AND seller_id IS NOT NULL
-         AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-         AND type IN (
+      `SELECT ml.seller_id AS seller_id, COALESCE(SUM(ml.amount),0) AS accepted
+       FROM money_ledger ml
+       JOIN users su ON su.id = ml.seller_id AND su.role = 'seller'
+       WHERE ml.business_day = ?
+         AND ml.status = 'POSTED'
+         AND ml.seller_id IS NOT NULL
+         AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+         AND ml.type IN (
            'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
            'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
          )
-       GROUP BY seller_id`,
+       GROUP BY ml.seller_id`,
       [businessDay]
     );
     const depMap = new Map((ledgerBySeller || []).map((r) => [r.seller_id, r]));
@@ -847,6 +1113,9 @@ router.get('/summary', authenticateToken, (req, res) => {
         cash_due_to_owner: 0,
       };
     }
+  }).filter((row) => {
+    if (isSellerRole(row?.role)) return true;
+    return isSellerUserId(row?.seller_id);
   });
   // --- SALARY_DUE from motivation engine ---
   // Call motivation engine to get payouts for this business day
@@ -1198,38 +1467,18 @@ router.get('/summary', authenticateToken, (req, res) => {
   }
 
   const sellersForResponse = [...sellers];
-  if (sellersForResponse.length === 0 && Number(collectedTotal || 0) > 0) {
-    sellersForResponse.push({
-      seller_id: 0,
-      seller_name: 'Диспетчер (источник выручки)',
-      name: 'Диспетчер (источник выручки)',
-      role: 'dispatcher',
-      accepted: Number(collectedTotal || 0),
-      deposited: 0,
-      balance: 0,
-      cash_balance: 0,
-      terminal_debt: 0,
-      terminal_due_to_owner: 0,
-      status: 'CLOSED',
-      collected_total: Number(collectedTotal || 0),
-      collected_cash: Number(collectedCash || 0),
-      collected_card: Number(collectedCard || 0),
-      refund_total: 0,
-      net_total: 0,
-      deposit_cash: 0,
-      deposit_card: 0,
-      cash_due_to_owner: 0,
-      salary_due: 0,
-      salary_due_total: 0,
-      salary_accrued: 0,
-    });
-  }
   const sellersAcceptedTotalResponse = sellersForResponse.reduce((sum, r) => sum + Number(r.accepted || 0), 0);
   const sellersDepositedTotalResponse = sellersForResponse.reduce((sum, r) => sum + Number(r.deposited || 0), 0);
   const sellersBalanceTotalResponse = sellersForResponse.reduce((sum, r) => sum + Number(r.balance || 0), 0);
   const sellersDebtTotalResponse = sumPositiveSellerLiabilities(sellersForResponse);
   const ownerCashAvailable = Number(netTotal || 0) - Number(salary_due_total || 0) - sellersDebtTotalResponse;
   const ownerCashAvailableAfterFutureReserveCash = ownerCashAvailable - futureTripsReserveCash;
+  const liveUiTotals = getLiveUiTotals();
+  const liveSellersForUi = Array.isArray(liveUiTotals?.sellers) && liveUiTotals.sellers.length > 0
+    ? liveUiTotals.sellers
+    : sellersForResponse;
+  const sellersCollectTotal = Number(liveUiTotals?.sellers_collect_total ?? sellersDebtTotalResponse ?? 0);
+  const ownerCashToday = Number(liveUiTotals?.owner_cash_today ?? netTotal ?? 0);
 
   // --- Response: keep both nested and flat keys for backward compatibility ---
   res.json({
@@ -1252,9 +1501,12 @@ router.get('/summary', authenticateToken, (req, res) => {
 
     // UI-friendly sellers
     sellers: sellersForResponse,
+    sellers_live: liveSellersForUi,
     sellers_accepted_total: sellersAcceptedTotalResponse,
     sellers_deposited_total: sellersDepositedTotalResponse,
     sellers_balance_total: sellersBalanceTotalResponse,
+    sellers_collect_total: sellersCollectTotal,
+    owner_cash_today: ownerCashToday,
 
     // Dispatcher totals (DISPATCHER_SHIFT kind aggregated)
     dispatcher,

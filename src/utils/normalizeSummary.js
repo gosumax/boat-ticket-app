@@ -11,40 +11,47 @@
  */
 export function normalizeSeller(s) {
   if (!s) return null;
-  
+
   const seller_id = s.seller_id ?? s.sellerId ?? s.id ?? 0;
-  const seller_name = s.seller_name ?? s.sellerName ?? s.name ?? `Продавец #${seller_id}`;
-  
+  const sellerNameRaw = s.seller_name ?? s.sellerName ?? s.name ?? '';
+  const seller_name = (() => {
+    const text = String(sellerNameRaw || '').trim();
+    if (!text || /^\d+$/.test(text)) return `Seller #${Number(seller_id) || 0}`;
+    return text;
+  })();
+  const role = s.role ? String(s.role).toLowerCase() : null;
+
   // Collected amounts
   const collected_total = s.collected_total ?? s.collectedTotal ?? s.accepted ?? 0;
   const collected_cash = s.collected_cash ?? s.collectedCash ?? s.accepted_cash ?? s.cashSales ?? 0;
   const collected_card = s.collected_card ?? s.collectedCard ?? s.accepted_card ?? s.cardSales ?? 0;
-  
+
   // Deposits (handed to owner)
   const deposit_cash = s.deposit_cash ?? s.depositCash ?? s.deposited_cash ?? s.cashHanded ?? 0;
   const deposit_card = s.deposit_card ?? s.depositCard ?? s.deposited_card ?? s.terminalHanded ?? 0;
-  
+
   // Balance / due
   const cash_due_to_owner = s.cash_due_to_owner ?? s.cashDueToOwner ?? s.cash_balance ?? s.cashBalance ?? s.cashRemaining ?? s.balance ?? 0;
   const terminal_due_to_owner = s.terminal_due_to_owner ?? s.terminalDueToOwner ?? s.terminal_debt ?? s.terminalDebt ?? 0;
-  
+
   // Net
   const net_total = s.net_total ?? s.netTotal ?? cash_due_to_owner;
-  
+
   // Status
   const status = s.status ?? (
     cash_due_to_owner === 0 ? 'CLOSED' : cash_due_to_owner > 0 ? 'DEBT' : 'OVERPAID'
   );
-  
+
   // Salary fields
   const salary_due = s.salary_due ?? s.salaryDue ?? 0;
   const salary_due_total = s.salary_due_total ?? s.salaryDueTotal ?? salary_due;
   const salary_accrued = s.salary_accrued ?? s.salaryAccrued ?? salary_due_total;
-  
+
   return {
     seller_id: Number(seller_id),
     seller_name,
     name: seller_name, // alias for compatibility
+    role,
     collected_total: Number(collected_total),
     collected_cash: Number(collected_cash),
     collected_card: Number(collected_card),
@@ -146,6 +153,18 @@ export function normalizeSummary(data) {
   const salary_paid_cash = data.salary_paid_cash ?? data.salaryPaidCash ?? 0;
   const salary_paid_card = data.salary_paid_card ?? data.salaryPaidCard ?? 0;
   const salary_paid_total = data.salary_paid_total ?? data.salaryPaidTotal ?? 0;
+  const owner_cash_today =
+    data.owner_cash_today ??
+    data.ownerCashToday ??
+    data.owner_cash_live_today ??
+    data.ownerCashLiveToday ??
+    null;
+  const sellers_collect_total =
+    data.sellers_collect_total ??
+    data.sellersCollectTotal ??
+    data.sellers_total_collect ??
+    data.sellersTotalCollect ??
+    null;
   const sellers_debt_total = data.sellers_debt_total ?? data.sellersDebtTotal ?? null;
   const owner_cash_available = data.owner_cash_available ?? data.ownerCashAvailable ?? null;
   const owner_cash_available_after_future_reserve_cash =
@@ -193,8 +212,18 @@ export function normalizeSummary(data) {
   const open_trips_count = Number(data.open_trips_count ?? data.openTripsCount ?? 0);
   
   // Sellers
-  const rawSellers = Array.isArray(data.sellers) ? data.sellers : [];
-  const sellers = rawSellers.map(normalizeSeller).filter(Boolean);
+  const rawSellers = Array.isArray(data.sellers_live)
+    ? data.sellers_live
+    : Array.isArray(data.sellers)
+    ? data.sellers
+    : [];
+  const sellers = rawSellers
+    .filter((s) => {
+      const role = String(s?.role || '').toLowerCase();
+      return role !== 'dispatcher' && role !== 'owner' && role !== 'admin';
+    })
+    .map(normalizeSeller)
+    .filter((s) => Boolean(s) && Number.isFinite(Number(s.seller_id)) && Number(s.seller_id) > 0);
   
   // Dispatcher
   const dispatcher = normalizeDispatcher(data.dispatcher);
@@ -280,6 +309,8 @@ export function normalizeSummary(data) {
     salary_paid_cash: Number(salary_paid_cash),
     salary_paid_card: Number(salary_paid_card),
     salary_paid_total: Number(salary_paid_total),
+    owner_cash_today: owner_cash_today !== null ? Number(owner_cash_today) : null,
+    sellers_collect_total: sellers_collect_total !== null ? Number(sellers_collect_total) : null,
     sellers_debt_total: sellers_debt_total !== null ? Number(sellers_debt_total) : null,
     owner_cash_available: owner_cash_available !== null ? Number(owner_cash_available) : null,
     owner_cash_available_without_future_reserve: owner_cash_available_without_future_reserve !== null ? Number(owner_cash_available_without_future_reserve) : null,

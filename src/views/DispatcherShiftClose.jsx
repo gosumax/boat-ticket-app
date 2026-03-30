@@ -216,6 +216,14 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     return { count: debtSellers.length, total: totalDebt };
   }, [normalizedSummary, sellersData]);
 
+  const sellersCollectTotal = useMemo(() => {
+    const fromServer = normalizedSummary?.sellers_collect_total;
+    if (fromServer !== null && fromServer !== undefined) {
+      return Number(fromServer);
+    }
+    return Number(debtSummary.total || 0);
+  }, [normalizedSummary, debtSummary.total]);
+
   const getSellerStatus = (s) => {
     const cashRem = Number(s.cashRemaining || 0);
     const termRem = Number(s.terminalDebt || 0);
@@ -308,8 +316,12 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   }, [normalizedSummary]);
 
   const ownerCashHandoverFinal = useMemo(() => {
-    return ownerCashAvailableAfterReserve - fundsWithholdCashToday;
-  }, [ownerCashAvailableAfterReserve, fundsWithholdCashToday]);
+    const fromServer = normalizedSummary?.owner_cash_today;
+    if (fromServer !== null && fromServer !== undefined) {
+      return Number(fromServer);
+    }
+    return Number(normalizedSummary?.net_total ?? dailySummary?.netTotal ?? 0);
+  }, [normalizedSummary, dailySummary]);
   
   // Cash in cashbox calculation - use server truth if available, else fallback to local calculation
   const cashInCashbox = useMemo(() => {
@@ -623,8 +635,8 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                 {/* Собрать с продавцов */}
                 <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
                   <span className="text-neutral-400">Собрать с продавцов:</span>
-                  <span data-testid="shiftclose-sellers-debt-total" className={`text-lg font-bold ${debtSummary.total > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                    {formatRUB(debtSummary.total)}
+                  <span data-testid="shiftclose-sellers-debt-total" className={`text-lg font-bold ${sellersCollectTotal > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                    {formatRUB(sellersCollectTotal)}
                   </span>
                 </div>
                 
@@ -643,9 +655,9 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                   {formatRUB(ownerCashHandoverFinal)}
                 </div>
                 <div data-testid="shiftclose-owner-final-kpi-formula" className="mt-1 text-xs text-neutral-300">
-                  Нал получено − резерв (нал) − фонды (нал, если применимо) = сдать owner
+                  SALE_ACCEPTED + SALE_PREPAYMENT − SALE_CANCEL_REVERSE (POSTED, today) = сдать owner
                 </div>
-                <div className="mt-1 text-[11px] text-neutral-400">Эта цифра = "Можно забрать из кассы" в Owner → Деньги.</div>
+                <div className="mt-1 text-[11px] text-neutral-400">Цифра рассчитывается напрямую по live `money_ledger` за текущий business_day.</div>
               </div>
 
               <div className="mt-3 rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
