@@ -89,7 +89,7 @@ test.describe('A. Dispatcher Presale Creation', () => {
       sessionStorage.clear();
     });
 
-    await page.goto('http://localhost:5173/');
+    await page.goto('/');
 
     // Login using helper
     await login(page, E2E_DISPATCHER_USERNAME, E2E_DISPATCHER_PASSWORD);

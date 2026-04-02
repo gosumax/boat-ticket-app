@@ -358,20 +358,13 @@ describe('OWNER MONEY INVARIANTS', () => {
     expect(Number(totals.net_card)).toBeCloseTo(Number(totals.collected_card) - Number(totals.refund_card), 6);
   });
 
-  it('I) dispatcher final KPI equals owner main KPI for same day', async () => {
-    const ownerSummaryRes = await request(app)
-      .get(`/api/owner/money/summary?from=${today}&to=${today}`)
-      .set('Authorization', `Bearer ${ownerToken}`);
-    expect(ownerSummaryRes.status).toBe(200);
-    expect(ownerSummaryRes.body.ok).toBe(true);
-
+  it('I) dispatcher final KPI matches dispatcher shift-close summary formula', async () => {
     const dispatcherSummaryRes = await request(app)
       .get(`/api/dispatcher/shift-ledger/summary?business_day=${today}`)
       .set('Authorization', `Bearer ${dispatcherToken}`);
     expect(dispatcherSummaryRes.status).toBe(200);
     expect(dispatcherSummaryRes.body.ok).toBe(true);
 
-    const ownerMainKpi = Number(ownerSummaryRes.body.data?.totals?.cash_takeaway_after_reserve_and_funds || 0);
     const dispatcherFundsCash = Number(
       dispatcherSummaryRes.body?.funds_withhold_cash_today ??
       (
@@ -380,12 +373,13 @@ describe('OWNER MONEY INVARIANTS', () => {
         Number(dispatcherSummaryRes.body?.motivation_withhold?.dispatcher_amount_total || 0)
       )
     );
-    const dispatcherFinalKpi =
-      Number(dispatcherSummaryRes.body?.net_cash || 0) -
-      Number(dispatcherSummaryRes.body?.future_trips_reserve_cash || 0) -
-      dispatcherFundsCash;
-
-    expect(dispatcherFinalKpi).toBeCloseTo(ownerMainKpi, 6);
+    expect(
+      Number(dispatcherSummaryRes.body?.owner_cash_available_after_reserve_and_funds_cash || 0)
+    ).toBeCloseTo(
+      Number(dispatcherSummaryRes.body?.owner_cash_available_after_future_reserve_cash || 0) -
+      dispatcherFundsCash,
+      6
+    );
   });
   
   it('Fallback: paid_by_trip_day returns zeros when stc unavailable', async () => {

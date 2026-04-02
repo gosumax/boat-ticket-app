@@ -1,5 +1,14 @@
 import bcrypt from 'bcrypt';
-import db from '../server/db.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+process.env.NODE_ENV ||= 'test';
+process.env.DB_FILE ||= path.join(__dirname, '..', '_testdata', 'e2e.sqlite');
+
+const { default: db } = await import('../server/db.js');
 
 const SALT_ROUNDS = 10;
 
@@ -45,6 +54,15 @@ for (const user of users) {
   console.log(`[E2E_USERS] ${result.action}: ${user.username} (${user.role}) id=${result.id}`);
 }
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS boat_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    boat_id INTEGER NOT NULL UNIQUE REFERENCES boats(id) ON DELETE CASCADE,
+    seller_cutoff_minutes INTEGER NOT NULL DEFAULT 10,
+    dispatcher_cutoff_minutes INTEGER NOT NULL DEFAULT 0
+  )
+`);
+
 function pad2(n) {
   return String(n).padStart(2, '0');
 }
@@ -83,6 +101,24 @@ const priceByType = {
   banana: { adult: 2200, child: 700, teen: 0 },
 };
 
+function getIsoWeekday(day) {
+  const date = new Date(`${day}T00:00:00`);
+  const weekday = date.getDay();
+  return weekday === 0 ? 7 : weekday;
+}
+
+function getGeneratedSlotTemplateTarget() {
+  try {
+    const rows = db.prepare('PRAGMA foreign_key_list(generated_slots)').all();
+    const fk = rows.find((row) => String(row.from || '').toLowerCase() === 'schedule_template_id');
+    return String(fk?.table || 'schedule_templates');
+  } catch {
+    return 'schedule_templates';
+  }
+}
+
+const generatedSlotTemplateTarget = getGeneratedSlotTemplateTarget();
+
 function ensureBoat(type) {
   const existing = db.prepare(`
     SELECT id, type
@@ -91,7 +127,15 @@ function ensureBoat(type) {
     ORDER BY id ASC
     LIMIT 1
   `).get(type);
-  if (existing?.id) return { id: Number(existing.id), type: String(existing.type || type) };
+  if (existing?.id) {
+    const boatId = Number(existing.id);
+    db.prepare(`
+      INSERT INTO boat_settings (boat_id, seller_cutoff_minutes, dispatcher_cutoff_minutes)
+      VALUES (?, 10, 0)
+      ON CONFLICT(boat_id) DO NOTHING
+    `).run(boatId);
+    return { id: boatId, type: String(existing.type || type) };
+  }
 
   const prices = priceByType[type] || priceByType.speed;
   const ins = db.prepare(`
@@ -100,6 +144,11 @@ function ensureBoat(type) {
   `).run(`E2E ${type}`, type, prices.adult, prices.child, prices.teen);
 
   const created = { id: Number(ins.lastInsertRowid), type };
+  db.prepare(`
+    INSERT INTO boat_settings (boat_id, seller_cutoff_minutes, dispatcher_cutoff_minutes)
+    VALUES (?, 10, 0)
+    ON CONFLICT(boat_id) DO NOTHING
+  `).run(created.id);
   console.log(`[E2E_SLOTS] created boat id=${created.id} type=${type}`);
   return created;
 }
@@ -123,11 +172,33 @@ function ensureTemplateItem(boatId, type, departureTime) {
   return Number(ins.lastInsertRowid);
 }
 
+function ensureScheduleTemplate(boatId, type, departureTime, day) {
+  const weekday = getIsoWeekday(day);
+  const existing = db.prepare(`
+    SELECT id
+    FROM schedule_templates
+    WHERE boat_id = ? AND time = ? AND product_type = ? AND weekday = ? AND is_active = 1
+    ORDER BY id ASC
+    LIMIT 1
+  `).get(boatId, departureTime, type, weekday);
+  if (existing?.id) return Number(existing.id);
+
+  const prices = priceByType[type] || priceByType.speed;
+  const ins = db.prepare(`
+    INSERT INTO schedule_templates
+      (weekday, time, product_type, boat_id, boat_type, capacity, price_adult, price_child, price_teen, duration_minutes, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+  `).run(weekday, departureTime, type, boatId, type, 12, prices.adult, prices.child, prices.teen, 60);
+  return Number(ins.lastInsertRowid);
+}
+
 function ensureGeneratedSlot({ day, type }) {
   const departureTime = timesByType[type] || '23:20';
   const prices = priceByType[type] || priceByType.speed;
   const boat = ensureBoat(type);
-  const templateId = ensureTemplateItem(boat.id, type, departureTime);
+  const templateId = generatedSlotTemplateTarget === 'schedule_template_items'
+    ? ensureTemplateItem(boat.id, type, departureTime)
+    : ensureScheduleTemplate(boat.id, type, departureTime, day);
 
   let slot = db.prepare(`
     SELECT id, capacity

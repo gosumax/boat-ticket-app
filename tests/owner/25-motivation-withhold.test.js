@@ -13,6 +13,8 @@ let app, db, ownerToken, ownerUserId;
 
 // Use fixed dates far in the future to avoid conflicts
 const DAY1 = '2030-01-15';
+const DAY2 = '2030-01-16';
+const DAY3 = '2030-01-17';
 
 beforeAll(async () => {
   resetTestDb();
@@ -68,7 +70,8 @@ describe('MOTIVATION WITHHOLD', () => {
       expect(res.body.data.withhold).toBeDefined();
       expect(res.body.data.withhold.weekly_percent).toBe(0.008);
       expect(res.body.data.withhold.season_percent).toBe(0.005);
-      expect(res.body.data.withhold.dispatcher_percent_total).toBe(0.002);
+      expect(res.body.data.withhold.dispatcher_percent_total).toBe(0);
+      expect(res.body.data.withhold.dispatcher_percent_total_configured).toBe(0.002);
       expect(res.body.data.withhold.dispatcher_percent_per_person).toBe(0.001);
       expect(typeof res.body.data.withhold.weekly_amount).toBe('number');
       expect(typeof res.body.data.withhold.season_amount).toBe('number');
@@ -80,6 +83,11 @@ describe('MOTIVATION WITHHOLD', () => {
       expect(typeof res.body.data.withhold.dispatcher_amount_total).toBe('number');
       expect(typeof res.body.data.withhold.fund_total_original).toBe('number');
       expect(typeof res.body.data.withhold.fund_total_after_withhold).toBe('number');
+      expect(typeof res.body.data.withhold.season_from_revenue).toBe('number');
+      expect(typeof res.body.data.withhold.season_from_prepayment_transfer).toBe('number');
+      expect(typeof res.body.data.withhold.season_fund_total).toBe('number');
+      expect(typeof res.body.data.withhold.season_amount_from_cancelled_prepayment).toBe('number');
+      expect(typeof res.body.data.salary_fund_total).toBe('number');
     });
     
     it('returns dispatchers_today object with all expected fields', async () => {
@@ -121,12 +129,12 @@ describe('MOTIVATION WITHHOLD', () => {
       // fundTotal = 15000
       expect(d.fundTotal).toBe(15000);
       
-      // weekly = roundDownTo50(15000 * 0.008) = roundDownTo50(120) = 100
-      expect(d.withhold.weekly_amount).toBe(100);
+      // weekly is now taken from gross day revenue: roundDownTo50(100000 * 0.008) = 800
+      expect(d.withhold.weekly_amount).toBe(800);
       
       // season base is NOT rounded to 50 anymore
-      expect(d.withhold.season_amount_base).toBe(75);
-      expect(d.withhold.season_amount).toBeGreaterThanOrEqual(75);
+      expect(d.withhold.season_amount_base).toBe(500);
+      expect(d.withhold.season_amount).toBeGreaterThanOrEqual(500);
       expect(d.withhold.season_amount).toBeCloseTo(
         d.withhold.season_amount_base + d.withhold.rounding_to_season_amount_total,
         6
@@ -136,7 +144,7 @@ describe('MOTIVATION WITHHOLD', () => {
       expect(d.dispatchers_today.active_count).toBe(0);
       expect(d.withhold.dispatcher_amount_total).toBe(0);
       
-      // fund_after = original - weekly - season - dispatcher
+      // fund_after = original - weekly - season_from_revenue - dispatcher
       expect(d.withhold.fund_total_after_withhold).toBeCloseTo(
         d.withhold.fund_total_original - d.withhold.weekly_amount - d.withhold.season_amount - d.withhold.dispatcher_amount_total,
         6
@@ -148,7 +156,7 @@ describe('MOTIVATION WITHHOLD', () => {
       const seller = db.prepare(`SELECT id FROM users WHERE role = 'seller' AND is_active = 1 LIMIT 1`).get();
       const sellerId = seller?.id || 4;
       
-      // Create sales for fundTotal = 18600 (like in production)
+      // Create sales for salary_base = 124000 and fundTotal = 18600
       db.prepare(`
         INSERT INTO money_ledger (kind, type, amount, status, seller_id, business_day, event_time)
         VALUES ('SELLER_SHIFT', 'SALE_ACCEPTED_CASH', 124000, 'POSTED', ?, ?, datetime('now'))
@@ -164,12 +172,12 @@ describe('MOTIVATION WITHHOLD', () => {
       // fundTotal = 18600
       expect(d.fundTotal).toBe(18600);
       
-      // weekly = roundDownTo50(18600 * 0.008) = roundDownTo50(148.8) = 100
-      expect(d.withhold.weekly_amount).toBe(100);
+      // weekly is now taken from gross day revenue: roundDownTo50(124000 * 0.008) = 950
+      expect(d.withhold.weekly_amount).toBe(950);
       
-      // season base = 18600 * 0.005 = 93.00 (not rounded)
-      expect(d.withhold.season_amount_base).toBe(93);
-      expect(d.withhold.season_amount).toBeGreaterThanOrEqual(93);
+      // season base = 124000 * 0.005 = 620.00 (not rounded)
+      expect(d.withhold.season_amount_base).toBe(620);
+      expect(d.withhold.season_amount).toBeGreaterThanOrEqual(620);
     });
 
     it('routes all rounding remainders to season fund', async () => {
@@ -206,6 +214,170 @@ describe('MOTIVATION WITHHOLD', () => {
       );
       expect(w.weekly_amount).toBeLessThanOrEqual(w.weekly_amount_raw);
       expect(w.season_amount).toBeGreaterThanOrEqual(w.season_amount_base);
+    });
+
+    it('keeps salary fund invariant after team and individual payout rounding', async () => {
+      const dispatchers = db.prepare(`SELECT id FROM users WHERE role = 'dispatcher' LIMIT 1`).all();
+      const dispatcherId = dispatchers[0]?.id;
+      const seller = db.prepare(`SELECT id FROM users WHERE role = 'seller' AND is_active = 1 LIMIT 1`).get();
+      const sellerId = seller?.id || 4;
+
+      db.prepare(`
+        UPDATE owner_settings
+        SET settings_json = ?
+        WHERE id = 1
+      `).run(JSON.stringify({
+        motivationType: 'adaptive',
+        motivation_percent: 0.15,
+        team_share: 0.5,
+        individual_share: 0.5,
+        k_dispatchers: 1.5,
+        teamIncludeSellers: true,
+        teamIncludeDispatchers: true,
+      }));
+
+      db.prepare(`
+        INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time)
+        VALUES ('SELLER_SHIFT', 'SALE_ACCEPTED_CASH', 'CASH', 60000, 'POSTED', ?, ?, datetime('now'))
+      `).run(sellerId, DAY2);
+      if (dispatcherId) {
+        db.prepare(`
+          INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time)
+          VALUES ('DISPATCHER_SHIFT', 'SALE_ACCEPTED_CASH', 'CASH', 40000, 'POSTED', ?, ?, datetime('now'))
+        `).run(dispatcherId, DAY2);
+      }
+
+      const res = await request(app)
+        .get(`/api/owner/motivation/day?day=${DAY2}`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+
+      expect(res.status).toBe(200);
+
+      const data = res.body.data;
+      const payouts = Array.isArray(data.payouts) ? data.payouts : [];
+      const roundedPayoutsTotal = payouts.reduce((sum, payout) => sum + Number(payout.total || 0), 0);
+      const rawPayoutsTotal = payouts.reduce((sum, payout) => sum + Number(payout.total_raw || payout.total || 0), 0);
+      const teamAndIndividualFund = Number(data.teamFund || 0) + Number(data.individualFund || 0);
+      const payoutsRoundingToSeason = Number(data.withhold?.payouts_rounding_to_season_amount || 0);
+
+      expect(teamAndIndividualFund).toBeGreaterThan(0);
+      expect(rawPayoutsTotal).toBeCloseTo(teamAndIndividualFund, 6);
+      expect(roundedPayoutsTotal + payoutsRoundingToSeason).toBeCloseTo(teamAndIndividualFund, 6);
+
+      payouts.forEach((payout) => {
+        expect(typeof payout.team_part).toBe('number');
+        expect(typeof payout.individual_part).toBe('number');
+        expect(typeof payout.total_raw).toBe('number');
+        expect(typeof payout.salary_rounding_to_season).toBe('number');
+        expect(Number(payout.total || 0) + Number(payout.salary_rounding_to_season || 0)).toBeCloseTo(
+          Number(payout.total_raw || 0),
+          6
+        );
+      });
+    });
+
+    it('excludes future-trip reserve from salary_base', async () => {
+      const seller = db.prepare(`SELECT id FROM users WHERE role = 'seller' AND is_active = 1 LIMIT 1`).get();
+      const sellerId = seller?.id || 4;
+
+      db.prepare(`
+        INSERT INTO money_ledger (trip_day, kind, type, method, amount, status, seller_id, business_day, event_time)
+        VALUES (?, 'SELLER_SHIFT', 'SALE_ACCEPTED_CASH', 'CASH', 16000, 'POSTED', ?, ?, datetime('now'))
+      `).run(DAY1, sellerId, DAY1);
+
+      db.prepare(`
+        INSERT INTO money_ledger (trip_day, kind, type, method, amount, status, seller_id, business_day, event_time)
+        VALUES (?, 'SELLER_SHIFT', 'SALE_ACCEPTED_CASH', 'CASH', 20000, 'POSTED', ?, ?, datetime('now'))
+      `).run(DAY2, sellerId, DAY1);
+
+      const res = await request(app)
+        .get(`/api/owner/motivation/day?day=${DAY1}`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+
+      expect(res.status).toBe(200);
+      expect(Number(res.body.data.revenue_total || 0)).toBe(36000);
+      expect(Number(res.body.data.future_trips_reserve_total || 0)).toBe(20000);
+      expect(Number(res.body.data.salary_base || 0)).toBe(16000);
+      expect(Number(res.body.data.fundTotal || 0)).toBe(2400);
+    });
+
+    it('adds cancelled prepayment routed to season fund into the same day fund model', async () => {
+      const seller = db.prepare(`SELECT id FROM users WHERE role = 'seller' AND is_active = 1 LIMIT 1`).get();
+      const sellerId = seller?.id || 4;
+
+      db.prepare(`
+        INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time)
+        VALUES ('SELLER_SHIFT', 'SALE_ACCEPTED_CASH', 'CASH', 100000, 'POSTED', ?, ?, datetime('now'))
+      `).run(sellerId, DAY3);
+
+      db.prepare(`
+        INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time)
+        VALUES ('FUND', 'SEASON_PREPAY_DELETE', 'INTERNAL', 1200, 'POSTED', NULL, ?, datetime('now'))
+      `).run(DAY3);
+
+      const res = await request(app)
+        .get(`/api/owner/motivation/day?day=${DAY3}`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+
+      expect(res.status).toBe(200);
+      const data = res.body.data;
+      const w = data.withhold;
+      const seasonFromRevenue = Number(w.season_from_revenue ?? w.season_amount ?? 0);
+      const seasonFromTransfer = Number(
+        w.season_from_prepayment_transfer ??
+        w.season_amount_from_cancelled_prepayment ??
+        0
+      );
+      const seasonTotal = Number(w.season_total ?? w.season_fund_total ?? (seasonFromRevenue + seasonFromTransfer));
+
+      expect(seasonFromTransfer).toBe(1200);
+      expect(seasonTotal).toBeCloseTo(
+        seasonFromRevenue + 1200,
+        6
+      );
+      expect(Number(w.fund_total_after_withhold || 0)).toBeCloseTo(
+        Number(w.fund_total_original || 0) -
+        Number(w.weekly_amount || 0) -
+        seasonFromRevenue -
+        Number(w.dispatcher_amount_total || 0),
+        6
+      );
+      expect(Number(data.salary_fund_total || 0)).toBeCloseTo(
+        Math.max(0, Number(w.fund_total_after_withhold || 0)),
+        6
+      );
+    });
+
+    it('manual season transfer without sales keeps salary fund at zero and daily fund-after unchanged', async () => {
+      db.prepare(`
+        INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time)
+        VALUES ('FUND', 'SEASON_PREPAY_DELETE', 'INTERNAL', 1000, 'POSTED', NULL, ?, datetime('now'))
+      `).run(DAY3);
+
+      const res = await request(app)
+        .get(`/api/owner/motivation/day?day=${DAY3}`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+
+      expect(res.status).toBe(200);
+      const data = res.body.data;
+      const w = data.withhold;
+      const seasonFromRevenue = Number(w.season_from_revenue ?? w.season_amount ?? 0);
+      const seasonFromTransfer = Number(
+        w.season_from_prepayment_transfer ??
+        w.season_amount_from_cancelled_prepayment ??
+        0
+      );
+      const seasonTotal = Number(w.season_total ?? w.season_fund_total ?? (seasonFromRevenue + seasonFromTransfer));
+
+      expect(Number(data.revenue_total || 0)).toBe(0);
+      expect(Number(data.fundTotal || 0)).toBe(0);
+      expect(seasonFromRevenue).toBe(0);
+      expect(seasonFromTransfer).toBe(1000);
+      expect(seasonTotal).toBe(1000);
+      expect(Number(w.fund_total_after_withhold || 0)).toBe(0);
+      expect(Number(data.salary_fund_total || 0)).toBe(0);
+      expect(Array.isArray(data.payouts)).toBe(true);
+      expect(data.payouts).toHaveLength(0);
     });
   });
   
@@ -328,7 +500,7 @@ describe('MOTIVATION WITHHOLD', () => {
   
   describe('D) Fund after withhold calculation', () => {
     
-    it('fund_total_after_withhold = original - weekly - season - dispatcher_total', async () => {
+    it('fund_total_after_withhold = original - weekly - season_from_revenue - dispatcher_total', async () => {
       const dispatchers = db.prepare(`SELECT id FROM users WHERE role = 'dispatcher'`).all();
       const d1Id = dispatchers[0].id;
       
@@ -368,16 +540,17 @@ describe('MOTIVATION WITHHOLD', () => {
       const after = d.withhold.fund_total_after_withhold;
       
       // Verify formula
-      expect(after).toBe(original - weekly - season - dispatcher);
+      expect(after).toBe(original - weekly - d.withhold.season_amount - dispatcher);
       
       // Verify specific values
-      // weekly = roundDownTo50(82500 * 0.008) = roundDownTo50(660) = 650
-      expect(weekly).toBe(650);
-      // season base = 82500 * 0.005 = 412.5 (no rounding to 50)
-      expect(d.withhold.season_amount_base).toBe(412.5);
-      expect(season).toBeGreaterThanOrEqual(412.5);
-      // dispatcher = roundDownTo50(82500 * 0.001) = roundDownTo50(82.5) = 50
-      expect(dispatcher).toBe(50);
+      // One active dispatcher sends the unused second 0.1% into Weekly.
+      // weekly = roundDownTo50(550000 * 0.009) = 4950
+      expect(weekly).toBe(4950);
+      // season base = 550000 * 0.005 = 2750 (no rounding to 50)
+      expect(d.withhold.season_amount_base).toBe(2750);
+      expect(season).toBeGreaterThanOrEqual(2750);
+      // dispatcher = roundDownTo50(550000 * 0.001) = 550
+      expect(dispatcher).toBe(550);
       // season includes all rounding remainders
       expect(season).toBeCloseTo(d.withhold.season_amount_base + d.withhold.rounding_to_season_amount_total, 6);
     });
@@ -450,9 +623,11 @@ describe('MOTIVATION WITHHOLD', () => {
       const d = res.body.data;
       
       // Custom percent should be used
-      expect(d.withhold.dispatcher_percent_total).toBe(0.004);
+      expect(d.withhold.dispatcher_percent_total).toBe(0);
+      expect(d.withhold.dispatcher_percent_total_configured).toBe(0.004);
       expect(d.withhold.dispatcher_percent_per_person).toBe(0.002);
-      expect(d.settings_effective.dispatcher_withhold_percent_total).toBe(0.004);
+      expect(d.settings_effective.dispatcher_withhold_percent_total).toBe(0);
+      expect(d.settings_effective.dispatcher_withhold_percent_total_configured).toBe(0.004);
       expect(d.settings_effective.dispatcher_withhold_percent_per_person).toBe(0.002);
       
       // No active dispatchers, so dispatcher withhold should be 0
@@ -500,11 +675,11 @@ describe('MOTIVATION WITHHOLD', () => {
       // fundTotal = 200000 * 0.15 = 30000
       expect(d.fundTotal).toBe(30000);
       
-      // dispatcher_per_person = roundDownTo50(30000 * 0.002) = roundDownTo50(60) = 50
-      expect(d.dispatchers_today.per_dispatcher_amounts[0].amount).toBe(50);
+      // dispatcher_per_person = roundDownTo50(200000 * 0.002) = 400
+      expect(d.dispatchers_today.per_dispatcher_amounts[0].amount).toBe(400);
       
-      // dispatcher_total = 50 (1 dispatcher)
-      expect(d.withhold.dispatcher_amount_total).toBe(50);
+      // dispatcher_total = 400 (1 dispatcher)
+      expect(d.withhold.dispatcher_amount_total).toBe(400);
     });
     
     it('fallback to default 0.002 when settings are null/empty', async () => {
@@ -532,7 +707,8 @@ describe('MOTIVATION WITHHOLD', () => {
       const d = res.body.data;
       
       // Should fallback to default 0.002
-      expect(d.withhold.dispatcher_percent_total).toBe(0.002);
+      expect(d.withhold.dispatcher_percent_total).toBe(0);
+      expect(d.withhold.dispatcher_percent_total_configured).toBe(0.002);
       expect(d.withhold.dispatcher_percent_per_person).toBe(0.001);
     });
   });
@@ -578,12 +754,12 @@ describe('MOTIVATION WITHHOLD', () => {
       expect(d.settings_effective.weekly_withhold_percent_total).toBe(0.012);
       expect(d.settings_effective.season_withhold_percent_total).toBe(0.003);
       
-      // weekly_amount = roundDownTo50(15000 * 0.012) = roundDownTo50(180) = 150
-      expect(d.withhold.weekly_amount).toBe(150);
+      // weekly_amount = roundDownTo50(100000 * 0.012) = 1200
+      expect(d.withhold.weekly_amount).toBe(1200);
       
-      // season base = 15000 * 0.003 = 45 (season itself is not rounded to 50)
-      expect(d.withhold.season_amount_base).toBe(45);
-      expect(d.withhold.season_amount).toBeGreaterThanOrEqual(45);
+      // season base = 100000 * 0.003 = 300 (season itself is not rounded to 50)
+      expect(d.withhold.season_amount_base).toBe(300);
+      expect(d.withhold.season_amount).toBeGreaterThanOrEqual(300);
     });
     
     it('fallback to default weekly/season percent when settings are null/empty', async () => {

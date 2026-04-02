@@ -1,0 +1,2181 @@
+{
+  "generatedAt": "2026-03-30T02:12:06.903Z",
+  "endpoints": [
+    {
+      "file": "selling.mjs",
+      "line": 525,
+      "method": "GET",
+      "routePath": "/boats",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/boats",
+      "frontendConsumers": [
+        {
+          "loc": "src\\components\\admin\\BoatManagement.jsx:56",
+          "via": "apiClient.getBoats",
+          "callPath": "/api/selling/boats"
+        }
+      ]
+    },
+    {
+      "file": "selling.mjs",
+      "line": 545,
+      "method": "GET",
+      "routePath": "/boats/:type/slots",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/boats/:type/slots",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 723,
+      "method": "POST",
+      "routePath": "/presales",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales",
+      "frontendConsumers": [
+        {
+          "loc": "src\\components\\dispatcher\\QuickSaleForm.jsx:285",
+          "via": "apiClient.createPresale",
+          "callPath": "/api/selling/presales"
+        },
+        {
+          "loc": "src\\views\\SellerView.jsx:166",
+          "via": "apiClient.createPresale",
+          "callPath": "/api/selling/presales"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\PresaleListView.jsx:79",
+          "via": "apiClient.getPresales",
+          "callPath": "/api/selling/presales"
+        },
+        {
+          "loc": "src\\components\\seller\\SalesHistory.jsx:25",
+          "via": "apiClient.getPresales",
+          "callPath": "/api/selling/presales"
+        }
+      ]
+    },
+    {
+      "file": "selling.mjs",
+      "line": 1824,
+      "method": "GET",
+      "routePath": "/presales",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales",
+      "frontendConsumers": [
+        {
+          "loc": "src\\components\\dispatcher\\QuickSaleForm.jsx:285",
+          "via": "apiClient.createPresale",
+          "callPath": "/api/selling/presales"
+        },
+        {
+          "loc": "src\\views\\SellerView.jsx:166",
+          "via": "apiClient.createPresale",
+          "callPath": "/api/selling/presales"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\PresaleListView.jsx:79",
+          "via": "apiClient.getPresales",
+          "callPath": "/api/selling/presales"
+        },
+        {
+          "loc": "src\\components\\seller\\SalesHistory.jsx:25",
+          "via": "apiClient.getPresales",
+          "callPath": "/api/selling/presales"
+        }
+      ]
+    },
+    {
+      "file": "selling.mjs",
+      "line": 1868,
+      "method": "GET",
+      "routePath": "/presales/cancelled-trip-pending",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/cancelled-trip-pending",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 1917,
+      "method": "GET",
+      "routePath": "/presales/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 1975,
+      "method": "PUT",
+      "routePath": "/dispatcher/sellers/:id/zone",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/dispatcher/sellers/:id/zone",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 2032,
+      "method": "POST",
+      "routePath": "/dispatcher/slots",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/dispatcher/slots",
+      "frontendConsumers": [
+        {
+          "loc": "src\\components\\dispatcher\\TicketSellingView.jsx:95",
+          "via": "apiClient.getTrips",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\PassengerList.jsx:187",
+          "via": "apiClient.getAllDispatcherSlots",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\PassengerList.jsx:326",
+          "via": "apiClient.getAllDispatcherSlots",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\SlotManagement.jsx:168",
+          "via": "apiClient.getAllDispatcherSlots",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:127",
+          "via": "apiClient.getAllDispatcherSlots",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\TripListView.jsx:97",
+          "via": "apiClient.getAllDispatcherSlots",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\SlotManagement.jsx:337",
+          "via": "apiClient.createDispatcherSlot",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:303",
+          "via": "apiClient.createDispatcherSlot",
+          "callPath": "/api/selling/dispatcher/slots"
+        }
+      ]
+    },
+    {
+      "file": "selling.mjs",
+      "line": 2144,
+      "method": "PATCH",
+      "routePath": "/dispatcher/slots/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/dispatcher/slots/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 2383,
+      "method": "PATCH",
+      "routePath": "/dispatcher/slots/:id/active",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/dispatcher/slots/:id/active",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 2474,
+      "method": "DELETE",
+      "routePath": "/dispatcher/slots/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/dispatcher/slots/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 2551,
+      "method": "GET",
+      "routePath": "/dispatcher/boats",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/dispatcher/boats",
+      "frontendConsumers": [
+        {
+          "loc": "src\\components\\dispatcher\\ScheduleTemplates.jsx:53",
+          "via": "apiClient.getAllDispatcherBoats",
+          "callPath": "/api/selling/dispatcher/boats"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\SlotManagement.jsx:169",
+          "via": "apiClient.getAllDispatcherBoats",
+          "callPath": "/api/selling/dispatcher/boats"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:128",
+          "via": "apiClient.getAllDispatcherBoats",
+          "callPath": "/api/selling/dispatcher/boats"
+        }
+      ]
+    },
+    {
+      "file": "selling.mjs",
+      "line": 2562,
+      "method": "GET",
+      "routePath": "/dispatcher/sellers",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/dispatcher/sellers",
+      "frontendConsumers": [
+        {
+          "loc": "src/components/dispatcher/QuickSaleForm.jsx:132",
+          "via": "apiClient.request",
+          "callPath": "/api/selling/dispatcher/sellers"
+        }
+      ]
+    },
+    {
+      "file": "selling.mjs",
+      "line": 2584,
+      "method": "GET",
+      "routePath": "/dispatcher/slots",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/dispatcher/slots",
+      "frontendConsumers": [
+        {
+          "loc": "src\\components\\dispatcher\\TicketSellingView.jsx:95",
+          "via": "apiClient.getTrips",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\PassengerList.jsx:187",
+          "via": "apiClient.getAllDispatcherSlots",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\PassengerList.jsx:326",
+          "via": "apiClient.getAllDispatcherSlots",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\SlotManagement.jsx:168",
+          "via": "apiClient.getAllDispatcherSlots",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:127",
+          "via": "apiClient.getAllDispatcherSlots",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\TripListView.jsx:97",
+          "via": "apiClient.getAllDispatcherSlots",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\SlotManagement.jsx:337",
+          "via": "apiClient.createDispatcherSlot",
+          "callPath": "/api/selling/dispatcher/slots"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:303",
+          "via": "apiClient.createDispatcherSlot",
+          "callPath": "/api/selling/dispatcher/slots"
+        }
+      ]
+    },
+    {
+      "file": "selling.mjs",
+      "line": 2631,
+      "method": "GET",
+      "routePath": "/dispatcher/slots/:slotId/tickets",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/dispatcher/slots/:slotId/tickets",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 2737,
+      "method": "PATCH",
+      "routePath": "/presales/:id/payment",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/:id/payment",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 2812,
+      "method": "PATCH",
+      "routePath": "/presales/:id/accept-payment",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/:id/accept-payment",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 3076,
+      "method": "PATCH",
+      "routePath": "/presales/:id/cancel",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/:id/cancel",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 3233,
+      "method": "PATCH",
+      "routePath": "/presales/:id/move",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/:id/move",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 3457,
+      "method": "PATCH",
+      "routePath": "/presales/:id/seats",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/:id/seats",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 3581,
+      "method": "PATCH",
+      "routePath": "/presales/:id/used",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/:id/used",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 3655,
+      "method": "PATCH",
+      "routePath": "/presales/:id/refund",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/:id/refund",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 3785,
+      "method": "PATCH",
+      "routePath": "/presales/:id/delete",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/:id/delete",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 3955,
+      "method": "GET",
+      "routePath": "/presales/:id/tickets",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/:id/tickets",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 3980,
+      "method": "GET",
+      "routePath": "/slots/:slotId/tickets",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/slots/:slotId/tickets",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 4025,
+      "method": "PATCH",
+      "routePath": "/tickets/:ticketId/used",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/tickets/:ticketId/used",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 4060,
+      "method": "PATCH",
+      "routePath": "/tickets/:ticketId/refund",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/tickets/:ticketId/refund",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 4179,
+      "method": "PATCH",
+      "routePath": "/tickets/:ticketId/delete",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/tickets/:ticketId/delete",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 4627,
+      "method": "POST",
+      "routePath": "/tickets/:ticketId/transfer",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots",
+        "transferTicketToAnotherSlot"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/tickets/:ticketId/transfer",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 4628,
+      "method": "PATCH",
+      "routePath": "/tickets/:ticketId/transfer",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots",
+        "transferTicketToAnotherSlot"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/tickets/:ticketId/transfer",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 4633,
+      "method": "GET",
+      "routePath": "/transfer-options",
+      "middlewares": [
+        "authenticateToken",
+        "canSell",
+        "canSellOrDispatch"
+      ],
+      "role": "seller|dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/transfer-options",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 5164,
+      "method": "POST",
+      "routePath": "/presales/:id/transfer",
+      "middlewares": [
+        "authenticateToken",
+        "canSell",
+        "canSellOrDispatch"
+      ],
+      "role": "seller|dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/:id/transfer",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 5198,
+      "method": "PATCH",
+      "routePath": "/presales/:id/transfer",
+      "middlewares": [
+        "authenticateToken",
+        "canSell",
+        "canSellOrDispatch"
+      ],
+      "role": "seller|dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/:id/transfer",
+      "frontendConsumers": []
+    },
+    {
+      "file": "selling.mjs",
+      "line": 5232,
+      "method": "PATCH",
+      "routePath": "/presales/:id/cancel-trip-pending",
+      "middlewares": [
+        "authenticateToken",
+        "canSell",
+        "canSellOrDispatch"
+      ],
+      "role": "seller|dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/presales/:id/cancel-trip-pending",
+      "frontendConsumers": []
+    },
+    {
+      "file": "auth.js",
+      "line": 141,
+      "method": "POST",
+      "routePath": "/login",
+      "middlewares": [],
+      "role": "public",
+      "mount": "/api/auth",
+      "fullPath": "/api/auth/login",
+      "frontendConsumers": []
+    },
+    {
+      "file": "auth.js",
+      "line": 167,
+      "method": "GET",
+      "routePath": "/me",
+      "middlewares": [
+        "authenticateToken"
+      ],
+      "role": "authenticated",
+      "mount": "/api/auth",
+      "fullPath": "/api/auth/me",
+      "frontendConsumers": [
+        {
+          "loc": "src\\contexts\\AuthContext.jsx:34",
+          "via": "apiClient.getCurrentUser",
+          "callPath": "/api/auth/me"
+        }
+      ]
+    },
+    {
+      "file": "dispatcher-shift-ledger.mjs",
+      "line": 204,
+      "method": "GET",
+      "routePath": "/summary",
+      "middlewares": [
+        "authenticateToken"
+      ],
+      "role": "authenticated",
+      "mount": "/api/dispatcher",
+      "fullPath": "/api/dispatcher/summary",
+      "frontendConsumers": []
+    },
+    {
+      "file": "dispatcher-shift-ledger.mjs",
+      "line": 204,
+      "method": "GET",
+      "routePath": "/summary",
+      "middlewares": [
+        "authenticateToken"
+      ],
+      "role": "authenticated",
+      "mount": "/api/dispatcher/shift-ledger",
+      "fullPath": "/api/dispatcher/shift-ledger/summary",
+      "frontendConsumers": []
+    },
+    {
+      "file": "dispatcher-shift.mjs",
+      "line": 135,
+      "method": "GET",
+      "routePath": "/diagnose",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/dispatcher/shift",
+      "fullPath": "/api/dispatcher/shift/diagnose",
+      "frontendConsumers": []
+    },
+    {
+      "file": "dispatcher-shift.mjs",
+      "line": 222,
+      "method": "POST",
+      "routePath": "/deposit",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/dispatcher/shift",
+      "fullPath": "/api/dispatcher/shift/deposit",
+      "frontendConsumers": [
+        {
+          "loc": "src/views/DispatcherShiftClose.jsx:363",
+          "via": "apiClient.request",
+          "callPath": "/api/dispatcher/shift/deposit"
+        },
+        {
+          "loc": "src/views/DispatcherShiftClose.jsx:390",
+          "via": "apiClient.request",
+          "callPath": "/api/dispatcher/shift/deposit"
+        },
+        {
+          "loc": "src/views/DispatcherShiftClose.jsx:417",
+          "via": "apiClient.request",
+          "callPath": "/api/dispatcher/shift/deposit"
+        }
+      ]
+    },
+    {
+      "file": "dispatcher-shift.mjs",
+      "line": 316,
+      "method": "POST",
+      "routePath": "/close",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/dispatcher/shift",
+      "fullPath": "/api/dispatcher/shift/close",
+      "frontendConsumers": [
+        {
+          "loc": "src/views/DispatcherShiftClose.jsx:453",
+          "via": "apiClient.request",
+          "callPath": "/api/dispatcher/shift/close"
+        }
+      ]
+    },
+    {
+      "file": "trip-templates.mjs",
+      "line": 49,
+      "method": "GET",
+      "routePath": "/templates",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/templates",
+      "frontendConsumers": []
+    },
+    {
+      "file": "trip-templates.mjs",
+      "line": 67,
+      "method": "GET",
+      "routePath": "/templates/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/templates/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "trip-templates.mjs",
+      "line": 95,
+      "method": "POST",
+      "routePath": "/templates",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/templates",
+      "frontendConsumers": []
+    },
+    {
+      "file": "trip-templates.mjs",
+      "line": 177,
+      "method": "PATCH",
+      "routePath": "/templates/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/templates/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "trip-templates.mjs",
+      "line": 290,
+      "method": "DELETE",
+      "routePath": "/templates/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/templates/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "schedule-template-items.mjs",
+      "line": 66,
+      "method": "GET",
+      "routePath": "/schedule-template-items",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/schedule-template-items",
+      "frontendConsumers": [
+        {
+          "loc": "src\\components\\dispatcher\\ScheduleTemplates.jsx:52",
+          "via": "apiClient.getScheduleTemplateItems",
+          "callPath": "/api/selling/schedule-template-items"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\ScheduleTemplates.jsx:230",
+          "via": "apiClient.createScheduleTemplateItem",
+          "callPath": "/api/selling/schedule-template-items"
+        }
+      ]
+    },
+    {
+      "file": "schedule-template-items.mjs",
+      "line": 93,
+      "method": "GET",
+      "routePath": "/schedule-template-items/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/schedule-template-items/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "schedule-template-items.mjs",
+      "line": 127,
+      "method": "POST",
+      "routePath": "/schedule-template-items",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/schedule-template-items",
+      "frontendConsumers": [
+        {
+          "loc": "src\\components\\dispatcher\\ScheduleTemplates.jsx:52",
+          "via": "apiClient.getScheduleTemplateItems",
+          "callPath": "/api/selling/schedule-template-items"
+        },
+        {
+          "loc": "src\\components\\dispatcher\\ScheduleTemplates.jsx:230",
+          "via": "apiClient.createScheduleTemplateItem",
+          "callPath": "/api/selling/schedule-template-items"
+        }
+      ]
+    },
+    {
+      "file": "schedule-template-items.mjs",
+      "line": 287,
+      "method": "PATCH",
+      "routePath": "/schedule-template-items/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/schedule-template-items/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "schedule-template-items.mjs",
+      "line": 469,
+      "method": "DELETE",
+      "routePath": "/schedule-template-items/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/schedule-template-items/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "schedule-template-items.mjs",
+      "line": 548,
+      "method": "POST",
+      "routePath": "/schedule-template-items/generate",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/schedule-template-items/generate",
+      "frontendConsumers": []
+    },
+    {
+      "file": "schedule-template-items.mjs",
+      "line": 763,
+      "method": "DELETE",
+      "routePath": "/trips-for-deleted-boats",
+      "middlewares": [
+        "authenticateToken",
+        "isAdmin"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/selling",
+      "fullPath": "/api/selling/trips-for-deleted-boats",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 18,
+      "method": "GET",
+      "routePath": "/boats",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/boats",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 43,
+      "method": "GET",
+      "routePath": "/boats/:id",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/boats/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 60,
+      "method": "POST",
+      "routePath": "/boats",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/boats",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 86,
+      "method": "PUT",
+      "routePath": "/boats/:id",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/boats/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 117,
+      "method": "PATCH",
+      "routePath": "/boats/:id/active",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/boats/:id/active",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 142,
+      "method": "DELETE",
+      "routePath": "/boats/:id",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/boats/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 183,
+      "method": "GET",
+      "routePath": "/boats/:id/slots",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/boats/:id/slots",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 219,
+      "method": "POST",
+      "routePath": "/boats/:id/slots",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/boats/:id/slots",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 267,
+      "method": "GET",
+      "routePath": "/users",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/users",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 291,
+      "method": "POST",
+      "routePath": "/users",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/users",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 332,
+      "method": "PATCH",
+      "routePath": "/users/:id",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/users/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 356,
+      "method": "POST",
+      "routePath": "/users/:id/reset-password",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/users/:id/reset-password",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 390,
+      "method": "DELETE",
+      "routePath": "/users/:id",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/users/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 419,
+      "method": "GET",
+      "routePath": "/stats",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/stats",
+      "frontendConsumers": [
+        {
+          "loc": "src/views/AdminView.jsx:54",
+          "via": "apiClient.get",
+          "callPath": "/api/admin/stats"
+        }
+      ]
+    },
+    {
+      "file": "admin.mjs",
+      "line": 475,
+      "method": "GET",
+      "routePath": "/work-zone",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/work-zone",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 499,
+      "method": "GET",
+      "routePath": "/settings/working-zone",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/settings/working-zone",
+      "frontendConsumers": []
+    },
+    {
+      "file": "admin.mjs",
+      "line": 523,
+      "method": "PUT",
+      "routePath": "/settings/working-zone",
+      "middlewares": [
+        "authenticateToken",
+        "requireAdminRole"
+      ],
+      "role": "admin(+owner for requireAdminRole)",
+      "mount": "/api/admin",
+      "fullPath": "/api/admin/settings/working-zone",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 365,
+      "method": "GET",
+      "routePath": "/money/summary",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/money/summary",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 1111,
+      "method": "GET",
+      "routePath": "/money/pending-by-day",
+      "middlewares": [
+        "handlePendingByDay"
+      ],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/money/pending-by-day",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 1112,
+      "method": "GET",
+      "routePath": "/money/pending-by-day/:day",
+      "middlewares": [
+        "handlePendingByDay"
+      ],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/money/pending-by-day/:day",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 1118,
+      "method": "GET",
+      "routePath": "/money/compare-days",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/money/compare-days",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 1322,
+      "method": "GET",
+      "routePath": "/money/compare-periods",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/money/compare-periods",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 1559,
+      "method": "GET",
+      "routePath": "/money/compare-periods-daily",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/money/compare-periods-daily",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 1664,
+      "method": "GET",
+      "routePath": "/money/compare-boat-daily",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/money/compare-boat-daily",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 1784,
+      "method": "GET",
+      "routePath": "/money/compare-seller-daily",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/money/compare-seller-daily",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 1902,
+      "method": "GET",
+      "routePath": "/money/compare-boats",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/money/compare-boats",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 2032,
+      "method": "GET",
+      "routePath": "/money/compare-sellers",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/money/compare-sellers",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 2160,
+      "method": "GET",
+      "routePath": "/motivation/day",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/motivation/day",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 2187,
+      "method": "GET",
+      "routePath": "/motivation/weekly",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/motivation/weekly",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 2497,
+      "method": "GET",
+      "routePath": "/motivation/season",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/motivation/season",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 2781,
+      "method": "GET",
+      "routePath": "/invariants",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/invariants",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 3067,
+      "method": "GET",
+      "routePath": "/boats",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/boats",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 3198,
+      "method": "GET",
+      "routePath": "/sellers/list",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/sellers/list",
+      "frontendConsumers": [
+        {
+          "loc": "src/views/OwnerSettingsView.jsx:287",
+          "via": "apiClient.request",
+          "callPath": "/api/owner/sellers/list"
+        }
+      ]
+    },
+    {
+      "file": "owner.mjs",
+      "line": 3229,
+      "method": "GET",
+      "routePath": "/sellers",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/sellers",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 3376,
+      "method": "PUT",
+      "routePath": "/sellers/:id/zone",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/sellers/:id/zone",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 3435,
+      "method": "GET",
+      "routePath": "/money/collected-today-by-tripday",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/money/collected-today-by-tripday",
+      "frontendConsumers": []
+    },
+    {
+      "file": "owner.mjs",
+      "line": 3636,
+      "method": "GET",
+      "routePath": "/manual/day",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/manual/day",
+      "frontendConsumers": [
+        {
+          "loc": "src/components/owner/OwnerLoadView.jsx:186",
+          "via": "apiClient.request",
+          "callPath": "/api/owner/manual/day"
+        }
+      ]
+    },
+    {
+      "file": "owner.mjs",
+      "line": 3737,
+      "method": "PUT",
+      "routePath": "/manual/day",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/manual/day",
+      "frontendConsumers": [
+        {
+          "loc": "src/components/owner/OwnerLoadView.jsx:186",
+          "via": "apiClient.request",
+          "callPath": "/api/owner/manual/day"
+        }
+      ]
+    },
+    {
+      "file": "owner.mjs",
+      "line": 3816,
+      "method": "POST",
+      "routePath": "/manual/lock",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/manual/lock",
+      "frontendConsumers": [
+        {
+          "loc": "src/components/owner/OwnerLoadView.jsx:212",
+          "via": "apiClient.request",
+          "callPath": "/api/owner/manual/lock"
+        }
+      ]
+    },
+    {
+      "file": "owner.mjs",
+      "line": 4197,
+      "method": "GET",
+      "routePath": "/settings/full",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/settings/full",
+      "frontendConsumers": [
+        {
+          "loc": "src/views/OwnerMotivationView.jsx:125",
+          "via": "apiClient.request",
+          "callPath": "/api/owner/settings/full"
+        },
+        {
+          "loc": "src/views/OwnerSettingsView.jsx:105",
+          "via": "apiClient.request",
+          "callPath": "/api/owner/settings/full"
+        },
+        {
+          "loc": "src/views/OwnerSettingsView.jsx:265",
+          "via": "apiClient.request",
+          "callPath": "/api/owner/settings/full"
+        }
+      ]
+    },
+    {
+      "file": "owner.mjs",
+      "line": 4223,
+      "method": "PUT",
+      "routePath": "/settings/full",
+      "middlewares": [],
+      "role": "unknown",
+      "mount": "/api/owner",
+      "fullPath": "/api/owner/settings/full",
+      "frontendConsumers": [
+        {
+          "loc": "src/views/OwnerMotivationView.jsx:125",
+          "via": "apiClient.request",
+          "callPath": "/api/owner/settings/full"
+        },
+        {
+          "loc": "src/views/OwnerSettingsView.jsx:105",
+          "via": "apiClient.request",
+          "callPath": "/api/owner/settings/full"
+        },
+        {
+          "loc": "src/views/OwnerSettingsView.jsx:265",
+          "via": "apiClient.request",
+          "callPath": "/api/owner/settings/full"
+        }
+      ]
+    },
+    {
+      "file": "schedule-templates.mjs",
+      "line": 49,
+      "method": "GET",
+      "routePath": "/schedule-templates",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/schedule-templates",
+      "frontendConsumers": []
+    },
+    {
+      "file": "schedule-templates.mjs",
+      "line": 69,
+      "method": "GET",
+      "routePath": "/schedule-templates/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/schedule-templates/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "schedule-templates.mjs",
+      "line": 99,
+      "method": "POST",
+      "routePath": "/schedule-templates",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/schedule-templates",
+      "frontendConsumers": []
+    },
+    {
+      "file": "schedule-templates.mjs",
+      "line": 306,
+      "method": "POST",
+      "routePath": "/schedule-templates/:id/generate",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/schedule-templates/:id/generate",
+      "frontendConsumers": []
+    },
+    {
+      "file": "schedule-templates.mjs",
+      "line": 388,
+      "method": "PATCH",
+      "routePath": "/schedule-templates/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/schedule-templates/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "schedule-templates.mjs",
+      "line": 542,
+      "method": "DELETE",
+      "routePath": "/schedule-templates/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/schedule-templates/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": "schedule-templates.mjs",
+      "line": 572,
+      "method": "POST",
+      "routePath": "/schedule-templates/generate",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/schedule-templates/generate",
+      "frontendConsumers": []
+    },
+    {
+      "file": "schedule-templates.mjs",
+      "line": 686,
+      "method": "GET",
+      "routePath": "/generated-slots",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/generated-slots",
+      "frontendConsumers": []
+    },
+    {
+      "file": "schedule-templates.mjs",
+      "line": 728,
+      "method": "GET",
+      "routePath": "/generated-slots/active",
+      "middlewares": [
+        "authenticateToken"
+      ],
+      "role": "authenticated",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/generated-slots/active",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 245,
+      "method": "GET",
+      "routePath": "/boats",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/boats",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 265,
+      "method": "GET",
+      "routePath": "/boats/:type/slots",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/boats/:type/slots",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 444,
+      "method": "POST",
+      "routePath": "/presales",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 1043,
+      "method": "GET",
+      "routePath": "/presales",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 1086,
+      "method": "GET",
+      "routePath": "/presales/cancelled-trip-pending",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/cancelled-trip-pending",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 1134,
+      "method": "GET",
+      "routePath": "/presales/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 1191,
+      "method": "POST",
+      "routePath": "/dispatcher/slots",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/dispatcher/slots",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 1303,
+      "method": "PATCH",
+      "routePath": "/dispatcher/slots/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/dispatcher/slots/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 1539,
+      "method": "PATCH",
+      "routePath": "/dispatcher/slots/:id/active",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/dispatcher/slots/:id/active",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 1628,
+      "method": "DELETE",
+      "routePath": "/dispatcher/slots/:id",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/dispatcher/slots/:id",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 1705,
+      "method": "GET",
+      "routePath": "/dispatcher/boats",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/dispatcher/boats",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 1716,
+      "method": "GET",
+      "routePath": "/dispatcher/slots",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/dispatcher/slots",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 1759,
+      "method": "GET",
+      "routePath": "/slots",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/slots",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 1801,
+      "method": "PATCH",
+      "routePath": "/presales/:id/payment",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id/payment",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 1861,
+      "method": "PATCH",
+      "routePath": "/presales/:id/paid",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id/paid",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 1954,
+      "method": "PATCH",
+      "routePath": "/presales/:id/accept-payment",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id/accept-payment",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 2010,
+      "method": "PATCH",
+      "routePath": "/presales/:id/cancel",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id/cancel",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 2125,
+      "method": "PATCH",
+      "routePath": "/presales/:id/move",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id/move",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 2323,
+      "method": "PATCH",
+      "routePath": "/presales/:id/seats",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id/seats",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 2432,
+      "method": "PATCH",
+      "routePath": "/presales/:id/used",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id/used",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 2499,
+      "method": "PATCH",
+      "routePath": "/presales/:id/refund",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id/refund",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 2613,
+      "method": "PATCH",
+      "routePath": "/presales/:id/delete",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id/delete",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 2700,
+      "method": "GET",
+      "routePath": "/presales/:id/tickets",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id/tickets",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 2725,
+      "method": "GET",
+      "routePath": "/slots/:slotId/tickets",
+      "middlewares": [
+        "authenticateToken",
+        "canSell"
+      ],
+      "role": "seller|dispatcher",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/slots/:slotId/tickets",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 2770,
+      "method": "PATCH",
+      "routePath": "/tickets/:ticketId/used",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/tickets/:ticketId/used",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 2805,
+      "method": "PATCH",
+      "routePath": "/tickets/:ticketId/refund",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/tickets/:ticketId/refund",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 2862,
+      "method": "PATCH",
+      "routePath": "/tickets/:ticketId/delete",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/tickets/:ticketId/delete",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 3126,
+      "method": "POST",
+      "routePath": "/tickets/:ticketId/transfer",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots",
+        "transferTicketToAnotherSlot"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/tickets/:ticketId/transfer",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 3127,
+      "method": "PATCH",
+      "routePath": "/tickets/:ticketId/transfer",
+      "middlewares": [
+        "authenticateToken",
+        "canDispatchManageSlots",
+        "transferTicketToAnotherSlot"
+      ],
+      "role": "dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/tickets/:ticketId/transfer",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 3132,
+      "method": "GET",
+      "routePath": "/transfer-options",
+      "middlewares": [
+        "authenticateToken",
+        "canSell",
+        "canSellOrDispatch"
+      ],
+      "role": "seller|dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/transfer-options",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 3337,
+      "method": "POST",
+      "routePath": "/presales/:id/transfer",
+      "middlewares": [
+        "authenticateToken",
+        "canSell",
+        "canSellOrDispatch"
+      ],
+      "role": "seller|dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id/transfer",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 3359,
+      "method": "PATCH",
+      "routePath": "/presales/:id/transfer",
+      "middlewares": [
+        "authenticateToken",
+        "canSell",
+        "canSellOrDispatch"
+      ],
+      "role": "seller|dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id/transfer",
+      "frontendConsumers": []
+    },
+    {
+      "file": ".mjs",
+      "line": 3381,
+      "method": "PATCH",
+      "routePath": "/presales/:id/cancel-trip-pending",
+      "middlewares": [
+        "authenticateToken",
+        "canSell",
+        "canSellOrDispatch"
+      ],
+      "role": "seller|dispatcher|owner|admin",
+      "mount": "UNMOUNTED",
+      "fullPath": "UNMOUNTED/presales/:id/cancel-trip-pending",
+      "frontendConsumers": []
+    }
+  ],
+  "frontendCalls": [
+    {
+      "file": "src/components/dispatcher/QuickSaleForm.jsx",
+      "line": 132,
+      "raw": "/selling/dispatcher/sellers",
+      "fullPath": "/api/selling/dispatcher/sellers"
+    },
+    {
+      "file": "src/components/owner/OwnerLoadView.jsx",
+      "line": 186,
+      "raw": "/owner/manual/day",
+      "fullPath": "/api/owner/manual/day"
+    },
+    {
+      "file": "src/components/owner/OwnerLoadView.jsx",
+      "line": 212,
+      "raw": "/owner/manual/lock",
+      "fullPath": "/api/owner/manual/lock"
+    },
+    {
+      "file": "src/views/AdminView.jsx",
+      "line": 54,
+      "raw": "/admin/stats",
+      "fullPath": "/api/admin/stats"
+    },
+    {
+      "file": "src/views/AdminView.jsx",
+      "line": 90,
+      "raw": "/users",
+      "fullPath": "/api/users"
+    },
+    {
+      "file": "src/views/DispatcherShiftClose.jsx",
+      "line": 363,
+      "raw": "/dispatcher/shift/deposit",
+      "fullPath": "/api/dispatcher/shift/deposit"
+    },
+    {
+      "file": "src/views/DispatcherShiftClose.jsx",
+      "line": 390,
+      "raw": "/dispatcher/shift/deposit",
+      "fullPath": "/api/dispatcher/shift/deposit"
+    },
+    {
+      "file": "src/views/DispatcherShiftClose.jsx",
+      "line": 417,
+      "raw": "/dispatcher/shift/deposit",
+      "fullPath": "/api/dispatcher/shift/deposit"
+    },
+    {
+      "file": "src/views/DispatcherShiftClose.jsx",
+      "line": 453,
+      "raw": "/dispatcher/shift/close",
+      "fullPath": "/api/dispatcher/shift/close"
+    },
+    {
+      "file": "src/views/OwnerSettingsView.jsx",
+      "line": 287,
+      "raw": "/owner/sellers/list",
+      "fullPath": "/api/owner/sellers/list"
+    },
+    {
+      "file": "src/views/OwnerView.jsx",
+      "line": 52,
+      "raw": "/owner/boats?preset=all",
+      "fullPath": "/api/owner/boats?preset=all"
+    },
+    {
+      "file": "src/views/OwnerView.jsx",
+      "line": 67,
+      "raw": "/owner/sellers?preset=all",
+      "fullPath": "/api/owner/sellers?preset=all"
+    },
+    {
+      "file": "src/views/SellerView.jsx",
+      "line": 189,
+      "raw": "/boats/active",
+      "fullPath": "/api/boats/active"
+    }
+  ]
+}

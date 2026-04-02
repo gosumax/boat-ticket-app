@@ -114,6 +114,33 @@ class ApiClient {
     return this.request('/auth/me');
   }
 
+  // Generic legacy getter used by some screens.
+  get(url) {
+    const normalizedUrl = url === '/users' ? '/admin/users' : url;
+    return this.request(normalizedUrl);
+  }
+
+  // ---------------- ADMIN ----------------
+  getSellers() {
+    return this.request('/admin/users?role=seller');
+  }
+
+  createUser(payload) {
+    return this.request('/admin/users', { method: 'POST', body: payload });
+  }
+
+  updateUser(id, payload) {
+    return this.request(`/admin/users/${id}`, { method: 'PATCH', body: payload });
+  }
+
+  deleteUser(id) {
+    return this.request(`/admin/users/${id}`, { method: 'DELETE' });
+  }
+
+  resetPassword(id, password) {
+    return this.request(`/admin/users/${id}/reset-password`, { method: 'POST', body: { password } });
+  }
+
   // ---------------- SELLING (TRIPS/SLOTS) ----------------
   // Dispatcher + seller use the same slot list logic on the backend.
   // The dispatcher endpoint returns all slots (including completed for filters).
@@ -126,12 +153,70 @@ class ApiClient {
   }
 
   // Boats for sales
-  getBoats() {
-    return this.request('/selling/boats');
+  getBoats(showArchived = false) {
+    const q = showArchived ? '?showArchived=true' : '';
+    return this.request(`/admin/boats${q}`);
   }
 
   getBoatSlotsByType(type) {
     return this.request(`/selling/boats/${encodeURIComponent(type)}/slots`);
+  }
+
+  getBoatSlots(boatId) {
+    return this.request(`/admin/boats/${boatId}/slots`);
+  }
+
+  createBoat(payload) {
+    return this.request('/admin/boats', { method: 'POST', body: payload });
+  }
+
+  async updateBoat(id, payload) {
+    const res = await this.request(`/admin/boats/${id}`, { method: 'PUT', body: payload });
+    return res?.boat || res;
+  }
+
+  toggleBoatActive(id, isActive) {
+    return this.request(`/admin/boats/${id}/active`, {
+      method: 'PATCH',
+      body: { is_active: isActive ? 1 : 0 },
+    });
+  }
+
+  deleteBoat(id) {
+    return this.request(`/admin/boats/${id}`, { method: 'DELETE' });
+  }
+
+  createBoatSlot(boatId, payload) {
+    return this.request(`/admin/boats/${boatId}/slots`, { method: 'POST', body: payload });
+  }
+
+  toggleBoatSlotActive(slotId, isActive) {
+    return this.request(`/selling/dispatcher/slots/${slotId}/active`, {
+      method: 'PATCH',
+      body: { active: isActive ? 1 : 0 },
+    });
+  }
+
+  getWorkingZone() {
+    return this.request('/admin/settings/working-zone');
+  }
+
+  saveWorkingZone(payload) {
+    return this.request('/admin/settings/working-zone', { method: 'PUT', body: payload });
+  }
+
+  async clearAllTrips() {
+    const response = await this.request('/selling/trips-for-deleted-boats', { method: 'DELETE' });
+    if (response && !response.deleted) {
+      return {
+        ...response,
+        deleted: {
+          generated_slots: Number(response.deleted_generated || 0),
+          boat_slots: Number(response.deleted_manual || 0),
+        },
+      };
+    }
+    return response;
   }
 
   // Dispatcher slot management
@@ -170,8 +255,7 @@ class ApiClient {
   }
 
   removeTripsForDeletedBoats() {
-    // optional endpoint in some builds; safe wrapper
-    return this.request('/selling/dispatcher/remove-trips-for-deleted-boats', { method: 'POST' });
+    return this.request('/selling/trips-for-deleted-boats', { method: 'DELETE' });
   }
 
   // ---------------- PRESALES ----------------
@@ -350,7 +434,7 @@ class ApiClient {
   }
 
   deleteScheduleTemplateItem(itemId, deleteFutureTrips) {
-    const q = deleteFutureTrips ? '?delete_future_trips=1' : '';
+    const q = deleteFutureTrips ? '?deleteFutureTrips=true' : '';
     return this.request(`/selling/schedule-template-items/${itemId}${q}`, { method: 'DELETE' });
   }
 

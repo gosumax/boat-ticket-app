@@ -1,12 +1,27 @@
-import { useState, useEffect, useMemo, Fragment } from 'react';
+﻿import { useState, useEffect, useMemo, Fragment } from 'react';
 import apiClient from '../utils/apiClient';
 import { formatRUB } from '../utils/currency';
 import normalizeSummary from '../utils/normalizeSummary';
+import { useAuth } from '../contexts/AuthContext';
 
 const COMMISSION_PERCENT = 13; // Temporary commission rate
 
-// Backend сдачи денег: пытаемся использовать реальный endpoint.
-// Если endpoint недоступен — UI продолжит работать в локальном (мок) режиме.
+function formatRUBExact(amount) {
+  if (amount === undefined || amount === null) return '0 ₽';
+  return new Intl.NumberFormat('ru-RU', {
+    style: 'currency',
+    currency: 'RUB',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(Number(amount) || 0);
+}
+
+function roundMoney(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+// Shift-close UI uses the real backend endpoint.
+// If endpoint is unavailable, UI still works in local fallback mode.
 function toLocalBusinessDay(d = new Date()) {
   const dt = new Date(d);
   const y = dt.getFullYear();
@@ -15,21 +30,8 @@ function toLocalBusinessDay(d = new Date()) {
   return `${y}-${m}-${day}`;
 }
 
-function formatRUBPrecise(v) {
-  const n = Number(v || 0);
-  try {
-    return new Intl.NumberFormat('ru-RU', {
-      style: 'currency',
-      currency: 'RUB',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(n);
-  } catch {
-    return `${n.toFixed(2)} ₽`;
-  }
-}
-
 const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
+  const { currentUser } = useAuth();
   // Shift data
   const [dailySummary, setDailySummary] = useState(null);
   const [sellersData, setSellersData] = useState([]);
@@ -38,17 +40,15 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   const [loadError, setLoadError] = useState('');
   const [reloading, setReloading] = useState(false);
 
-  // Черновики сумм сдачи (локально, пока backend не подключён)
+  // Local drafts for seller deposits until they are posted to the backend.
   // drafts[sellerId] = { cash: string|number, terminal: string|number }
   const [depositDrafts, setDepositDrafts] = useState({});
 
-  // Раскрытие продавца (accordion)
+  // Expanded seller row state (accordion)
   const [expandedSellerId, setExpandedSellerId] = useState(null);
 
   // Salary values from backend
   const [salaryDue, setSalaryDue] = useState(0);
-  const [salaryPaidCash, setSalaryPaidCash] = useState(0);
-  const [salaryPaidCard, setSalaryPaidCard] = useState(0);
   const [salaryPaidTotal, setSalaryPaidTotal] = useState(0);
   // Per-seller salary payout drafts
   const [salaryDraftBySellerId, setSalaryDraftBySellerId] = useState({});
@@ -70,7 +70,6 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   const [shiftSource, setShiftSource] = useState('live');
   const [closedAt, setClosedAt] = useState(null);
   const [closedBy, setClosedBy] = useState(null);
-  const [dispatcherData, setDispatcherData] = useState(null);
 
   // State for trip completion status (gate for operations)
   const [allTripsFinished, setAllTripsFinished] = useState(true);
@@ -84,7 +83,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     const data = await apiClient.request(`/dispatcher/shift-ledger/summary?business_day=${encodeURIComponent(day)}`);
 
     // Normalize the response (handles both snake_case and camelCase)
-    const normalized = normalizeSummary(data);
+    const normalized = normalizeSummary(data, { currentUser });
     if (!normalized) {
       throw new Error('Failed to normalize summary data');
     }
@@ -98,6 +97,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
       cashRevenue: normalized.collected_cash,
       cardRevenue: normalized.collected_card,
       collectedTotal: normalized.collected_total,
+      liveSource: normalized.live_source ?? normalized.source,
       commissionPaid: Math.round((normalized.total_revenue * COMMISSION_PERCENT) / 100),
       businessDay: normalized.business_day,
       // Refund and net metrics
@@ -126,6 +126,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
       // critical fields for the main table
       cashRemaining: s.cash_due_to_owner,
       terminalDebt: s.terminal_due_to_owner ?? s.terminal_debt,
+      totalDue: s.net_total ?? s.balance ?? ((s.cash_due_to_owner ?? 0) + (s.terminal_due_to_owner ?? s.terminal_debt ?? 0)),
       // debug
       depositedTotal: s._raw?.deposited ?? 0,
     }));
@@ -143,8 +144,6 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     setShiftSource(normalized.source);
     setClosedAt(normalized.closed_at);
     setClosedBy(normalized.closed_by);
-    setDispatcherData(normalized.dispatcher);
-
     // Trip status
     setAllTripsFinished(closed ? true : normalized.all_trips_finished);
     setOpenTripsCount(closed ? 0 : normalized.open_trips_count);
@@ -154,8 +153,6 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
 
     // Salary values
     setSalaryDue(normalized.salary_due_total);
-    setSalaryPaidCash(normalized.salary_paid_cash);
-    setSalaryPaidCard(normalized.salary_paid_card);
     setSalaryPaidTotal(normalized.salary_paid_total);
 
     // Init drafts
@@ -202,33 +199,56 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   useEffect(() => {
     refreshSummary(toLocalBusinessDay());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [currentUser]);
 
   const debtSummary = useMemo(() => {
     const sellers = normalizedSummary?.sellers ?? sellersData ?? [];
-    const debtSellers = sellers.filter(
-      (s) => Number(s.cash_due_to_owner ?? (s.cashRemaining || 0)) > 0 || Number(s.terminal_due_to_owner ?? s.terminal_debt ?? (s.terminalDebt || 0)) > 0
-    );
+    const debtSellers = sellers.filter((s) => {
+      const role = String(s?.role || '').toLowerCase();
+      if (role === 'dispatcher') return false;
+      const totalDue = Number(
+        s.net_total ??
+        s.balance ??
+        (
+          Number(s.cash_due_to_owner ?? (s.cashRemaining || 0)) +
+          Number(s.terminal_due_to_owner ?? s.terminal_debt ?? (s.terminalDebt || 0))
+        )
+      );
+      return totalDue > 0;
+    });
     const totalDebt = debtSellers.reduce(
-      (acc, s) => acc + Number(s.cash_due_to_owner ?? (s.cashRemaining || 0)) + Number(s.terminal_due_to_owner ?? s.terminal_debt ?? (s.terminalDebt || 0)),
+      (acc, s) => acc + Math.max(0, Number(
+        s.net_total ??
+        s.balance ??
+        (
+          Number(s.cash_due_to_owner ?? (s.cashRemaining || 0)) +
+          Number(s.terminal_due_to_owner ?? s.terminal_debt ?? (s.terminalDebt || 0))
+        )
+      )),
       0
     );
     return { count: debtSellers.length, total: totalDebt };
   }, [normalizedSummary, sellersData]);
 
+  const shiftCloseBreakdown = normalizedSummary?.shift_close_breakdown ?? null;
+  const shiftCloseTotals = shiftCloseBreakdown?.totals ?? null;
+
   const sellersCollectTotal = useMemo(() => {
-    const fromServer = normalizedSummary?.sellers_collect_total;
-    if (fromServer !== null && fromServer !== undefined) {
-      return Number(fromServer);
+    if (shiftCloseTotals?.collect_from_sellers !== null && shiftCloseTotals?.collect_from_sellers !== undefined) {
+      return Number(shiftCloseTotals.collect_from_sellers);
     }
-    return Number(debtSummary.total || 0);
-  }, [normalizedSummary, debtSummary.total]);
+    if (normalizedSummary?.sellers_collect_total !== null && normalizedSummary?.sellers_collect_total !== undefined) {
+      return Number(normalizedSummary.sellers_collect_total);
+    }
+    return Number(debtSummary?.total ?? 0);
+  }, [shiftCloseTotals, normalizedSummary, debtSummary]);
 
   const getSellerStatus = (s) => {
     const cashRem = Number(s.cashRemaining || 0);
     const termRem = Number(s.terminalDebt || 0);
-    if (cashRem <= 0 && termRem <= 0) return 'CLOSED';
-    // Частично: если уже что-то сдавал (cashHanded/terminalHanded) или один из остатков = 0
+    const totalDue = Number(s.totalDue ?? (cashRem + termRem));
+    if (totalDue <= 0) return 'CLOSED';
+    // Partial: seller already handed over part of the money or one side is already closed.
     const handedAny = Number(s.cashHanded || 0) > 0 || Number(s.terminalHanded || 0) > 0;
     const oneSideClosed = cashRem === 0 || termRem === 0;
     if (handedAny || oneSideClosed) return 'PARTIAL';
@@ -246,12 +266,14 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     const sellers = normalizedSummary?.sellers ?? sellersData ?? [];
     const next = { ...depositDrafts };
     for (const s of sellers) {
+      const role = String(s?.role || '').toLowerCase();
+      if (role === 'dispatcher') continue;
       const cashDue = Math.max(0, Math.floor(Number(s.cash_due_to_owner ?? (s.cashRemaining || 0))));
       const termDue = Math.max(0, Math.floor(Number(s.terminal_due_to_owner ?? s.terminal_debt ?? (s.terminalDebt || 0))));
       const sellerId = s.seller_id ?? s.id;
       const prev = next[sellerId] || { cash: '', terminal: '' };
       next[sellerId] = {
-        // Заполнять только если: due > 0 И поле пустое
+        // Fill only when there is something due and the input is still empty.
         cash: cashDue > 0 && (prev.cash === '' || prev.cash === undefined) ? String(cashDue) : (prev.cash || ''),
         terminal: termDue > 0 && (prev.terminal === '' || prev.terminal === undefined) ? String(termDue) : (prev.terminal || ''),
       };
@@ -268,102 +290,275 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
 
   const ownerCashAvailable = useMemo(() => {
     return Number(
-      normalizedSummary?.net_cash ??
+      shiftCloseTotals?.owner_cash_before_reserve ??
+      normalizedSummary?.owner_cash_available_without_future_reserve ??
       dailySummary?.netCash ??
       0
     );
-  }, [normalizedSummary, dailySummary]);
+  }, [shiftCloseTotals, normalizedSummary, dailySummary]);
 
   const futureTripsReserveCash = useMemo(() => {
     return Number(
+      shiftCloseTotals?.reserve_cash ??
       normalizedSummary?.future_trips_reserve_cash ??
       explainData?.liabilities?.future_trips_reserve_cash ??
       explainData?.liabilities?.prepayment_future_cash ??
       0
     );
-  }, [normalizedSummary, explainData]);
+  }, [shiftCloseTotals, normalizedSummary, explainData]);
 
   const futureTripsReserveCard = useMemo(() => {
     return Number(
+      shiftCloseTotals?.reserve_card ??
       normalizedSummary?.future_trips_reserve_card ??
       explainData?.liabilities?.future_trips_reserve_terminal ??
       explainData?.liabilities?.prepayment_future_terminal ??
       0
     );
-  }, [normalizedSummary, explainData]);
+  }, [shiftCloseTotals, normalizedSummary, explainData]);
 
   const futureTripsReserveTotal = useMemo(
-    () => futureTripsReserveCash + futureTripsReserveCard,
-    [futureTripsReserveCash, futureTripsReserveCard]
+    () => Number(shiftCloseTotals?.reserve_total ?? (futureTripsReserveCash + futureTripsReserveCard)),
+    [shiftCloseTotals, futureTripsReserveCash, futureTripsReserveCard]
   );
 
   const ownerCashAvailableAfterReserve = useMemo(() => {
-    return ownerCashAvailable - futureTripsReserveCash;
-  }, [ownerCashAvailable, futureTripsReserveCash]);
+    return Number(
+      shiftCloseTotals?.owner_cash_after_reserve ??
+      normalizedSummary?.owner_cash_available_after_future_reserve_cash ??
+      (ownerCashAvailable - futureTripsReserveCash)
+    );
+  }, [shiftCloseTotals, normalizedSummary, ownerCashAvailable, futureTripsReserveCash]);
 
   const fundsWithholdCashToday = useMemo(() => {
+    const fromBreakdown = shiftCloseTotals?.funds_withhold_cash_today;
+    if (fromBreakdown !== null && fromBreakdown !== undefined) {
+      return Number(fromBreakdown);
+    }
     const fromServer = normalizedSummary?.funds_withhold_cash_today;
     if (fromServer !== null && fromServer !== undefined) {
       return Number(fromServer);
     }
     const withhold = normalizedSummary?.motivation_withhold;
     if (!withhold) return 0;
+    const seasonFromRevenue = Number(withhold.season_from_revenue ?? withhold.season_amount ?? 0);
+    const dispatcherAmount = Number(withhold.dispatcher_amount_total || 0);
     return (
       Number(withhold.weekly_amount || 0) +
-      Number(withhold.season_amount || 0) +
-      Number(withhold.dispatcher_amount_total || 0)
+      seasonFromRevenue +
+      dispatcherAmount
     );
-  }, [normalizedSummary]);
+  }, [shiftCloseTotals, normalizedSummary]);
 
-  const ownerCashHandoverFinal = useMemo(() => {
-    const fromServer = normalizedSummary?.owner_cash_today;
-    if (fromServer !== null && fromServer !== undefined) {
-      return Number(fromServer);
-    }
-    return Number(normalizedSummary?.net_total ?? dailySummary?.netTotal ?? 0);
-  }, [normalizedSummary, dailySummary]);
-  
-  // Cash in cashbox calculation - use server truth if available, else fallback to local calculation
-  const cashInCashbox = useMemo(() => {
-    // Server truth (from cashbox_json in snapshot or close response)
-    if (normalizedSummary?.cashbox?.cash_in_cashbox !== null && normalizedSummary?.cashbox?.cash_in_cashbox !== undefined) {
-      return normalizedSummary.cashbox.cash_in_cashbox;
-    }
-    // Fallback: local calculation
-    const netCash = normalizedSummary?.net_cash ?? dailySummary?.netCash ?? 0;
-    const depositCash = normalizedSummary?.deposit_cash ?? dailySummary?.depositCash ?? 0;
-    const salaryPaidCashValue = normalizedSummary?.dispatcher?.salary_paid_cash ?? dispatcherData?.salary_paid_cash ?? salaryPaidCash ?? 0;
-    return netCash - depositCash - salaryPaidCashValue;
-  }, [normalizedSummary, dailySummary, salaryPaidCash, dispatcherData]);
-  
-  // Expected sellers cash due - use server truth if available
-  const expectedSellersCashDue = useMemo(() => {
-    // Server truth
-    if (normalizedSummary?.cashbox?.expected_sellers_cash_due !== null && normalizedSummary?.cashbox?.expected_sellers_cash_due !== undefined) {
-      return normalizedSummary.cashbox.expected_sellers_cash_due;
-    }
-    // Fallback: sum of positive cash_due_to_owner
-    const sellers = normalizedSummary?.sellers ?? sellersData ?? [];
-    return sellers.reduce((sum, s) => {
-      const due = s.cash_due_to_owner ?? s.cashRemaining ?? 0;
-      return sum + Math.max(0, Number(due));
-    }, 0);
+  const fundsUi = useMemo(() => {
+    const withhold = normalizedSummary?.motivation_withhold;
+    if (!withhold && !shiftCloseTotals) return null;
+
+    const seasonFromRevenue = Number(
+      shiftCloseTotals?.season_from_revenue ??
+      withhold?.season_from_revenue ??
+      0
+    );
+    const seasonFromPrepaymentTransfer = Number(
+      shiftCloseTotals?.season_prepay_transfer ??
+      withhold?.season_from_prepayment_transfer ??
+      0
+    );
+    const seasonFundTotalFromLedger =
+      shiftCloseTotals?.season_fund_total ??
+      withhold?.season_total ??
+      withhold?.season_fund_total;
+    const seasonFundTotal = Number(
+      seasonFundTotalFromLedger ??
+      (seasonFromRevenue + seasonFromPrepaymentTransfer)
+    );
+    const seasonTodayAmount = Number(
+      shiftCloseTotals?.season_from_revenue ??
+      withhold?.season_from_revenue ??
+      withhold?.season_amount ??
+      0
+    );
+
+    return {
+      weeklyAmount: Number(shiftCloseTotals?.weekly_fund ?? withhold?.weekly_amount ?? 0),
+      dispatcherAmount: Number(shiftCloseTotals?.dispatcher_bonus ?? withhold?.dispatcher_amount_total ?? 0),
+      seasonTodayAmount,
+      seasonFromRevenue,
+      seasonFromPrepaymentTransfer,
+      roundingToSeason: Number(
+        shiftCloseTotals?.season_rounding ??
+        withhold?.rounding_to_season_amount_total ??
+        0
+      ),
+      seasonFundTotal,
+      fundTotalOriginal: Number(
+        shiftCloseTotals?.motivation_fund ??
+        withhold?.fund_total_original ??
+        0
+      ),
+      fundTotalAfterWithhold: Number(
+        shiftCloseTotals?.salary_fund_total ??
+        withhold?.fund_total_after_withhold ??
+        0
+      ),
+    };
+  }, [shiftCloseTotals, normalizedSummary]);
+
+  const payrollRows = useMemo(() => {
+    const sellersForRender =
+      normalizedSummary?.sellers ??
+      normalizedSummary?.participants_with_sales ??
+      sellersData ??
+      [];
+
+    return sellersForRender.filter((seller) => {
+      const sellerId = Number(seller?.seller_id ?? seller?.id ?? 0);
+      const collectedTotal = Number(
+        seller?.collected_total ??
+        seller?.collectedTotal ??
+        seller?.total_collected ??
+        seller?.totalCollected ??
+        seller?.accepted ??
+        0
+      );
+      const salaryTotal = Number(
+        seller?.salary_due_total ??
+        seller?.salaryDueTotal ??
+        seller?.salary_due ??
+        seller?.salaryDue ??
+        seller?.salary_accrued ??
+        seller?.salaryAccrued ??
+        0
+      );
+      return Number.isFinite(sellerId) && sellerId > 0 && (collectedTotal > 0 || salaryTotal > 0);
+    });
   }, [normalizedSummary, sellersData]);
 
-  // Cash discrepancy - use server truth if available
-  const cashDiscrepancy = useMemo(() => {
-    // Server truth
-    if (normalizedSummary?.cashbox?.cash_discrepancy !== null && normalizedSummary?.cashbox?.cash_discrepancy !== undefined) {
-      return normalizedSummary.cashbox.cash_discrepancy;
-    }
-    // Fallback: calculate locally
-    return cashInCashbox - expectedSellersCashDue;
-  }, [normalizedSummary, cashInCashbox, expectedSellersCashDue]);
+  const payrollMath = useMemo(() => {
+    const withhold = normalizedSummary?.motivation_withhold;
+    const salaryRawFromRows = roundMoney(payrollRows.reduce((sum, seller) => (
+      sum + Number(seller?.total_raw ?? seller?.totalRaw ?? seller?.salary_due_total ?? seller?.salaryDueTotal ?? 0)
+    ), 0));
+    const salaryFinalFromRows = roundMoney(payrollRows.reduce((sum, seller) => (
+      sum + Number(
+        seller?.salary_due_total ??
+        seller?.salaryDueTotal ??
+        seller?.salary_due ??
+        seller?.salaryDue ??
+        seller?.salary_accrued ??
+        seller?.salaryAccrued ??
+        0
+      )
+    ), 0));
+    const salaryRoundingFromRows = roundMoney(payrollRows.reduce((sum, seller) => (
+      sum + Number(seller?.salary_rounding_to_season ?? seller?.salaryRoundingToSeason ?? 0)
+    ), 0));
 
-  // Warnings from server (CASH_DISCREPANCY)
-  const cashboxWarnings = useMemo(() => {
-    return normalizedSummary?.cashbox?.warnings ?? normalizedSummary?.warnings ?? [];
-  }, [normalizedSummary]);
+    const fundOriginal = roundMoney(
+      shiftCloseTotals?.motivation_fund ??
+      withhold?.fund_total_original ??
+      0
+    );
+    const weeklyAmount = roundMoney(
+      shiftCloseTotals?.weekly_fund ??
+      withhold?.weekly_amount ??
+      0
+    );
+    const dispatcherAmount = roundMoney(
+      shiftCloseTotals?.dispatcher_bonus ??
+      withhold?.dispatcher_amount_total ??
+      0
+    );
+    const seasonBase = roundMoney(
+      shiftCloseTotals?.season_base ??
+      withhold?.season_amount_base ??
+      0
+    );
+    const seasonFromRounding = roundMoney(
+      shiftCloseTotals?.season_rounding ??
+      withhold?.season_amount_from_rounding ??
+      withhold?.rounding_to_season_amount_total ??
+      0
+    );
+    const seasonTodayAmount = roundMoney(
+      shiftCloseTotals?.season_from_revenue ??
+      withhold?.season_from_revenue ??
+      withhold?.season_amount ??
+      (seasonBase + seasonFromRounding)
+    );
+    const seasonTransfer = roundMoney(
+      shiftCloseTotals?.season_prepay_transfer ??
+      withhold?.season_from_prepayment_transfer ??
+      withhold?.season_amount_from_cancelled_prepayment ??
+      0
+    );
+    const seasonFundTotal = roundMoney(
+      shiftCloseTotals?.season_fund_total ??
+      withhold?.season_total ??
+      withhold?.season_fund_total ??
+      (seasonTodayAmount + seasonTransfer)
+    );
+
+    const serverSalaryRaw = shiftCloseTotals?.salary_fund_total;
+    const salaryRaw = serverSalaryRaw !== null && serverSalaryRaw !== undefined
+      ? roundMoney(serverSalaryRaw)
+      : salaryRawFromRows > 0
+      ? salaryRawFromRows
+      : roundMoney(withhold?.fund_total_after_withhold ?? 0);
+    const serverSalaryFinal = shiftCloseTotals?.final_salary_total;
+    const salaryFinal = serverSalaryFinal !== null && serverSalaryFinal !== undefined
+      ? roundMoney(serverSalaryFinal)
+      : salaryFinalFromRows > 0
+      ? salaryFinalFromRows
+      : roundMoney(normalizedSummary?.salary_due_total ?? 0);
+    const serverSalaryRounding = shiftCloseTotals?.season_rounding;
+    const salaryRoundingToSeason = serverSalaryRounding !== null && serverSalaryRounding !== undefined
+      ? roundMoney(serverSalaryRounding)
+      : salaryRoundingFromRows > 0
+      ? salaryRoundingFromRows
+      : roundMoney(Math.max(0, salaryRaw - salaryFinal));
+
+    return {
+      fundOriginal,
+      weeklyAmount,
+      dispatcherAmount,
+      seasonBase,
+      seasonFromRounding,
+      seasonTodayAmount,
+      seasonTransfer,
+      seasonFundTotal,
+      salaryRaw,
+      salaryFinal,
+      salaryRoundingToSeason,
+      finalInvariantDiff: roundMoney(
+        fundOriginal - weeklyAmount - seasonTodayAmount - dispatcherAmount - salaryFinal
+      ),
+    };
+  }, [shiftCloseTotals, normalizedSummary, payrollRows]);
+
+  const collectedLive = useMemo(() => {
+    return {
+      cash: Number(shiftCloseTotals?.cash_received ?? normalizedSummary?.collected_cash ?? dailySummary?.cashRevenue ?? 0),
+      card: Number(shiftCloseTotals?.card_received ?? normalizedSummary?.collected_card ?? dailySummary?.cardRevenue ?? 0),
+      total: Number(shiftCloseTotals?.total_received ?? normalizedSummary?.collected_total ?? dailySummary?.collectedTotal ?? 0),
+    };
+  }, [shiftCloseTotals, normalizedSummary, dailySummary]);
+
+  const ownerCashHandoverFinal = useMemo(() => {
+    if (shiftCloseTotals?.owner_cash_today !== null && shiftCloseTotals?.owner_cash_today !== undefined) {
+      return Number(shiftCloseTotals.owner_cash_today);
+    }
+    if (normalizedSummary?.owner_handover_cash_final !== null && normalizedSummary?.owner_handover_cash_final !== undefined) {
+      return Number(normalizedSummary.owner_handover_cash_final);
+    }
+    return 0;
+  }, [shiftCloseTotals, normalizedSummary]);
+
+  const shiftSourceLabel = useMemo(() => {
+    if (shiftSource === 'snapshot') return 'снимок';
+    if (shiftSource === 'live') return 'онлайн';
+    return shiftSource || 'онлайн';
+  }, [shiftSource]);
 
   const applySalaryPayoutForSeller = async (sellerId) => {
     const raw = salaryDraftBySellerId?.[sellerId];
@@ -512,7 +707,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
 
   const allChecked = Object.values(confirmationChecks).every(value => value);
 
-  // Guard: нельзя закрыть смену, если есть несданная наличка/долги или невыплаченная ЗП или незавершённые рейсы
+  // Guard: shift cannot be closed while sellers still owe money, salary is unpaid, or trips are unfinished.
   const canCloseShift = allChecked && !shiftClosed && allTripsFinished && Number(salarySummary.remaining || 0) <= 0 && Number(debtSummary.total || 0) <= 0;
   const closeBlockReason = !allChecked
     ? 'Отметь все пункты подтверждения.'
@@ -577,11 +772,11 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                 </button>
                 {shiftClosed ? (
                   <span className="px-2 py-1 bg-green-900/50 text-green-300 rounded-lg text-sm">
-                    ✓ Закрыта ({shiftSource === 'snapshot' ? 'snapshot' : 'live'})
+                    ✓ Закрыта ({shiftSourceLabel})
                   </span>
                 ) : (
                   <span className="px-2 py-1 bg-yellow-900/50 text-yellow-300 rounded-lg text-sm">
-                    ○ Открыта ({shiftSource})
+                    ○ Открыта ({shiftSourceLabel})
                   </span>
                 )}
               </div>
@@ -599,169 +794,164 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
               </div>
             ) : null}
             
-            {/* КАССА ЗА СМЕНУ - компактный блок */}
             <div className="bg-neutral-950/50 border border-neutral-800 p-4 rounded-lg" data-testid="shiftclose-summary">
-              <div className="grid grid-cols-3 gap-4 text-center">
-                <div>
-                  <div className="text-neutral-400 text-sm">Наличные получено</div>
-                  <div data-testid="shiftclose-cash-received" className="text-2xl font-bold text-green-400">{formatRUB(dailySummary.cashRevenue)}</div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-center">
+                <div className="rounded-lg bg-neutral-900 px-3 py-3">
+                  <div className="text-neutral-400 text-sm">Наличными получено</div>
+                  <div data-testid="shiftclose-cash-received" className="text-2xl font-bold text-green-400">
+                    {formatRUBExact(collectedLive.cash)}
+                  </div>
                 </div>
-                <div>
+                <div className="rounded-lg bg-neutral-900 px-3 py-3">
                   <div className="text-neutral-400 text-sm">Терминал получено</div>
-                  <div data-testid="shiftclose-card-received" className="text-2xl font-bold text-blue-400">{formatRUB(dailySummary.cardRevenue)}</div>
+                  <div data-testid="shiftclose-card-received" className="text-2xl font-bold text-blue-400">
+                    {formatRUBExact(collectedLive.card)}
+                  </div>
                 </div>
-                <div>
+                <div className="rounded-lg bg-neutral-900 px-3 py-3">
                   <div className="text-neutral-400 text-sm">Итого получено</div>
-                  <div data-testid="shiftclose-total-received" className="text-2xl font-bold text-emerald-400">{formatRUB(dailySummary.cashRevenue + dailySummary.cardRevenue)}</div>
+                  <div data-testid="shiftclose-total-received" className="text-2xl font-bold text-emerald-400">
+                    {formatRUBExact(collectedLive.total)}
+                  </div>
                 </div>
               </div>
-              
-              {/* Резерв будущих рейсов */}
-              <div className="mt-3 pt-3 border-t border-neutral-800 text-xs text-neutral-500 text-center">
-                <span
-                  className="cursor-help text-neutral-500 hover:text-neutral-300"
-                  title="Это деньги, полученные сегодня за рейсы в будущие дни. Это обязательство до факта поездки/возможного возврата."
-                >?</span>
-                {' '}Резерв будущих рейсов:
-                {' '}нал {formatRUB(futureTripsReserveCash)}
-                {' '}| карта {formatRUB(futureTripsReserveCard)}
-                {' '}| итого {formatRUB(futureTripsReserveTotal)}
-              </div>
-            </div>
 
-            {/* ОПЕРАЦИИ НА ЗАКРЫТИЕ */}
-            <div className="mt-3 bg-neutral-950/30 border border-neutral-800 p-3 rounded-lg">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                {/* Собрать с продавцов */}
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                 <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
-                  <span className="text-neutral-400">Собрать с продавцов:</span>
+                  <span className="text-neutral-400">К выдаче зарплат</span>
+                  <span data-testid="shiftclose-salary-due-remaining" className="text-lg font-bold text-blue-400">
+                    {formatRUB(salarySummary.remaining)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
+                  <span className="text-neutral-400">Отложить в Weekly фонд</span>
+                  <span data-testid="shiftclose-withhold-weekly" className="text-lg font-bold text-purple-300">
+                    {formatRUB(fundsUi?.weeklyAmount ?? 0)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
+                  <span className="text-neutral-400">Отложить в Season фонд</span>
+                  <span data-testid="shiftclose-withhold-season" className="text-lg font-bold text-purple-300">
+                    {formatRUBExact(payrollMath?.seasonFundTotal ?? 0)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
+                  <span className="text-neutral-400">Отложить в резерв будущих рейсов</span>
+                  <span data-testid="shiftclose-future-reserve-total" className="text-lg font-bold text-amber-300">
+                    {formatRUB(futureTripsReserveTotal)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
+                  <span className="text-neutral-400">Сдать owner наличными сегодня</span>
+                  <span data-testid="shiftclose-owner-final-kpi" className={`text-lg font-bold ${ownerCashHandoverFinal < 0 ? 'text-red-300' : 'text-emerald-300'}`}>
+                    {formatRUB(ownerCashHandoverFinal)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
+                  <span className="text-neutral-400">Собрать с продавцов</span>
                   <span data-testid="shiftclose-sellers-debt-total" className={`text-lg font-bold ${sellersCollectTotal > 0 ? 'text-red-400' : 'text-green-400'}`}>
                     {formatRUB(sellersCollectTotal)}
                   </span>
                 </div>
-                
-                {/* К выдаче зарплат */}
-                <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
-                  <span className="text-neutral-400">К выдаче зарплат:</span>
-                  <span data-testid="shiftclose-salary-due-remaining" className="text-lg font-bold text-blue-400" title={`Уже выплачено: ${formatRUB(salaryPaidTotal)} (нал: ${formatRUB(salaryPaidCash)}, терминал: ${formatRUB(salaryPaidCard)})`}>
-                    {formatRUB(salarySummary.remaining)}
-                  </span>
-                </div>
-              </div>
-
-              <div className="mt-3 rounded-xl border border-emerald-700/60 bg-emerald-950/40 p-4 text-center">
-                <div className="text-sm font-semibold text-neutral-100">Сдать owner наличными сегодня</div>
-                <div data-testid="shiftclose-owner-final-kpi" className={`mt-1 text-4xl font-extrabold tracking-tight ${ownerCashHandoverFinal < 0 ? 'text-red-300' : 'text-emerald-300'}`}>
-                  {formatRUB(ownerCashHandoverFinal)}
-                </div>
-                <div data-testid="shiftclose-owner-final-kpi-formula" className="mt-1 text-xs text-neutral-300">
-                  SALE_ACCEPTED + SALE_PREPAYMENT − SALE_CANCEL_REVERSE (POSTED, today) = сдать owner
-                </div>
-                <div className="mt-1 text-[11px] text-neutral-400">Цифра рассчитывается напрямую по live `money_ledger` за текущий business_day.</div>
-              </div>
-
-              <div className="mt-3 rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
-                <div className="text-xs uppercase tracking-wide text-neutral-400">Детали расчёта</div>
-                <div className="mt-2 space-y-2 text-xs">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-neutral-400">К сдаче owner'у (без учёта резерва):</span>
-                    <span data-testid="shiftclose-owner-cash-available" className={`font-semibold ${ownerCashAvailable < 0 ? 'text-red-300' : 'text-neutral-200'}`}>
-                      {formatRUB(ownerCashAvailable)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-neutral-400">Минус резерв будущих рейсов (нал):</span>
-                    <span data-testid="shiftclose-future-reserve-cash" className="font-semibold text-amber-300">
-                      {formatRUB(futureTripsReserveCash)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-neutral-400">К сдаче owner'у (с учётом резерва):</span>
-                    <span data-testid="shiftclose-owner-cash-after-reserve" className={`font-semibold ${ownerCashAvailableAfterReserve < 0 ? 'text-red-300' : 'text-neutral-200'}`}>
-                      {formatRUB(ownerCashAvailableAfterReserve)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-neutral-400">Фондовые обязательства сегодня (нал):</span>
-                    <span data-testid="shiftclose-funds-withhold-cash-today" className="font-semibold text-purple-300">
-                      {formatRUB(fundsWithholdCashToday)}
-                    </span>
-                  </div>
-                </div>
               </div>
             </div>
 
-            {/* Refunds if any */}
-            {dailySummary.refundTotal > 0 && (
-              <div className="mt-3 bg-red-950/30 border border-red-900/50 p-3 rounded-lg text-center">
-                <div className="text-neutral-400 text-sm">Возвраты</div>
-                <div className="text-xl font-bold text-red-400">{formatRUB(dailySummary.refundTotal)}</div>
-                <div className="mt-1 text-xs text-neutral-500">Нал: {formatRUB(dailySummary.refundCash)} | Терминал: {formatRUB(dailySummary.refundCard)}</div>
-              </div>
-            )}
-          
-            {/* Motivation withhold breakdown */}
-            {normalizedSummary?.motivation_withhold && (
-              <div className="mt-3 bg-purple-950/30 border border-purple-900/50 p-3 rounded-lg">
-                <div className="text-sm font-semibold text-purple-300 mb-2">Удержания из фонда мотивации</div>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
-                  <div data-testid="shiftclose-withhold-weekly" className="flex flex-col">
-                    <span className="text-neutral-400">Weekly фонд</span>
-                    <span className="text-lg font-bold text-purple-300">{formatRUBPrecise(normalizedSummary.motivation_withhold.weekly_amount)}</span>
+            {fundsUi && (
+              <details className="mt-3 rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
+                <summary className="cursor-pointer text-sm text-neutral-300">Внутренние расчёты смены</summary>
+                <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3 text-xs text-neutral-400">
+                  <div className="space-y-2 rounded-xl border border-neutral-800 bg-neutral-950/60 p-3">
+                    <div className="text-sm font-semibold text-neutral-200">Payroll</div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Общий фонд мотивации</span>
+                      <span data-testid="shiftclose-fund-original" className="font-semibold text-fuchsia-300">
+                        {formatRUBExact(payrollMath.fundOriginal)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>База для зарплаты</span>
+                      <span className="font-semibold text-blue-300">{formatRUB(normalizedSummary?.salary_base ?? 0)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>ЗП raw до округления</span>
+                      <span data-testid="shiftclose-salary-raw" className="font-semibold text-orange-300">
+                        {formatRUBExact(payrollMath.salaryRaw)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Итоговая ЗП к выплате</span>
+                      <span className="font-semibold text-orange-300">{formatRUB(payrollMath.salaryFinal)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Округление в Season фонд</span>
+                      <span data-testid="shiftclose-withhold-rounding-season" className="font-semibold text-amber-300">
+                        {formatRUBExact(payrollMath.salaryRoundingToSeason)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Бонус диспетчерам</span>
+                      <span data-testid="shiftclose-withhold-dispatcher" className="font-semibold text-sky-300">
+                        {formatRUB(fundsUi?.dispatcherAmount ?? 0)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Фонд = weekly + season today + dispatcher + salary final</span>
+                      <span className={`font-semibold ${Math.abs(payrollMath.finalInvariantDiff) <= 0.01 ? 'text-emerald-300' : 'text-red-300'}`}>
+                        {formatRUBExact(payrollMath.fundOriginal)} = {formatRUBExact(payrollMath.weeklyAmount)} + {formatRUBExact(payrollMath.seasonTodayAmount)} + {formatRUBExact(payrollMath.dispatcherAmount)} + {formatRUBExact(payrollMath.salaryFinal)}
+                      </span>
+                    </div>
                   </div>
-                  <div data-testid="shiftclose-withhold-season" className="flex flex-col">
-                    <span className="text-neutral-400">Season фонд</span>
-                    <span className="text-lg font-bold text-purple-300">{formatRUBPrecise(normalizedSummary.motivation_withhold.season_amount)}</span>
-                  </div>
-                  <div data-testid="shiftclose-withhold-dispatcher" className="flex flex-col">
-                    <span className="text-neutral-400">Бонус диспетчерам</span>
-                    <span className="text-lg font-bold text-purple-300">
-                      {formatRUB(normalizedSummary.motivation_withhold.dispatcher_amount_total)}
-                      <span className="text-xs text-neutral-500 ml-1">(активных: {normalizedSummary.motivation_withhold.active_dispatchers_count})</span>
-                    </span>
-                  </div>
-                  <div data-testid="shiftclose-withhold-fund-original" className="flex flex-col">
-                    <span className="text-neutral-400">Фонд до удержаний</span>
-                    <span className="text-lg font-bold text-neutral-200">{formatRUB(normalizedSummary.motivation_withhold.fund_total_original)}</span>
-                  </div>
-                  <div data-testid="shiftclose-withhold-fund-after" className="flex flex-col">
-                    <span className="text-neutral-400">Фонд после удержаний</span>
-                    <span className="text-lg font-bold text-emerald-300">{formatRUB(normalizedSummary.motivation_withhold.fund_total_after_withhold)}</span>
-                  </div>
-                  <div data-testid="shiftclose-withhold-rounding-season" className="flex flex-col">
-                    <span className="text-neutral-400">Округления → Season</span>
-                    <span className="text-lg font-bold text-amber-300">
-                      {formatRUBPrecise(normalizedSummary.motivation_withhold.rounding_to_season_amount_total)}
-                    </span>
+
+                  <div className="space-y-2 rounded-xl border border-neutral-800 bg-neutral-950/60 p-3">
+                    <div className="text-sm font-semibold text-neutral-200">Фонды и owner cash</div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Weekly фонд</span>
+                      <span className="font-semibold text-purple-300">{formatRUBExact(payrollMath.weeklyAmount)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Season сегодня из выручки</span>
+                      <span data-testid="shiftclose-withhold-season-today" className="font-semibold text-violet-300">
+                        {formatRUBExact(payrollMath.seasonTodayAmount)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Season base</span>
+                      <span className="font-semibold text-violet-300">{formatRUBExact(payrollMath.seasonBase)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Season из округлений</span>
+                      <span className="font-semibold text-amber-300">{formatRUBExact(payrollMath.seasonFromRounding)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Добавлено переносом предоплат</span>
+                      <span data-testid="shiftclose-withhold-season-transfer" className="font-semibold text-cyan-300">
+                        {formatRUBExact(payrollMath.seasonTransfer)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Season фонд всего</span>
+                      <span className="font-semibold text-purple-300">{formatRUBExact(payrollMath.seasonFundTotal)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Наличные owner до резерва</span>
+                      <span className={`font-semibold ${ownerCashAvailable < 0 ? 'text-red-300' : 'text-neutral-200'}`}>{formatRUB(ownerCashAvailable)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Резерв будущих рейсов (нал/терминал)</span>
+                      <span className="font-semibold text-amber-300">{formatRUB(futureTripsReserveCash)} / {formatRUB(futureTripsReserveCard)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Наличные owner после резерва</span>
+                      <span className={`font-semibold ${ownerCashAvailableAfterReserve < 0 ? 'text-red-300' : 'text-neutral-200'}`}>{formatRUB(ownerCashAvailableAfterReserve)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span>Удержания фондов сегодня (нал)</span>
+                      <span className="font-semibold text-purple-300">{formatRUB(fundsWithholdCashToday)}</span>
+                    </div>
                   </div>
                 </div>
-                <div className="mt-2 text-xs text-neutral-500">
-                  Удержание на диспетчеров: {(normalizedSummary.motivation_withhold.dispatcher_percent_total * 100).toFixed(2)}% (на одного: {(normalizedSummary.motivation_withhold.dispatcher_percent_per_person * 100).toFixed(2)}%)
-                </div>
-              </div>
+              </details>
             )}
-          
-          {/* Cash discrepancy warning (from server) - KEEP */}
-          {(cashDiscrepancy !== 0 || cashboxWarnings.length > 0) && (
-            <div className={`mt-3 p-3 rounded-lg border text-center ${
-              cashDiscrepancy > 0 
-                ? 'bg-yellow-950/30 border-yellow-900/50' 
-                : 'bg-red-950/30 border-red-900/50'
-            }`}>
-              <div className={`text-lg font-bold mb-1 ${cashDiscrepancy > 0 ? 'text-yellow-400' : 'text-red-400'}`}>
-                ⚠ ВНИМАНИЕ: Расхождение кассы
-              </div>
-              <div className="text-sm text-neutral-300">
-                {cashDiscrepancy > 0 
-                  ? `В кассе больше наличных на ${formatRUB(Math.abs(cashDiscrepancy))}, чем ожидалось от продавцов`
-                  : `В кассе меньше наличных на ${formatRUB(Math.abs(cashDiscrepancy))}, чем ожидалось от продавцов`
-                }
-              </div>
-              <div className="mt-1 text-xs text-neutral-500">
-                Закрытие смены разрешено, но проверь кассу перед закрытием.
-              </div>
-            </div>
-          )}
           </div>
           
           {/* По продавцам - wider on desktop */}
@@ -802,38 +992,119 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                   <tr className="border-b">
                     <th className="text-left py-2 text-neutral-400 font-medium">Продавец</th>
                     <th className="text-left py-2 text-neutral-400 font-medium">Статус</th>
-                    <th className="text-right py-2 text-neutral-400 font-medium">Остаток нал</th>
+                    <th className="text-right py-2 text-neutral-400 font-medium">Долг наличными</th>
                     <th className="text-right py-2 text-neutral-400 font-medium">Долг терминал</th>
+                    <th className="text-right py-2 text-neutral-400 font-medium">Итоговая ЗП</th>
+                    <th className="text-right py-2 text-neutral-400 font-medium">Итого долг</th>
                     <th className="text-right py-2 text-neutral-400 font-medium">Детали</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(() => {
-                    // Источник продавцов: normalizedSummary.sellers (нормализованные) -> sellersData (legacy state) -> пусто
-                    const sellersForRender = normalizedSummary?.sellers ?? sellersData ?? [];
-                    if (sellersForRender.length === 0) {
+                    // Seller source priority: normalized summary, fallback participants, then legacy state.
+                    const sellersForRender =
+                      normalizedSummary?.sellers ??
+                      normalizedSummary?.participants_with_sales ??
+                      sellersData ??
+                      [];
+                    const rowsForRender = payrollRows.length > 0
+                      ? payrollRows
+                      : sellersForRender.filter((seller) => {
+                          const sellerId = Number(seller?.seller_id ?? seller?.id ?? 0);
+                          const collectedTotal = Number(
+                            seller?.collected_total ??
+                            seller?.collectedTotal ??
+                            seller?.total_collected ??
+                            seller?.totalCollected ??
+                            seller?.accepted ??
+                            0
+                          );
+                          const salaryTotal = Number(
+                            seller?.salary_due_total ??
+                            seller?.salaryDueTotal ??
+                            seller?.salary_due ??
+                            seller?.salaryDue ??
+                            seller?.salary_accrued ??
+                            seller?.salaryAccrued ??
+                            0
+                          );
+                          return Number.isFinite(sellerId) && sellerId > 0 && (collectedTotal > 0 || salaryTotal > 0);
+                        });
+                    if (rowsForRender.length === 0) {
                       return (
                         <tr>
-                          <td colSpan={5} className="py-4 text-center text-neutral-500" data-testid="shiftclose-sellers-empty">
+                          <td colSpan={7} className="py-4 text-center text-neutral-500" data-testid="shiftclose-sellers-empty">
                             Нет данных по продавцам за этот день
                           </td>
                         </tr>
                       );
                     }
-                    return sellersForRender.map((seller) => {
+                    return rowsForRender.map((seller) => {
+                      const role = String(seller.role || '').toLowerCase();
+                      const accruedSalary = Number(
+                        seller.salary_due_total ??
+                        seller.salary_due ??
+                        seller.salary_accrued ??
+                        seller.salary_to_pay ??
+                        0
+                      );
+                      const isDispatcherRow = role === 'dispatcher';
+
                       // Normalize field names for rendering
                       const s = {
                         id: seller.seller_id ?? seller.id,
                         name: seller.seller_name ?? seller.name,
+                        role,
+                        accruedSalary,
+                        teamPart: Number(seller.team_part ?? seller.teamPart ?? 0),
+                        individualPart: Number(seller.individual_part ?? seller.individualPart ?? 0),
+                        dispatcherDailyBonus: Number(
+                          seller.dispatcher_daily_bonus ??
+                          seller.dispatcherDailyBonus ??
+                          0
+                        ),
+                        totalRaw: Number(seller.total_raw ?? seller.totalRaw ?? accruedSalary),
+                        salaryRoundingToSeason: Number(
+                          seller.salary_rounding_to_season ??
+                          seller.salaryRoundingToSeason ??
+                          Math.max(0, Number(seller.total_raw ?? seller.totalRaw ?? accruedSalary) - accruedSalary)
+                        ),
                         cashRemaining: seller.cash_due_to_owner ?? seller.cashRemaining ?? 0,
                         terminalDebt: seller.terminal_due_to_owner ?? seller.terminal_debt ?? seller.terminalDebt ?? 0,
+                        totalDue: seller.net_total ?? seller.balance ?? seller.totalDue ?? 0,
                         cashHanded: seller.deposit_cash ?? seller.cashHanded ?? 0,
                         terminalHanded: seller.deposit_card ?? seller.terminalHanded ?? 0,
+                        collectedCash: Number(seller.collected_cash ?? seller.collectedCash ?? 0),
+                        collectedCard: Number(seller.collected_card ?? seller.collectedCard ?? 0),
+                        collectedTotal: Number(
+                          seller.collected_total ??
+                          seller.collectedTotal ??
+                          seller.total_collected ??
+                          seller.totalCollected ??
+                          0
+                        ),
+                        personalRevenueDay: Number(
+                          seller.personal_revenue_day ??
+                          seller.personalRevenueDay ??
+                          seller.collected_total ??
+                          seller.collectedTotal ??
+                          0
+                        ),
                       };
-                      const st = getSellerStatus(s);
-                      const stLabel = st === 'CLOSED' ? 'Закрыт' : st === 'PARTIAL' ? 'Частично' : 'Долг';
+                      const dispatcherSalaryDisplay = Math.max(0, Number(s.accruedSalary || 0));
+                      const st = isDispatcherRow ? 'DISPATCHER' : getSellerStatus(s);
+                      const stLabel =
+                        st === 'DISPATCHER'
+                          ? 'Диспетчер'
+                          : st === 'CLOSED'
+                          ? 'Закрыт'
+                          : st === 'PARTIAL'
+                          ? 'Частично'
+                          : 'Долг';
                       const stClass =
-                        st === 'CLOSED'
+                        st === 'DISPATCHER'
+                          ? 'bg-blue-900/40 text-blue-300 border-blue-800'
+                          : st === 'CLOSED'
                           ? 'bg-green-900/40 text-green-300 border-green-800'
                           : st === 'PARTIAL'
                           ? 'bg-yellow-900/40 text-yellow-300 border-yellow-800'
@@ -841,147 +1112,266 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
 
                       const cashRem = Number(s.cashRemaining || 0);
                       const termRem = Number(s.terminalDebt || 0);
-
+                      const totalRem = Number(s.totalDue ?? (cashRem + termRem));
+                      const canExpand = true;
                       const isOpen = expandedSellerId === s.id;
 
                       return (
-                        <Fragment key={s.id}>
+                        <Fragment key={`${s.role || 'seller'}-${s.id}`}>
                           <tr className="border-b hover:bg-neutral-950" data-testid={`shiftclose-seller-row-${s.id}`}>
                             <td className="py-3">{s.name}</td>
                             <td className="py-3">
                               <span data-testid={`shiftclose-seller-status-${s.id}`} className={`inline-flex items-center px-2 py-1 rounded-md border text-xs ${stClass}`}>{stLabel}</span>
                             </td>
-                            <td data-testid={`shiftclose-seller-cash-remaining-${s.id}`} className={`text-right py-3 ${cashRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>{formatRUB(cashRem)}</td>
-                            <td data-testid={`shiftclose-seller-terminal-debt-${s.id}`} className={`text-right py-3 ${termRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>{formatRUB(termRem)}</td>
+                            <td data-testid={`shiftclose-seller-cash-remaining-${s.id}`} className={`text-right py-3 ${isDispatcherRow ? 'text-neutral-500' : cashRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>
+                              {isDispatcherRow ? '-' : formatRUB(cashRem)}
+                            </td>
+                            <td data-testid={`shiftclose-seller-terminal-debt-${s.id}`} className={`text-right py-3 ${isDispatcherRow ? 'text-neutral-500' : termRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>
+                              {isDispatcherRow ? '-' : formatRUB(termRem)}
+                            </td>
+                            <td data-testid={`shiftclose-seller-salary-accrued-${s.id}`} className={`text-right py-3 ${
+                              isDispatcherRow
+                                ? dispatcherSalaryDisplay > 0
+                                  ? 'text-orange-300 font-semibold'
+                                  : 'text-neutral-200'
+                                : s.accruedSalary > 0
+                                ? 'text-orange-300 font-semibold'
+                                : 'text-neutral-500'
+                            }`}>
+                              <div>
+                                {isDispatcherRow
+                                  ? formatRUB(dispatcherSalaryDisplay)
+                                  : s.accruedSalary > 0
+                                  ? formatRUB(s.accruedSalary)
+                                  : '-'}
+                              </div>
+                            </td>
+                            <td data-testid={`shiftclose-seller-total-due-${s.id}`} className={`text-right py-3 ${isDispatcherRow ? 'text-neutral-500' : totalRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>
+                              {isDispatcherRow ? '-' : formatRUB(totalRem)}
+                            </td>
                             <td className="py-3 text-right">
-                              <button
-                                type="button"
-                                onClick={() => setExpandedSellerId((prev) => (prev === s.id ? null : s.id))}
-                                className="inline-flex items-center justify-center w-10 h-9 rounded-lg border border-neutral-800 bg-neutral-950 text-neutral-200 hover:bg-neutral-900"
-                                aria-label="Показать детали"
-                                title="Показать детали"
-                              >
-                                {isOpen ? '▴' : '▾'}
-                              </button>
+                              {canExpand ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedSellerId((prev) => (prev === s.id ? null : s.id))}
+                                  className="inline-flex items-center justify-center w-10 h-9 rounded-lg border border-neutral-800 bg-neutral-950 text-neutral-200 hover:bg-neutral-900"
+                                  aria-label="Показать детали"
+                                  title="Показать детали"
+                                >
+                                  {isOpen ? '▴' : '▾'}
+                                </button>
+                              ) : (
+                                <span className="text-neutral-500">-</span>
+                              )}
                             </td>
                           </tr>
 
-                          {isOpen && (
+                          {isOpen && canExpand && (
                             <tr className="border-b">
-                              <td colSpan={5} className="py-3">
+                              <td colSpan={7} className="py-3">
                                 <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-3">
-                                  <div className="text-sm text-neutral-300 font-semibold mb-3">{s.name} — детали</div>
+                                  <div className="text-sm text-neutral-300 font-semibold mb-3">
+                                    {isDispatcherRow ? `${s.name} - детали диспетчера` : `${s.name} - детали`}
+                                  </div>
 
                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    {/* Money movement */}
-                                    <div className="bg-neutral-900/40 border border-neutral-800 rounded-xl p-3">
-                                      <div className="text-sm text-neutral-200 font-semibold mb-2">Движение денег</div>
+                                    {isDispatcherRow ? (
+                                      <div className="bg-neutral-900/40 border border-neutral-800 rounded-xl p-3">
+                                        <div className="text-sm text-neutral-200 font-semibold mb-2">Операционные показатели</div>
 
-                                      <div className="flex items-center justify-between gap-3 py-2 border-b border-neutral-800">
-                                        <div>
-                                          <div className="text-neutral-400 text-xs">Остаток нал</div>
-                                          <div className={`font-semibold ${cashRem > 0 ? 'text-red-300' : 'text-neutral-200'}`}>{formatRUB(cashRem)}</div>
+                                        <div className="mb-3 grid grid-cols-3 gap-2 rounded-xl border border-neutral-800 bg-neutral-950/70 p-3 text-center">
+                                          <div>
+                                            <div className="text-[11px] uppercase tracking-wide text-neutral-500">Наличные</div>
+                                            <div className="mt-1 font-semibold text-green-300">{formatRUBExact(s.collectedCash)}</div>
+                                          </div>
+                                          <div>
+                                            <div className="text-[11px] uppercase tracking-wide text-neutral-500">Терминал</div>
+                                            <div className="mt-1 font-semibold text-blue-300">{formatRUBExact(s.collectedCard)}</div>
+                                          </div>
+                                          <div>
+                                            <div className="text-[11px] uppercase tracking-wide text-neutral-500">Итого</div>
+                                            <div className="mt-1 font-semibold text-emerald-300">{formatRUBExact(s.collectedTotal)}</div>
+                                          </div>
                                         </div>
-                                        <div className="flex items-center gap-2">
-                                          <input
-                                            type="number"
-                                            min="0"
-                                            step="1"
-                                            inputMode="numeric"
-                                            placeholder={cashRem > 0 ? String(cashRem) : ''}
-                                            value={depositDrafts?.[s.id]?.cash ?? ''}
-                                            onChange={(e) => {
-                                              const raw = e.target.value;
-                                              if (raw === '') {
-                                                setDraftValue(s.id, 'cash', '');
-                                              } else {
-                                                const n = Math.max(0, Math.floor(Number(raw) || 0));
-                                                setDraftValue(s.id, 'cash', String(n));
-                                              }
-                                            }}
-                                            className="w-28 bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-2 text-neutral-100 no-spin"
-                                          />
-                                          <button
-                                            type="button"
-                                            onClick={() => applyCashDeposit(s.id)}
-                                            disabled={shiftClosed || !allTripsFinished || (cashRem <= 0 && Number(depositDrafts?.[s.id]?.cash || 0) <= 0)}
-                                            className={`px-3 py-2 rounded-lg border ${
-                                              !shiftClosed && allTripsFinished && (cashRem > 0 || Number(depositDrafts?.[s.id]?.cash || 0) > 0)
-                                                ? 'bg-neutral-900 border-neutral-700 text-neutral-100 hover:bg-neutral-800'
-                                                : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
-                                            }`}
-                                          >
-                                            Сдать нал
-                                          </button>
+
+                                        <div className="flex items-center justify-between gap-3 py-2 border-b border-neutral-800">
+                                          <span className="text-neutral-500">Seller debt</span>
+                                          <span className="font-semibold text-neutral-200">Не применяется к диспетчеру</span>
+                                        </div>
+                                        <div className="flex items-center justify-between gap-3 py-2">
+                                          <span className="text-neutral-500">Личная выручка за день</span>
+                                          <span className="font-semibold text-neutral-200">{formatRUBExact(s.personalRevenueDay)}</span>
                                         </div>
                                       </div>
+                                    ) : (
+                                      <div className="bg-neutral-900/40 border border-neutral-800 rounded-xl p-3">
+                                        <div className="text-sm text-neutral-200 font-semibold mb-2">Движение денег</div>
 
-                                      <div className="flex items-center justify-between gap-3 py-2">
-                                        <div>
-                                          <div className="text-neutral-400 text-xs">Долг терминал</div>
-                                          <div className={`font-semibold ${termRem > 0 ? 'text-red-300' : 'text-neutral-200'}`}>{formatRUB(termRem)}</div>
+                                        <div className="mb-3 grid grid-cols-3 gap-2 rounded-xl border border-neutral-800 bg-neutral-950/70 p-3 text-center">
+                                          <div>
+                                            <div className="text-[11px] uppercase tracking-wide text-neutral-500">Долг нал</div>
+                                            <div className={`mt-1 font-semibold ${cashRem > 0 ? 'text-red-300' : 'text-neutral-200'}`}>{formatRUB(cashRem)}</div>
+                                          </div>
+                                          <div>
+                                            <div className="text-[11px] uppercase tracking-wide text-neutral-500">Долг терм</div>
+                                            <div className={`mt-1 font-semibold ${termRem > 0 ? 'text-red-300' : 'text-neutral-200'}`}>{formatRUB(termRem)}</div>
+                                          </div>
+                                          <div>
+                                            <div className="text-[11px] uppercase tracking-wide text-neutral-500">Итого долг</div>
+                                            <div className={`mt-1 font-semibold ${totalRem > 0 ? 'text-red-300' : 'text-neutral-200'}`}>{formatRUB(totalRem)}</div>
+                                          </div>
                                         </div>
-                                        <div className="flex items-center gap-2">
-                                          <input
-                                            type="number"
-                                            min="0"
-                                            step="1"
-                                            inputMode="numeric"
-                                            placeholder={termRem > 0 ? String(termRem) : ''}
-                                            value={depositDrafts?.[s.id]?.terminal ?? ''}
-                                            onChange={(e) => {
-                                              const raw = e.target.value;
-                                              if (raw === '') {
-                                                setDraftValue(s.id, 'terminal', '');
-                                              } else {
-                                                const n = Math.max(0, Math.floor(Number(raw) || 0));
-                                                setDraftValue(s.id, 'terminal', String(n));
-                                              }
-                                            }}
-                                            className="w-28 bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-2 text-neutral-100 no-spin"
-                                          />
-                                          <button
-                                            type="button"
-                                            onClick={() => applyTerminalClose(s.id)}
-                                            disabled={shiftClosed || !allTripsFinished || (termRem <= 0 && Number(depositDrafts?.[s.id]?.terminal || 0) <= 0)}
-                                            className={`px-3 py-2 rounded-lg border ${
-                                              !shiftClosed && allTripsFinished && (termRem > 0 || Number(depositDrafts?.[s.id]?.terminal || 0) > 0)
-                                                ? 'bg-neutral-900 border-neutral-700 text-neutral-100 hover:bg-neutral-800'
-                                                : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
-                                            }`}
-                                          >
-                                            Закрыть терминал
-                                          </button>
+
+                                        <div className="flex items-center justify-between gap-3 py-2 border-b border-neutral-800">
+                                          <div>
+                                            <div className="text-neutral-400 text-xs">Остаток нал</div>
+                                            <div className={`font-semibold ${cashRem > 0 ? 'text-red-300' : 'text-neutral-200'}`}>{formatRUB(cashRem)}</div>
+                                          </div>
+                                          <div className="flex items-center gap-2">
+                                            <input
+                                              type="number"
+                                              min="0"
+                                              step="1"
+                                              inputMode="numeric"
+                                              placeholder={cashRem > 0 ? String(cashRem) : ''}
+                                              value={depositDrafts?.[s.id]?.cash ?? ''}
+                                              onChange={(e) => {
+                                                const raw = e.target.value;
+                                                if (raw === '') {
+                                                  setDraftValue(s.id, 'cash', '');
+                                                } else {
+                                                  const n = Math.max(0, Math.floor(Number(raw) || 0));
+                                                  setDraftValue(s.id, 'cash', String(n));
+                                                }
+                                              }}
+                                              className="w-28 bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-2 text-neutral-100 no-spin"
+                                            />
+                                            <button
+                                              type="button"
+                                              onClick={() => applyCashDeposit(s.id)}
+                                              disabled={shiftClosed || !allTripsFinished || (cashRem <= 0 && Number(depositDrafts?.[s.id]?.cash || 0) <= 0)}
+                                              className={`px-3 py-2 rounded-lg border ${
+                                                !shiftClosed && allTripsFinished && (cashRem > 0 || Number(depositDrafts?.[s.id]?.cash || 0) > 0)
+                                                  ? 'bg-neutral-900 border-neutral-700 text-neutral-100 hover:bg-neutral-800'
+                                                  : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
+                                              }`}
+                                            >
+                                              Сдать нал
+                                            </button>
+                                          </div>
+                                        </div>
+
+                                        <div className="flex items-center justify-between gap-3 py-2">
+                                          <div>
+                                            <div className="text-neutral-400 text-xs">Долг терминал</div>
+                                            <div className={`font-semibold ${termRem > 0 ? 'text-red-300' : 'text-neutral-200'}`}>{formatRUB(termRem)}</div>
+                                          </div>
+                                          <div className="flex items-center gap-2">
+                                            <input
+                                              type="number"
+                                              min="0"
+                                              step="1"
+                                              inputMode="numeric"
+                                              placeholder={termRem > 0 ? String(termRem) : ''}
+                                              value={depositDrafts?.[s.id]?.terminal ?? ''}
+                                              onChange={(e) => {
+                                                const raw = e.target.value;
+                                                if (raw === '') {
+                                                  setDraftValue(s.id, 'terminal', '');
+                                                } else {
+                                                  const n = Math.max(0, Math.floor(Number(raw) || 0));
+                                                  setDraftValue(s.id, 'terminal', String(n));
+                                                }
+                                              }}
+                                              className="w-28 bg-neutral-950 border border-neutral-800 rounded-lg px-2 py-2 text-neutral-100 no-spin"
+                                            />
+                                            <button
+                                              type="button"
+                                              onClick={() => applyTerminalClose(s.id)}
+                                              disabled={shiftClosed || !allTripsFinished || (termRem <= 0 && Number(depositDrafts?.[s.id]?.terminal || 0) <= 0)}
+                                              className={`px-3 py-2 rounded-lg border ${
+                                                !shiftClosed && allTripsFinished && (termRem > 0 || Number(depositDrafts?.[s.id]?.terminal || 0) > 0)
+                                                  ? 'bg-neutral-900 border-neutral-700 text-neutral-100 hover:bg-neutral-800'
+                                                  : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
+                                              }`}
+                                            >
+                                              Закрыть терминал
+                                            </button>
+                                          </div>
                                         </div>
                                       </div>
-                                    </div>
+                                    )}
                                     
                                     {/* Salary payout */}
                                     <div className="bg-orange-950/20 border border-orange-900/30 rounded-xl p-3">
-                                      <div className="text-sm text-neutral-200 font-semibold mb-1">Зарплата</div>
+                                      <div className="text-sm text-neutral-200 font-semibold mb-1">
+                                        {isDispatcherRow ? 'Начисление диспетчера' : 'Зарплата'}
+                                      </div>
                                       <div className="text-xs text-neutral-500 mb-2">Выплата фиксируется в ledger</div>
                                       
-                                      {/* Начислено - only show real per-seller data, no fake calculations */}
                                       <div className="mb-2 pb-2 border-b border-neutral-800">
-                                        <div className="text-xs text-neutral-400">Начислено сегодня:</div>
-                                        {(() => {
-                                          const sellerNorm = normalizedSummary?.sellers?.find(x => (x.seller_id ?? x.id) === s.id);
-                                          const accrued = sellerNorm?.salary_due_total ?? sellerNorm?.salary_due ?? sellerNorm?.salary_accrued ?? sellerNorm?.salary_to_pay ?? null;
-                                          return accrued != null ? (
-                                            <div className="text-sm font-semibold text-orange-300">{formatRUB(accrued)}</div>
-                                          ) : (
-                                            <div className="text-sm text-neutral-500">—</div>
-                                          );
-                                        })()}
+                                        <div className="text-xs text-neutral-400">Итоговая ЗП:</div>
+                                        {dispatcherSalaryDisplay > 0 ? (
+                                          <div className="text-sm font-semibold text-orange-300">{formatRUB(dispatcherSalaryDisplay)}</div>
+                                        ) : (
+                                          <div className="text-sm text-neutral-500">-</div>
+                                        )}
                                       </div>
                                       
+                                      <div className="mb-2 pb-2 border-b border-neutral-800">
+                                        <div className="text-xs text-neutral-400">Структура начисления:</div>
+                                        <div className="mt-2 space-y-1 text-sm">
+                                          <div className="flex items-center justify-between gap-3">
+                                            <span className="text-neutral-500">Командная часть</span>
+                                            <span data-testid={`shiftclose-seller-team-part-${s.id}`} className={s.teamPart > 0 ? 'font-semibold text-sky-300' : 'text-neutral-500'}>
+                                              {s.teamPart > 0 ? formatRUBExact(s.teamPart) : '-'}
+                                            </span>
+                                          </div>
+                                          <div className="flex items-center justify-between gap-3">
+                                            <span className="text-neutral-500">Индивидуальная часть</span>
+                                            <span data-testid={`shiftclose-seller-individual-part-${s.id}`} className={s.individualPart > 0 ? 'font-semibold text-violet-300' : 'text-neutral-500'}>
+                                              {s.individualPart > 0 ? formatRUBExact(s.individualPart) : '-'}
+                                            </span>
+                                          </div>
+                                          <div className="flex items-center justify-between gap-3">
+                                            <span className="text-neutral-500">Raw до округления</span>
+                                            <span className={s.totalRaw > 0 ? 'font-semibold text-orange-200' : 'text-neutral-500'}>
+                                              {s.totalRaw > 0 ? formatRUBExact(s.totalRaw) : '-'}
+                                            </span>
+                                          </div>
+                                          {s.dispatcherDailyBonus > 0 ? (
+                                            <div className="flex items-center justify-between gap-3">
+                                              <span className="text-neutral-500">Бонус диспетчерам</span>
+                                              <span
+                                                data-testid={`shiftclose-seller-dispatcher-bonus-${s.id}`}
+                                                className="font-semibold text-sky-300"
+                                              >
+                                                {formatRUBExact(s.dispatcherDailyBonus)}
+                                              </span>
+                                            </div>
+                                          ) : null}
+                                          {s.salaryRoundingToSeason > 0 ? (
+                                            <div className="flex items-center justify-between gap-3">
+                                              <span className="text-neutral-500">Сезонные удержания (округление)</span>
+                                              <span className="font-semibold text-amber-300">{formatRUBExact(s.salaryRoundingToSeason)}</span>
+                                            </div>
+                                          ) : null}
+                                          <div className="flex items-center justify-between gap-3">
+                                            <span className="text-neutral-500">Итоговая ЗП</span>
+                                            <span className={dispatcherSalaryDisplay > 0 ? 'font-semibold text-orange-300' : 'text-neutral-500'}>
+                                              {dispatcherSalaryDisplay > 0 ? formatRUB(dispatcherSalaryDisplay) : '-'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      </div>
+
                                       <div className="flex items-center gap-2">
                                         <input
                                           type="number"
                                           min="0"
                                           step="1"
                                           inputMode="numeric"
-                                          placeholder="Сумма"
+                                          placeholder={dispatcherSalaryDisplay > 0 ? String(Math.floor(dispatcherSalaryDisplay)) : 'Сумма'}
                                           value={salaryDraftBySellerId?.[s.id] ?? ''}
                                           onChange={(e) => {
                                             const raw = e.target.value;
@@ -1021,9 +1411,6 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
               </table>
             </div>
             
-            <div className="mt-4 text-sm text-gray-500 italic">
-              Предварительный расчёт по {COMMISSION_PERCENT}% (позже заменим мотивацией)
-            </div>
               </div>
             </div>
           </div>
@@ -1101,3 +1488,5 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
 };
 
 export default DispatcherShiftClose;
+
+

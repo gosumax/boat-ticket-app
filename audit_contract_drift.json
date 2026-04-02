@@ -1,0 +1,622 @@
+{
+  "generatedAt": "2026-03-30T02:34:26.830Z",
+  "summary": {
+    "checked": 64,
+    "missing": 9,
+    "patternMatched": 24,
+    "exactMatched": 31
+  },
+  "missing": [
+    {
+      "kind": "apiClientMethod",
+      "methodName": "getSlots",
+      "callPath": "/selling/slots",
+      "check": {
+        "status": "missing",
+        "matches": []
+      },
+      "consumers": []
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "removeTripsForDeletedBoats",
+      "callPath": "/selling/dispatcher/remove-trips-for-deleted-boats",
+      "check": {
+        "status": "missing",
+        "matches": []
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\SlotManagement.jsx:490"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "getScheduleTemplates",
+      "callPath": "/selling/schedule-templates",
+      "check": {
+        "status": "missing",
+        "matches": []
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:129",
+        "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:143"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "createScheduleTemplate",
+      "callPath": "/selling/schedule-templates",
+      "check": {
+        "status": "missing",
+        "matches": []
+      },
+      "consumers": []
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "updateScheduleTemplate",
+      "callPath": "/selling/schedule-templates/${id}",
+      "check": {
+        "status": "missing",
+        "matches": []
+      },
+      "consumers": []
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "deleteScheduleTemplate",
+      "callPath": "/selling/schedule-templates/${id}",
+      "check": {
+        "status": "missing",
+        "matches": []
+      },
+      "consumers": []
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "getScheduleTemplateItems",
+      "callPath": "/selling/schedule-templates/${templateId}/items",
+      "check": {
+        "status": "missing",
+        "matches": []
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\ScheduleTemplates.jsx:52"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "createScheduleTemplateItem",
+      "callPath": "/selling/schedule-templates/${templateId}/items",
+      "check": {
+        "status": "missing",
+        "matches": []
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\ScheduleTemplates.jsx:230"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "getOwnerDashboard",
+      "callPath": "/owner/dashboard",
+      "check": {
+        "status": "missing",
+        "matches": []
+      },
+      "consumers": []
+    }
+  ],
+  "pattern": [
+    {
+      "kind": "apiClientMethod",
+      "methodName": "getBoatSlotsByType",
+      "callPath": "/selling/boats/${encodeURIComponent(type)}/slots",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/boats/:type/slots",
+            "file": "selling.mjs",
+            "line": 545,
+            "role": "seller|dispatcher"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\views\\SellerView.jsx:212"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "updateDispatcherSlot",
+      "callPath": "/selling/dispatcher/slots/${id}",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/dispatcher/slots/:id",
+            "file": "selling.mjs",
+            "line": 2144,
+            "role": "dispatcher|owner|admin"
+          },
+          {
+            "path": "/api/selling/dispatcher/slots/:id",
+            "file": "selling.mjs",
+            "line": 2474,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\SlotManagement.jsx:325",
+        "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:292"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "deactivateDispatcherSlot",
+      "callPath": "/selling/dispatcher/slots/${id}/active",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/dispatcher/slots/:id/active",
+            "file": "selling.mjs",
+            "line": 2383,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\SlotManagement.jsx:385",
+        "src\\components\\dispatcher\\SlotManagement.jsx:454",
+        "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:351",
+        "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:405"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "deleteDispatcherSlot",
+      "callPath": "/selling/dispatcher/slots/${id}",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/dispatcher/slots/:id",
+            "file": "selling.mjs",
+            "line": 2144,
+            "role": "dispatcher|owner|admin"
+          },
+          {
+            "path": "/api/selling/dispatcher/slots/:id",
+            "file": "selling.mjs",
+            "line": 2474,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\SlotManagement.jsx:419",
+        "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:383"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "getPresale",
+      "callPath": "/selling/presales/${id}",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/presales/cancelled-trip-pending",
+            "file": "selling.mjs",
+            "line": 1868,
+            "role": "dispatcher|owner|admin"
+          },
+          {
+            "path": "/api/selling/presales/:id",
+            "file": "selling.mjs",
+            "line": 1917,
+            "role": "seller|dispatcher"
+          }
+        ]
+      },
+      "consumers": []
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "acceptPayment",
+      "callPath": "/selling/presales/${id}/accept-payment",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/presales/:id/accept-payment",
+            "file": "selling.mjs",
+            "line": 2812,
+            "role": "seller|dispatcher"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\PassengerList.jsx:841"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "cancelTripPending",
+      "callPath": "/selling/presales/${id}/cancel-trip-pending",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/presales/:id/cancel-trip-pending",
+            "file": "selling.mjs",
+            "line": 5232,
+            "role": "seller|dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\PassengerList.jsx:780"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "transferPresaleToSlot",
+      "callPath": "/selling/presales/${presaleId}/transfer",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/presales/:id/transfer",
+            "file": "selling.mjs",
+            "line": 5164,
+            "role": "seller|dispatcher|owner|admin"
+          },
+          {
+            "path": "/api/selling/presales/:id/transfer",
+            "file": "selling.mjs",
+            "line": 5198,
+            "role": "seller|dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\PassengerList.jsx:428"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "markPresalePayment",
+      "callPath": "/selling/presales/${id}/payment",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/presales/:id/payment",
+            "file": "selling.mjs",
+            "line": 2737,
+            "role": "seller|dispatcher"
+          }
+        ]
+      },
+      "consumers": []
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "cancelPresale",
+      "callPath": "/selling/presales/${id}/cancel",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/presales/:id/cancel",
+            "file": "selling.mjs",
+            "line": 3076,
+            "role": "seller|dispatcher"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\components\\seller\\ConfirmationScreen.jsx:82"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "movePresale",
+      "callPath": "/selling/presales/${id}/move",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/presales/:id/move",
+            "file": "selling.mjs",
+            "line": 3233,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": []
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "updatePresaleSeats",
+      "callPath": "/selling/presales/${id}/seats",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/presales/:id/seats",
+            "file": "selling.mjs",
+            "line": 3457,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": []
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "markPresaleUsed",
+      "callPath": "/selling/presales/${id}/used",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/presales/:id/used",
+            "file": "selling.mjs",
+            "line": 3581,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": []
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "refundPresale",
+      "callPath": "/selling/presales/${id}/refund",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/presales/:id/refund",
+            "file": "selling.mjs",
+            "line": 3655,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": []
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "deletePresale",
+      "callPath": "/selling/presales/${id}/delete",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/presales/:id/delete",
+            "file": "selling.mjs",
+            "line": 3785,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\PassengerList.jsx:798",
+        "src\\components\\dispatcher\\PassengerList.jsx:808"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "getPresaleTickets",
+      "callPath": "/selling/presales/${presaleId}/tickets",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/presales/:id/tickets",
+            "file": "selling.mjs",
+            "line": 3955,
+            "role": "seller|dispatcher"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\PassengerList.jsx:267",
+        "src\\components\\dispatcher\\PassengerList.jsx:635"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "getSlotTickets",
+      "callPath": "/selling/slots/${slotId}/tickets",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/slots/:slotId/tickets",
+            "file": "selling.mjs",
+            "line": 3980,
+            "role": "seller|dispatcher"
+          }
+        ]
+      },
+      "consumers": []
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "markTicketUsed",
+      "callPath": "/selling/tickets/${ticketId}/used",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/tickets/:ticketId/used",
+            "file": "selling.mjs",
+            "line": 4025,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": []
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "refundTicket",
+      "callPath": "/selling/tickets/${ticketId}/refund",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/tickets/:ticketId/refund",
+            "file": "selling.mjs",
+            "line": 4060,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\PassengerList.jsx:623"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "deleteTicket",
+      "callPath": "/selling/tickets/${ticketId}/delete",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/tickets/:ticketId/delete",
+            "file": "selling.mjs",
+            "line": 4179,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\PassengerList.jsx:629"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "transferTicket",
+      "callPath": "/selling/tickets/${ticketId}/transfer",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/tickets/:ticketId/transfer",
+            "file": "selling.mjs",
+            "line": 4627,
+            "role": "dispatcher|owner|admin"
+          },
+          {
+            "path": "/api/selling/tickets/:ticketId/transfer",
+            "file": "selling.mjs",
+            "line": 4628,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": []
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "updateScheduleTemplateItem",
+      "callPath": "/selling/schedule-template-items/${itemId}",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/schedule-template-items/:id",
+            "file": "schedule-template-items.mjs",
+            "line": 93,
+            "role": "dispatcher|owner|admin"
+          },
+          {
+            "path": "/api/selling/schedule-template-items/:id",
+            "file": "schedule-template-items.mjs",
+            "line": 287,
+            "role": "dispatcher|owner|admin"
+          },
+          {
+            "path": "/api/selling/schedule-template-items/:id",
+            "file": "schedule-template-items.mjs",
+            "line": 469,
+            "role": "dispatcher|owner|admin"
+          },
+          {
+            "path": "/api/selling/schedule-template-items/generate",
+            "file": "schedule-template-items.mjs",
+            "line": 548,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\ScheduleTemplates.jsx:225"
+      ]
+    },
+    {
+      "kind": "apiClientMethod",
+      "methodName": "deleteScheduleTemplateItem",
+      "callPath": "/selling/schedule-template-items/${itemId}${q}",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/selling/schedule-template-items/:id",
+            "file": "schedule-template-items.mjs",
+            "line": 93,
+            "role": "dispatcher|owner|admin"
+          },
+          {
+            "path": "/api/selling/schedule-template-items/:id",
+            "file": "schedule-template-items.mjs",
+            "line": 287,
+            "role": "dispatcher|owner|admin"
+          },
+          {
+            "path": "/api/selling/schedule-template-items/:id",
+            "file": "schedule-template-items.mjs",
+            "line": 469,
+            "role": "dispatcher|owner|admin"
+          },
+          {
+            "path": "/api/selling/schedule-template-items/generate",
+            "file": "schedule-template-items.mjs",
+            "line": 548,
+            "role": "dispatcher|owner|admin"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\components\\dispatcher\\ScheduleTemplates.jsx:324"
+      ]
+    },
+    {
+      "kind": "directRequest",
+      "callPath": "/owner/sellers/${sellerId}/zone",
+      "check": {
+        "status": "pattern",
+        "matches": [
+          {
+            "path": "/api/owner/sellers/:id/zone",
+            "file": "owner.mjs",
+            "line": 3376,
+            "role": "unknown"
+          }
+        ]
+      },
+      "consumers": [
+        "src\\views\\OwnerSettingsView.jsx:309"
+      ]
+    }
+  ]
+}

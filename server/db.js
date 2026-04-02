@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import bcrypt from "bcrypt";
 import fs from "fs";
 import { ensureOwnerRoleAndUser } from "./ownerSetup.mjs";
+import { ensureCanonicalShiftClosureColumns } from "./shift-closure-schema.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1517,6 +1518,87 @@ try {
   console.log('[MONEY_LEDGER] Warning:', e?.message || e);
 }
 
+// ONE-TIME MONEY_LEDGER TRIP_DAY BACKFILL - RUN ONLY ONCE
+// Fill money_ledger.trip_day for historical SALE_* rows using presales.business_day.
+try {
+  const runMoneyLedgerTripDayBackfill = () => {
+    const presalesCols = db.prepare("PRAGMA table_info(presales)").all().map(r => r.name);
+    const hasPresalesBusinessDay = presalesCols.includes('business_day');
+
+    if (!hasPresalesBusinessDay) {
+      return { skipped: true, reason: 'presales.business_day is missing' };
+    }
+
+    const updateResult = db.prepare(`
+      UPDATE money_ledger
+      SET trip_day = (
+        SELECT p.business_day
+        FROM presales p
+        WHERE p.id = money_ledger.presale_id
+      )
+      WHERE (trip_day IS NULL OR trip_day = '')
+        AND presale_id IS NOT NULL
+        AND kind IN ('SELLER_SHIFT', 'DISPATCHER_SHIFT')
+        AND type LIKE 'SALE_%'
+        AND EXISTS (
+          SELECT 1
+          FROM presales p
+          WHERE p.id = money_ledger.presale_id
+            AND p.business_day IS NOT NULL
+            AND p.business_day <> ''
+        )
+    `).run();
+
+    const remainingRow = db.prepare(`
+      SELECT COUNT(*) AS cnt
+      FROM money_ledger
+      WHERE (trip_day IS NULL OR trip_day = '')
+        AND kind IN ('SELLER_SHIFT', 'DISPATCHER_SHIFT')
+        AND type LIKE 'SALE_%'
+    `).get();
+
+    return {
+      skipped: false,
+      updatedRows: Number(updateResult?.changes || 0),
+      remainingRows: Number(remainingRow?.cnt || 0),
+    };
+  };
+
+  const tripDayBackfillCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'money_ledger_trip_day_backfill_v1'").get();
+  if (tripDayBackfillCheck.count === 0) {
+    console.log('[MONEY_LEDGER_TRIP_DAY_BACKFILL] Running one-time trip_day backfill for SALE_* rows...');
+
+    try {
+      const backfillResult = runMoneyLedgerTripDayBackfill();
+      if (backfillResult.skipped) {
+        console.log(`[MONEY_LEDGER_TRIP_DAY_BACKFILL] ${backfillResult.reason}, skipping update`);
+      } else {
+        console.log(`[MONEY_LEDGER_TRIP_DAY_BACKFILL] updated_rows=${backfillResult.updatedRows}`);
+        console.log(`[MONEY_LEDGER_TRIP_DAY_BACKFILL] remaining_sale_rows_without_trip_day=${backfillResult.remainingRows}`);
+      }
+
+      db.prepare("INSERT INTO settings (key, value) VALUES ('money_ledger_trip_day_backfill_v1', 'true')").run();
+      console.log('[MONEY_LEDGER_TRIP_DAY_BACKFILL] Backfill completed and marked as done');
+    } catch (error) {
+      console.log('[MONEY_LEDGER_TRIP_DAY_BACKFILL] Backfill failed:', error.message);
+    }
+  } else {
+    // Keep data healthy after restores/imports: run idempotent catch-up update.
+    const catchupResult = runMoneyLedgerTripDayBackfill();
+    if (catchupResult.skipped) {
+      console.log(`[MONEY_LEDGER_TRIP_DAY_BACKFILL] ${catchupResult.reason}, catch-up skipped`);
+    } else {
+      if (catchupResult.updatedRows > 0) {
+        console.log(`[MONEY_LEDGER_TRIP_DAY_BACKFILL] catchup_updated_rows=${catchupResult.updatedRows}`);
+      }
+      console.log(`[MONEY_LEDGER_TRIP_DAY_BACKFILL] remaining_sale_rows_without_trip_day=${catchupResult.remainingRows}`);
+    }
+    console.log('[MONEY_LEDGER_TRIP_DAY_BACKFILL] Backfill already ran, marker found');
+  }
+} catch (e) {
+  console.log('[MONEY_LEDGER_TRIP_DAY_BACKFILL] Warning:', e?.message || e);
+}
+
 /* =========================
    SALES TRANSACTIONS CANONICAL (Owner analytics layer)
    Per-ticket financial records for cash/card breakdown.
@@ -1940,4 +2022,47 @@ try {
   }
 } catch (e) {
   console.log('[SHIFT_CLOSURES_V2] migration failed:', e?.message || e);
+}
+
+/* =========================
+   SHIFT CLOSURES V3: add calculation trace column
+   Stores canonical shift-close breakdown for immutable snapshot/API/UI parity.
+========================= */
+try {
+  const shiftClosuresV3Check = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'shift_closures_v3_calculation_json'").get();
+  if (shiftClosuresV3Check.count === 0) {
+    console.log('[SHIFT_CLOSURES_V3] Adding calculation_json column to shift_closures table...');
+
+    const scCols = db.prepare("PRAGMA table_info(shift_closures)").all().map(r => r.name);
+    if (!scCols.includes('calculation_json')) {
+      db.exec("ALTER TABLE shift_closures ADD COLUMN calculation_json TEXT");
+      console.log('[SHIFT_CLOSURES_V3] Added calculation_json column');
+    }
+
+    db.prepare("INSERT INTO settings (key, value) VALUES ('shift_closures_v3_calculation_json', 'true')").run();
+    console.log('[SHIFT_CLOSURES_V3] calculation_json column marked as done');
+  } else {
+    console.log('[SHIFT_CLOSURES_V3] calculation_json column already exists, skipping...');
+  }
+} catch (e) {
+  console.log('[SHIFT_CLOSURES_V3] migration failed:', e?.message || e);
+}
+
+/* =========================
+   SHIFT CLOSURES V4: canonical schema hardening for legacy DBs
+   Ensures unified snapshot columns/indexes exist even on pre-v1 schemas.
+========================= */
+try {
+  const shiftClosuresV4Check = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'shift_closures_v4_canonical_columns'").get();
+  if (shiftClosuresV4Check.count === 0) {
+    console.log('[SHIFT_CLOSURES_V4] Ensuring canonical shift_closures columns/indexes...');
+    ensureCanonicalShiftClosureColumns(db);
+    db.prepare("INSERT INTO settings (key, value) VALUES ('shift_closures_v4_canonical_columns', 'true')").run();
+    console.log('[SHIFT_CLOSURES_V4] Canonical shift_closures schema marked as done');
+  } else {
+    ensureCanonicalShiftClosureColumns(db);
+    console.log('[SHIFT_CLOSURES_V4] Canonical shift_closures schema already ensured, skipping...');
+  }
+} catch (e) {
+  console.log('[SHIFT_CLOSURES_V4] migration failed:', e?.message || e);
 }

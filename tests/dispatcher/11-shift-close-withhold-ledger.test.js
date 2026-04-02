@@ -105,10 +105,10 @@ describe('SHIFT CLOSE WITHHOLD LEDGER', () => {
       
       // Get expected amounts from calcMotivationDay
       // Import calcMotivationDay would require ES modules, so we calculate expected:
-      // weekly = roundDownTo50(15000 * 0.008) = roundDownTo50(120) = 100
-      // season base = 15000 * 0.005 = 75 (season is not rounded to 50)
-      const expectedWeekly = 100;
-      const expectedSeasonBase = 75;
+      // weekly = roundDownTo50(100000 * 0.008) = 800
+      // season base = 100000 * 0.005 = 500 (season is not rounded to 50)
+      const expectedWeekly = 800;
+      const expectedSeasonBase = 500;
       
       // Close shift
       await request(app)
@@ -227,14 +227,15 @@ describe('SHIFT CLOSE WITHHOLD LEDGER', () => {
         VALUES ('SALE_PREPAYMENT_CASH', 'SELLER_SHIFT', 'CASH', 100000, 'POSTED', ?, ?)
       `).run(DAY4, sellerId);
       
-      // Get expected amounts from /api/owner/motivation/day (calls calcMotivationDay internally)
+      // Get expected amounts from dispatcher shift-close summary, which uses
+      // the same internal profile as the shift close flow.
       const motivationRes = await request(app)
-        .get(`/api/owner/motivation/day?day=${DAY4}`)
-        .set('Authorization', `Bearer ${ownerToken}`);
+        .get(`/api/dispatcher/shift-ledger/summary?business_day=${DAY4}`)
+        .set('Authorization', `Bearer ${dispatcherToken}`);
       
       expect(motivationRes.status).toBe(200);
-      const expectedWeekly = Number(motivationRes.body?.data?.withhold?.weekly_amount || 0);
-      const expectedSeason = Number(motivationRes.body?.data?.withhold?.season_amount || 0);
+      const expectedWeekly = Number(motivationRes.body?.motivation_withhold?.weekly_amount || 0);
+      const expectedSeason = Number(motivationRes.body?.motivation_withhold?.season_amount || 0);
       
       expect(expectedWeekly).toBeGreaterThan(0);
       expect(expectedSeason).toBeGreaterThan(0);
@@ -347,10 +348,10 @@ describe('SHIFT CLOSE WITHHOLD LEDGER', () => {
       expect(motivationRes.body?.data?.withhold?.weekly_percent).toBe(0.012);
       expect(motivationRes.body?.data?.withhold?.season_percent).toBe(0.007);
       
-      // weekly = roundDownTo50(15000 * 0.012) = roundDownTo50(180) = 150
-      expect(expectedWeekly).toBe(150);
-      // season base = 15000 * 0.007 = 105 (season is not rounded to 50)
-      expect(expectedSeason).toBeGreaterThanOrEqual(105);
+      // weekly = roundDownTo50(100000 * 0.012) = 1200
+      expect(expectedWeekly).toBe(1200);
+      // season base = 100000 * 0.007 = 700 (season is not rounded to 50)
+      expect(expectedSeason).toBeGreaterThanOrEqual(700);
       
       // Close shift
       const closeRes = await request(app)

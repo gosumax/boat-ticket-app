@@ -40,7 +40,7 @@ beforeAll(async () => {
 });
 
 describe('DISPATCHER SHIFT CLOSE sellers visibility for dispatcher-role cash revenue', () => {
-  it('includes dispatcher user with cash revenue and keeps salary payout path available', async () => {
+  it('shows dispatcher user in sellers list without creating seller debt and keeps salary payout path', async () => {
     const day = '2099-08-11';
 
     db.prepare(`
@@ -57,9 +57,12 @@ describe('DISPATCHER SHIFT CLOSE sellers visibility for dispatcher-role cash rev
 
     const sellerRow = (summaryRes.body.sellers || []).find((s) => Number(s.seller_id) === dispatcherId);
     expect(sellerRow).toBeDefined();
-    expect(Number(sellerRow.collected_cash || 0)).toBe(1200);
-    expect(Number(sellerRow.cash_due_to_owner || 0)).toBe(1200);
-    expect(sellerRow.status).toBe('DEBT');
+    expect(String(sellerRow?.role || '')).toBe('dispatcher');
+    expect(Number(sellerRow?.collected_total || 0)).toBe(1200);
+    expect(Number(sellerRow?.cash_due_to_owner || 0)).toBe(0);
+    expect(Number(sellerRow?.terminal_due_to_owner || sellerRow?.terminal_debt || 0)).toBe(0);
+    expect(Number(summaryRes.body.collected_cash || 0)).toBe(1200);
+    expect(Number(summaryRes.body.sellers_debt_total || 0)).toBe(0);
 
     const payoutRes = await request(app)
       .post('/api/dispatcher/shift/deposit')
@@ -82,7 +85,7 @@ describe('DISPATCHER SHIFT CLOSE sellers visibility for dispatcher-role cash rev
     expect(Number(summaryAfterPayoutRes.body.salary_paid_cash || 0)).toBeGreaterThanOrEqual(100);
   });
 
-  it('includes seller when cash revenue exists only in DISPATCHER_SHIFT and keeps it in snapshot', async () => {
+  it('keeps dispatcher-collected seller-linked cash visible without adding seller debt in live and snapshot', async () => {
     const day = '2099-08-12';
 
     db.prepare(`
@@ -99,9 +102,13 @@ describe('DISPATCHER SHIFT CLOSE sellers visibility for dispatcher-role cash rev
 
     const sellerRow = (summaryRes.body.sellers || []).find((s) => Number(s.seller_id) === Number(sellerId));
     expect(sellerRow).toBeDefined();
-    expect(Number(sellerRow.collected_cash || 0)).toBe(2300);
-    expect(Number(sellerRow.cash_due_to_owner || 0)).toBe(2300);
-    expect(sellerRow.status).toBe('DEBT');
+    expect(String(sellerRow?.role || '')).toBe('seller');
+    expect(Number(sellerRow?.collected_total || 0)).toBe(2300);
+    expect(Number(sellerRow?.cash_due_to_owner || 0)).toBe(0);
+    expect(Number(sellerRow?.terminal_due_to_owner || sellerRow?.terminal_debt || 0)).toBe(0);
+    expect(Number(summaryRes.body.collected_cash || 0)).toBe(2300);
+    expect(Number(summaryRes.body.sellers_debt_total || 0)).toBe(0);
+    expect(Number(summaryRes.body.sellers_collect_total || 0)).toBe(0);
 
     const closeRes = await request(app)
       .post('/api/dispatcher/shift/close')
@@ -120,18 +127,24 @@ describe('DISPATCHER SHIFT CLOSE sellers visibility for dispatcher-role cash rev
 
     const snapshotSeller = (snapshotRes.body.sellers || []).find((s) => Number(s.seller_id) === Number(sellerId));
     expect(snapshotSeller).toBeDefined();
-    expect(Number(snapshotSeller.cash_due_to_owner || 0)).toBe(2300);
+    expect(String(snapshotSeller?.role || '')).toBe('seller');
+    expect(Number(snapshotSeller?.collected_total || 0)).toBe(2300);
+    expect(Number(snapshotSeller?.cash_due_to_owner || 0)).toBe(0);
+    expect(Number(snapshotSeller?.terminal_due_to_owner || snapshotSeller?.terminal_debt || 0)).toBe(0);
+    expect(Number(snapshotRes.body.collected_cash || 0)).toBe(2300);
+    expect(Number(snapshotRes.body.sellers_debt_total || 0)).toBe(0);
   });
 
-  it('includes user for card-only accepted sale with zero prepayment (no cash) so salary can be paid', async () => {
-    const day = String(seedData?.slots?.generated?.tomorrow || '');
+  it('keeps dispatcher card completion visible in seller revenue but out of seller debt', async () => {
+    const tripDay = String(seedData?.slots?.generated?.tomorrow || '');
+    const paymentDay = String(db.prepare(`SELECT DATE('now','localtime') AS d`).get()?.d || tripDay);
 
     const presaleRes = await request(app)
       .post('/api/selling/presales')
       .set('Authorization', `Bearer ${sellerToken}`)
       .send({
         slotUid: `generated:${seedData.slots.generated.genSlot2}`,
-        tripDate: day,
+        tripDate: tripDay,
         customerName: 'Card Only Customer',
         customerPhone: '+79990001122',
         numberOfSeats: 2,
@@ -141,7 +154,9 @@ describe('DISPATCHER SHIFT CLOSE sellers visibility for dispatcher-role cash rev
 
     expect(presaleRes.status).toBe(201);
     const presaleId = Number(presaleRes.body?.presale?.id);
+    const totalPrice = Number(presaleRes.body?.presale?.total_price || 0);
     expect(presaleId).toBeGreaterThan(0);
+    expect(totalPrice).toBeGreaterThan(0);
 
     const acceptRes = await request(app)
       .patch(`/api/selling/presales/${presaleId}/accept-payment`)
@@ -151,37 +166,32 @@ describe('DISPATCHER SHIFT CLOSE sellers visibility for dispatcher-role cash rev
     expect(acceptRes.status).toBe(200);
 
     const summaryRes = await request(app)
-      .get(`/api/dispatcher/shift-ledger/summary?business_day=${day}`)
+      .get(`/api/dispatcher/shift-ledger/summary?business_day=${paymentDay}`)
       .set('Authorization', `Bearer ${dispatcherToken}`);
 
     expect(summaryRes.status).toBe(200);
     expect(summaryRes.body.ok).toBe(true);
 
-    const userRow = (summaryRes.body.sellers || []).find((s) => Number(s.seller_id) === Number(dispatcherId));
-    expect(userRow).toBeDefined();
-    expect(Number(userRow.collected_cash || 0)).toBe(0);
-    expect(Number(userRow.collected_card || 0)).toBeGreaterThan(0);
-    expect(Number(userRow.cash_due_to_owner || 0)).toBe(0);
-    expect(Number(userRow.terminal_due_to_owner || 0)).toBeGreaterThan(0);
+    const dispatcherRow = (summaryRes.body.sellers || []).find((s) => Number(s.seller_id) === Number(dispatcherId));
+    expect(dispatcherRow).toBeUndefined();
 
-    // Salary payout is gated by finished trips; mark day trips completed for this check.
-    db.prepare(`
-      UPDATE generated_slots
-      SET is_completed = 1, status = 'COMPLETED'
-      WHERE trip_date = ?
-    `).run(day);
+    const sellerRow = (summaryRes.body.sellers || []).find((s) => Number(s.seller_id) === Number(sellerId));
+    expect(sellerRow).toBeDefined();
+    expect(Number(summaryRes.body.collected_cash || 0)).toBe(0);
+    expect(Number(summaryRes.body.collected_card || 0)).toBe(totalPrice);
+    expect(Number(sellerRow?.collected_total || 0)).toBe(totalPrice);
+    expect(Number(sellerRow?.terminal_due_to_owner || 0)).toBe(0);
+    expect(Number(summaryRes.body.sellers_debt_total || 0)).toBe(0);
+    expect(Number(summaryRes.body.sellers_collect_total || 0)).toBe(0);
+    expect(Number(summaryRes.body.future_trips_reserve_card || 0)).toBe(Number(summaryRes.body.collected_card || 0));
+    expect(Number(summaryRes.body.salary_base || 0)).toBe(0);
 
-    const payoutRes = await request(app)
-      .post('/api/dispatcher/shift/deposit')
-      .set('Authorization', `Bearer ${dispatcherToken}`)
-      .send({
-        business_day: day,
-        type: 'SALARY_PAYOUT_CASH',
-        seller_id: dispatcherId,
-        amount: 50,
-      });
-
-    expect(payoutRes.status).toBe(200);
-    expect(payoutRes.body.ok).toBe(true);
+    // Trip day summary must not be reconstructed from active tickets anymore.
+    const tripDaySummaryRes = await request(app)
+      .get(`/api/dispatcher/shift-ledger/summary?business_day=${tripDay}`)
+      .set('Authorization', `Bearer ${dispatcherToken}`);
+    expect(tripDaySummaryRes.status).toBe(200);
+    expect(Number(tripDaySummaryRes.body.collected_total || 0)).toBe(0);
+    expect(Number(tripDaySummaryRes.body.total_revenue || 0)).toBeGreaterThan(0);
   });
 });

@@ -1,30 +1,30 @@
 import express from 'express';
 import db from './db.js';
-import { allTripsFinished } from './dispatcher-shift-ledger.mjs';
+import {
+  allTripsFinished,
+  calcFutureTripsReserveByPaymentDay,
+} from './dispatcher-shift-ledger.mjs';
+import { resolveOwnerSettings } from './owner-settings.mjs';
 import { updateSellerMotivationState, getStreakMultiplier, getSellerState } from './seller-motivation-state.mjs';
 import { saveDayStats, updateSeasonStatsFromDay } from './season-stats.mjs';
-import { calcMotivationDay } from './motivation/engine.mjs';
+import {
+  buildUnifiedShiftClosureSnapshot,
+  persistUnifiedShiftClosureSnapshot,
+} from './shift-closure-backfill.mjs';
+import {
+  ensureCanonicalShiftClosureColumns,
+  findCanonicalShiftClosureRow,
+  listLegacyShiftClosureBusinessDays,
+} from './shift-closure-schema.mjs';
 
 const router = express.Router();
 
-// Helper: ensure cashbox_json column exists in shift_closures
-let cashboxColumnEnsured = false;
-function ensureCashboxColumn() {
-  if (cashboxColumnEnsured) return;
-  try {
-    const cols = db.prepare("PRAGMA table_info(shift_closures)").all().map(r => r.name);
-    if (!cols.includes('cashbox_json')) {
-      db.prepare('ALTER TABLE shift_closures ADD COLUMN cashbox_json TEXT').run();
-      console.log('[SHIFT_CLOSURES] Added cashbox_json column');
-    }
-    cashboxColumnEnsured = true;
-  } catch (e) {
-    // Column might already exist or table doesn't exist yet
-    if (!e.message?.includes('duplicate column')) {
-      console.error('[SHIFT_CLOSURES] ensureCashboxColumn error:', e.message);
-    }
-    cashboxColumnEnsured = true;
-  }
+function getExistingShiftClosureSnapshot(businessDay) {
+  const day = String(businessDay || '').trim();
+  if (!day) return null;
+  return findCanonicalShiftClosureRow(db, day, {
+    columns: ['id', 'business_day', 'closed_at', 'closed_by', 'calculation_json', 'cashbox_json'],
+  });
 }
 
 // Helper: get local business day
@@ -35,8 +35,8 @@ function getLocalBusinessDay() {
 // Helper: check if shift is closed for business_day
 function isShiftClosed(businessDay) {
   try {
-    const row = db.prepare('SELECT 1 FROM shift_closures WHERE business_day = ? LIMIT 1').get(businessDay);
-    return !!row;
+    const day = String(businessDay || '').trim();
+    return Boolean(getExistingShiftClosureSnapshot(day)) || listLegacyShiftClosureBusinessDays(db).includes(day);
   } catch {
     return false;  // Table doesn't exist or error
   }
@@ -53,56 +53,101 @@ function hasColumn(tableName, columnName) {
 
 function calcFutureTripsReserveForBusinessDay(businessDay) {
   try {
-    const tripDayExpr = hasColumn('presales', 'business_day')
-      ? "COALESCE(p.business_day, DATE(p.created_at))"
-      : 'DATE(p.created_at)';
-    const hasCashAmt = hasColumn('money_ledger', 'cash_amount');
-    const hasCardAmt = hasColumn('money_ledger', 'card_amount');
-    const mixedCashExpr = hasCashAmt ? 'COALESCE(ml.cash_amount, 0)' : 'COALESCE(p.payment_cash_amount, ml.amount)';
-    const mixedCardExpr = hasCardAmt ? 'COALESCE(ml.card_amount, 0)' : 'COALESCE(p.payment_card_amount, 0)';
-
-    const row = db.prepare(`
-      SELECT
-        COALESCE(SUM(CASE
-          WHEN ${tripDayExpr} > ?
-            THEN CASE
-              WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH') OR ml.method = 'CASH' THEN ml.amount
-              WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') OR ml.method = 'MIXED' THEN ${mixedCashExpr}
-              ELSE 0
-            END
-          ELSE 0 END), 0) AS reserve_cash,
-        COALESCE(SUM(CASE
-          WHEN ${tripDayExpr} > ?
-            THEN CASE
-              WHEN ml.type IN ('SALE_PREPAYMENT_CARD','SALE_ACCEPTED_CARD') OR ml.method = 'CARD' THEN ml.amount
-              WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') OR ml.method = 'MIXED' THEN ${mixedCardExpr}
-              ELSE 0
-            END
-          ELSE 0 END), 0) AS reserve_card,
-        COALESCE(SUM(CASE WHEN (${tripDayExpr}) IS NULL THEN 1 ELSE 0 END), 0) AS unresolved_trip_day_count
-      FROM money_ledger ml
-      LEFT JOIN presales p ON p.id = ml.presale_id
-      WHERE ml.business_day = ?
-        AND ml.status = 'POSTED'
-        AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-        AND ml.type IN (
-          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
-          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
-        )
-    `).get(businessDay, businessDay, businessDay);
-
-    const cash = Number(row?.reserve_cash || 0);
-    const card = Number(row?.reserve_card || 0);
-    const unresolvedTripDayCount = Number(row?.unresolved_trip_day_count || 0);
-    return {
-      cash,
-      card,
-      total: cash + card,
-      unresolvedTripDayCount,
-    };
+    const ledgerCols = new Set(db.prepare(`PRAGMA table_info(money_ledger)`).all().map((r) => r.name));
+    return calcFutureTripsReserveByPaymentDay({
+      businessDay,
+      ledgerCols,
+      hasLedger: ledgerCols.size > 0,
+      ledgerHasBDay: ledgerCols.has('business_day'),
+    });
   } catch {
     return { cash: 0, card: 0, total: 0, unresolvedTripDayCount: 0 };
   }
+}
+
+function getFundsWithholdCashToday(withhold) {
+  if (!withhold) return 0;
+  const seasonFromRevenue = Number(
+    withhold.season_from_revenue ??
+    withhold.season_amount ??
+    0
+  );
+  const dispatcherAmount = Number(withhold.dispatcher_amount_total || 0);
+  return (
+    Number(withhold.weekly_amount || 0) +
+    seasonFromRevenue +
+    dispatcherAmount
+  );
+}
+
+function getShiftCloseMotivationOptions(user) {
+  const role = String(user?.role || '').toLowerCase();
+  return {
+    profile: 'dispatcher_shift_close',
+    dispatcherUserId: role === 'dispatcher' ? Number(user?.id || 0) : null,
+  };
+}
+
+function applySnapshotPayoutFields(row, payout) {
+  const base = { ...row };
+  if (!payout) {
+    return {
+      ...base,
+      salary_due: Number(base.salary_due || 0),
+      salary_due_total: Number(base.salary_due_total || base.salary_due || 0),
+      salary_accrued: Number(base.salary_accrued || base.salary_due_total || base.salary_due || 0),
+      team_part: Number(base.team_part || 0),
+      individual_part: Number(base.individual_part || 0),
+      dispatcher_daily_bonus: Number(base.dispatcher_daily_bonus || 0),
+      total_raw: Number(base.total_raw || 0),
+      salary_rounding_to_season: Number(base.salary_rounding_to_season || 0),
+      personal_revenue_day: Number(base.personal_revenue_day || base.collected_total || 0),
+    };
+  }
+
+  return {
+    ...base,
+    salary_due: Number(payout.total || 0),
+    salary_due_total: Number(payout.total || 0),
+    salary_accrued: Number(payout.total || 0),
+    team_part: Number(payout.team_part || 0),
+    individual_part: Number(payout.individual_part || 0),
+    dispatcher_daily_bonus: Number(payout.dispatcher_daily_bonus || 0),
+    total_raw: Number(payout.total_raw || payout.total || 0),
+    salary_rounding_to_season: Number(payout.salary_rounding_to_season || 0),
+    personal_revenue_day: Number(payout.personal_revenue_day || payout.revenue || base.personal_revenue_day || base.collected_total || 0),
+  };
+}
+
+function createSnapshotParticipantRowFromPayout(payout) {
+  const userId = Number(payout?.user_id || 0);
+  const role = String(payout?.role || '').toLowerCase() === 'dispatcher' ? 'dispatcher' : 'seller';
+  const personalRevenueDay = Number(payout?.personal_revenue_day || payout?.revenue || 0);
+  const participantName = String(
+    payout?.name ||
+    (role === 'dispatcher' ? `Dispatcher #${userId}` : `Seller #${userId}`)
+  );
+
+  return applySnapshotPayoutFields({
+    seller_id: userId,
+    seller_name: participantName,
+    name: participantName,
+    role,
+    accepted: personalRevenueDay,
+    deposited: 0,
+    balance: 0,
+    cash_balance: 0,
+    terminal_debt: 0,
+    terminal_due_to_owner: 0,
+    status: 'CLOSED',
+    collected_total: personalRevenueDay,
+    collected_cash: 0,
+    collected_card: 0,
+    deposit_cash: 0,
+    deposit_card: 0,
+    cash_due_to_owner: 0,
+    personal_revenue_day: personalRevenueDay,
+  }, payout);
 }
 
 // Helper: get open trips count for error message
@@ -142,12 +187,7 @@ router.get('/diagnose', (req, res) => {
     const businessDay = req.query?.business_day || getLocalBusinessDay();
 
     // Check if shift is closed
-    const closure = isShiftClosed(businessDay) ? db.prepare(`
-      SELECT closed_at, closed_by, cashbox_json 
-      FROM shift_closures 
-      WHERE business_day = ? 
-      LIMIT 1
-    `).get(businessDay) : null;
+    const closure = getExistingShiftClosureSnapshot(businessDay);
 
     const is_closed = !!closure;
 
@@ -321,20 +361,32 @@ router.post('/close', (req, res) => {
     }
 
     const businessDay = req.body?.business_day || getLocalBusinessDay();
+    ensureCanonicalShiftClosureColumns(db);
 
     // Check if already closed - return idempotent success
-    const existingClosure = isShiftClosed(businessDay) ? db.prepare(`
-      SELECT closed_at, closed_by FROM shift_closures WHERE business_day = ? LIMIT 1
-    `).get(businessDay) : null;
+    const existingClosure = getExistingShiftClosureSnapshot(businessDay);
     
     if (existingClosure) {
+      let existingBreakdown = null;
+      try {
+        if (existingClosure.calculation_json) {
+          existingBreakdown = JSON.parse(existingClosure.calculation_json);
+        }
+      } catch {}
+
       return res.json({
         ok: true,
         business_day: businessDay,
         is_closed: true,
         source: 'snapshot',
         closed_at: existingClosure.closed_at,
-        closed_by: existingClosure.closed_by
+        closed_by: existingClosure.closed_by,
+        shift_close_breakdown: existingBreakdown,
+        weekly_fund: Number(existingBreakdown?.totals?.weekly_fund ?? 0),
+        season_fund_total: Number(existingBreakdown?.totals?.season_fund_total ?? 0),
+        final_salary_total: Number(existingBreakdown?.totals?.final_salary_total ?? 0),
+        salary_to_pay: Number(existingBreakdown?.totals?.final_salary_total ?? 0),
+        owner_cash_today: Number(existingBreakdown?.totals?.owner_cash_today ?? 0),
       });
     }
 
@@ -348,6 +400,264 @@ router.post('/close', (req, res) => {
       });
     }
 
+    const canonicalSnapshot = buildUnifiedShiftClosureSnapshot(db, {
+      businessDay,
+      closedBy: userId,
+      dispatcherUserId: userId,
+      snapshotSource: 'snapshot',
+    });
+    persistUnifiedShiftClosureSnapshot(db, canonicalSnapshot);
+
+    const canonicalBreakdown = canonicalSnapshot.shift_close_breakdown || null;
+    const canonicalCashbox = canonicalSnapshot.cashbox || {};
+    const canonicalClosedAt = canonicalSnapshot.closed_at;
+
+    console.log(
+      `[SHIFT_CLOSE] business_day=${businessDay} closed_by=${userId} total_revenue=${Number(canonicalSnapshot.total_revenue || 0)} collected=${Number(canonicalSnapshot.collected_total || 0)}`
+    );
+
+    const canonicalDayLocked = db.prepare(`
+      SELECT 1 FROM money_ledger
+      WHERE business_day = ? AND kind = 'FUND' AND type IN ('WITHHOLD_VIKLIF', 'WITHHOLD_WEEKLY', 'WITHHOLD_SEASON') AND status = 'POSTED'
+      LIMIT 1
+    `).get(businessDay);
+
+    if (canonicalDayLocked) {
+      console.log(`[SHIFT_CLOSE] Day ${businessDay} is already locked, skipping withhold recalculation`);
+    } else {
+      try {
+        const canonicalViklifAmount = Number(canonicalSnapshot.motivation_withhold?.viklif_amount || 0);
+        const canonicalWeeklyAmount = Number(canonicalSnapshot.motivation_withhold?.weekly_amount || 0);
+        const canonicalSeasonAmount = Number(canonicalSnapshot.motivation_withhold?.season_amount || 0);
+        const canonicalNow = new Date().toISOString();
+
+        const insertCanonicalWithhold = db.transaction(() => {
+          const canonicalExistingViklif = db.prepare(`
+            SELECT 1 FROM money_ledger
+            WHERE business_day = ? AND kind = 'FUND' AND type = 'WITHHOLD_VIKLIF' AND status = 'POSTED'
+            LIMIT 1
+          `).get(businessDay);
+          if (!canonicalExistingViklif && canonicalViklifAmount > 0) {
+            db.prepare(`
+              INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time, decision_final)
+              VALUES ('FUND', 'WITHHOLD_VIKLIF', 'INTERNAL', ?, 'POSTED', NULL, ?, ?, 1)
+            `).run(canonicalViklifAmount, businessDay, canonicalNow);
+          }
+
+          const canonicalExistingWeekly = db.prepare(`
+            SELECT 1 FROM money_ledger
+            WHERE business_day = ? AND kind = 'FUND' AND type = 'WITHHOLD_WEEKLY' AND status = 'POSTED'
+            LIMIT 1
+          `).get(businessDay);
+          if (!canonicalExistingWeekly && canonicalWeeklyAmount > 0) {
+            db.prepare(`
+              INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time, decision_final)
+              VALUES ('FUND', 'WITHHOLD_WEEKLY', 'INTERNAL', ?, 'POSTED', NULL, ?, ?, 1)
+            `).run(canonicalWeeklyAmount, businessDay, canonicalNow);
+          }
+
+          const canonicalExistingSeason = db.prepare(`
+            SELECT 1 FROM money_ledger
+            WHERE business_day = ? AND kind = 'FUND' AND type = 'WITHHOLD_SEASON' AND status = 'POSTED'
+            LIMIT 1
+          `).get(businessDay);
+          if (!canonicalExistingSeason && canonicalSeasonAmount > 0) {
+            db.prepare(`
+              INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time, decision_final)
+              VALUES ('FUND', 'WITHHOLD_SEASON', 'INTERNAL', ?, 'POSTED', NULL, ?, ?, 1)
+            `).run(canonicalSeasonAmount, businessDay, canonicalNow);
+          }
+        });
+
+        insertCanonicalWithhold();
+      } catch (withholdError) {
+        console.error('[SHIFT_CLOSE_WITHHOLD_LEDGER_ERROR]', withholdError);
+      }
+    }
+
+    try {
+      updateSellerMotivationState(businessDay);
+    } catch (motivationError) {
+      console.error('[SHIFT_CLOSE_MOTIVATION_STATE_ERROR]', motivationError);
+    }
+
+    try {
+      const canonicalSavedSettings = resolveOwnerSettings(db);
+      const canonicalKSpeed = Number(canonicalSavedSettings.k_speed ?? 1.2);
+      const canonicalKCruise = Number(canonicalSavedSettings.k_cruise ?? 3.0);
+      const canonicalKZoneHedgehog = Number(canonicalSavedSettings.k_zone_hedgehog ?? 1.3);
+      const canonicalKZoneCenter = Number(canonicalSavedSettings.k_zone_center ?? 1.0);
+      const canonicalKZoneSanatorium = Number(canonicalSavedSettings.k_zone_sanatorium ?? 0.8);
+      const canonicalKZoneStationary = Number(canonicalSavedSettings.k_zone_stationary ?? 0.7);
+      const canonicalKBananaHedgehog = Number(canonicalSavedSettings.k_banana_hedgehog ?? 2.7);
+      const canonicalKBananaCenter = Number(canonicalSavedSettings.k_banana_center ?? 2.2);
+      const canonicalKBananaSanatorium = Number(canonicalSavedSettings.k_banana_sanatorium ?? 1.2);
+      const canonicalKBananaStationary = Number(canonicalSavedSettings.k_banana_stationary ?? 1.0);
+
+      const getCanonicalZoneK = (zone) => {
+        if (zone === 'hedgehog') return canonicalKZoneHedgehog;
+        if (zone === 'center') return canonicalKZoneCenter;
+        if (zone === 'sanatorium') return canonicalKZoneSanatorium;
+        if (zone === 'stationary') return canonicalKZoneStationary;
+        return 1.0;
+      };
+
+      const getCanonicalBananaK = (zone) => {
+        if (zone === 'hedgehog') return canonicalKBananaHedgehog;
+        if (zone === 'center') return canonicalKBananaCenter;
+        if (zone === 'sanatorium') return canonicalKBananaSanatorium;
+        if (zone === 'stationary') return canonicalKBananaStationary;
+        return 1.0;
+      };
+
+      const canonicalSellerZones = db.prepare(`SELECT id, zone FROM users WHERE role = 'seller'`).all();
+      const canonicalSellerZoneMap = new Map((canonicalSellerZones || []).map((row) => [Number(row.id), row.zone]));
+      const canonicalRevenueBySellerAndType = db.prepare(`
+        SELECT
+          ml.seller_id,
+          COALESCE(b.type, gb.type) AS boat_type,
+          p.zone_at_sale,
+          COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
+          COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
+        FROM money_ledger ml
+        LEFT JOIN presales p ON p.id = ml.presale_id
+        LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+        LEFT JOIN generated_slots gs ON (p.slot_uid LIKE 'generated:%' AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER))
+        LEFT JOIN boats b ON b.id = bs.boat_id
+        LEFT JOIN boats gb ON gb.id = gs.boat_id
+        WHERE ml.status = 'POSTED'
+          AND ml.kind = 'SELLER_SHIFT'
+          AND DATE(ml.business_day) = ?
+          AND ml.seller_id IS NOT NULL
+          AND ml.seller_id > 0
+          AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
+        GROUP BY ml.seller_id, COALESCE(b.type, gb.type), p.zone_at_sale
+      `).all(businessDay);
+      const canonicalSellerStatsMap = new Map();
+
+      for (const row of (canonicalRevenueBySellerAndType || [])) {
+        const sellerId = Number(row.seller_id);
+        const boatType = row.boat_type || null;
+        const zoneAtSale = row.zone_at_sale || null;
+        const revenueGross = Number(row.revenue_gross || 0);
+        const refunds = Number(row.refunds || 0);
+        const revenueNet = Math.max(0, revenueGross - refunds);
+        if (!boatType || !['speed', 'cruise', 'banana'].includes(boatType)) continue;
+
+        let entry = canonicalSellerStatsMap.get(sellerId);
+        if (!entry) {
+          const sellerZone = canonicalSellerZoneMap.get(sellerId) || null;
+          const state = getSellerState(sellerId);
+          const streakDays = state?.calibrated ? (state.streak_days || 0) : 0;
+          const kStreak = getStreakMultiplier(streakDays);
+          entry = { seller_id: sellerId, revenue_day: 0, points_base: 0, zone: sellerZone, k_streak: kStreak };
+          canonicalSellerStatsMap.set(sellerId, entry);
+        }
+
+        entry.revenue_day += revenueNet;
+        const effectiveZone = zoneAtSale || entry.zone;
+        const revenueInK = revenueNet / 1000;
+
+        if (boatType === 'speed') {
+          entry.points_base += revenueInK * canonicalKSpeed * getCanonicalZoneK(effectiveZone);
+        } else if (boatType === 'cruise') {
+          entry.points_base += revenueInK * canonicalKCruise * getCanonicalZoneK(effectiveZone);
+        } else if (boatType === 'banana') {
+          entry.points_base += revenueInK * getCanonicalBananaK(effectiveZone);
+        }
+      }
+
+      const canonicalSeasonRows = Array.from(canonicalSellerStatsMap.values()).map((entry) => ({
+        seller_id: entry.seller_id,
+        revenue_day: entry.revenue_day,
+        points_day_total: Math.round(entry.points_base * entry.k_streak * 100) / 100,
+      }));
+
+      saveDayStats(db, businessDay, canonicalSeasonRows);
+      updateSeasonStatsFromDay(db, businessDay);
+    } catch (seasonError) {
+      console.error('[SHIFT_CLOSE_SEASON_STATS_ERROR]', seasonError);
+    }
+
+    return res.json({
+      ok: true,
+      business_day: businessDay,
+      closed: true,
+      is_closed: true,
+      source: 'snapshot',
+      closed_at: canonicalClosedAt,
+      closed_by: userId,
+      totals: {
+        total_revenue: Number(canonicalSnapshot.total_revenue || 0),
+        collected_total: Number(canonicalSnapshot.collected_total || 0),
+        collected_cash: Number(canonicalSnapshot.collected_cash || 0),
+        collected_card: Number(canonicalSnapshot.collected_card || 0),
+        refund_total: Number(canonicalSnapshot.refund_total || 0),
+        net_total: Number(canonicalSnapshot.net_total || 0),
+        deposit_cash: Number(canonicalSnapshot.deposit_cash || 0),
+        deposit_card: Number(canonicalSnapshot.deposit_card || 0),
+      },
+      cashbox: {
+        cash_in_cashbox: Number(canonicalCashbox.cash_in_cashbox || 0),
+        expected_sellers_cash_due: Number(canonicalCashbox.expected_sellers_cash_due || 0),
+        deposits_cash_total: Number(canonicalCashbox.deposits_cash_total || canonicalSnapshot.deposit_cash || 0),
+        salary_paid_cash: Number(canonicalCashbox.salary_paid_cash || canonicalSnapshot.salary_paid_cash || 0),
+        cash_discrepancy: Number(canonicalCashbox.cash_discrepancy || 0),
+        warnings: Array.isArray(canonicalCashbox.warnings) ? canonicalCashbox.warnings : [],
+        future_trips_reserve_cash: Number(canonicalBreakdown?.totals?.reserve_cash ?? canonicalCashbox.future_trips_reserve_cash ?? 0),
+        future_trips_reserve_card: Number(canonicalBreakdown?.totals?.reserve_card ?? canonicalCashbox.future_trips_reserve_card ?? 0),
+        future_trips_reserve_total: Number(canonicalBreakdown?.totals?.reserve_total ?? canonicalCashbox.future_trips_reserve_total ?? 0),
+        salary_base: Number(canonicalBreakdown?.totals?.salary_base ?? canonicalCashbox.salary_base ?? 0),
+        funds_withhold_cash_today: Number(canonicalBreakdown?.totals?.funds_withhold_cash_today ?? canonicalCashbox.funds_withhold_cash_today ?? 0),
+        owner_cash_available_after_future_reserve_cash: Number(
+          canonicalBreakdown?.totals?.owner_cash_after_reserve ??
+          canonicalCashbox.owner_cash_available_after_future_reserve_cash ??
+          0
+        ),
+        owner_cash_available_after_reserve_and_funds_cash: Number(
+          canonicalCashbox.owner_cash_available_after_reserve_and_funds_cash ??
+          canonicalBreakdown?.totals?.owner_cash_today ??
+          0
+        ),
+        owner_handover_cash_final: Number(
+          canonicalBreakdown?.totals?.owner_cash_today ??
+          canonicalCashbox.owner_handover_cash_final ??
+          0
+        ),
+      },
+      cash_in_cashbox: Number(canonicalCashbox.cash_in_cashbox || 0),
+      expected_sellers_cash_due: Number(canonicalCashbox.expected_sellers_cash_due || 0),
+      cash_discrepancy: Number(canonicalCashbox.cash_discrepancy || 0),
+      warnings: Array.isArray(canonicalCashbox.warnings) ? canonicalCashbox.warnings : [],
+      future_trips_reserve_cash: Number(canonicalBreakdown?.totals?.reserve_cash ?? canonicalCashbox.future_trips_reserve_cash ?? 0),
+      future_trips_reserve_card: Number(canonicalBreakdown?.totals?.reserve_card ?? canonicalCashbox.future_trips_reserve_card ?? 0),
+      future_trips_reserve_total: Number(canonicalBreakdown?.totals?.reserve_total ?? canonicalCashbox.future_trips_reserve_total ?? 0),
+      salary_base: Number(canonicalBreakdown?.totals?.salary_base ?? canonicalCashbox.salary_base ?? 0),
+      funds_withhold_cash_today: Number(canonicalBreakdown?.totals?.funds_withhold_cash_today ?? canonicalCashbox.funds_withhold_cash_today ?? 0),
+      owner_cash_available_after_future_reserve_cash: Number(
+        canonicalBreakdown?.totals?.owner_cash_after_reserve ??
+        canonicalCashbox.owner_cash_available_after_future_reserve_cash ??
+        0
+      ),
+      owner_cash_available_after_reserve_and_funds_cash: Number(
+        canonicalCashbox.owner_cash_available_after_reserve_and_funds_cash ??
+        canonicalBreakdown?.totals?.owner_cash_today ??
+        0
+      ),
+      owner_handover_cash_final: Number(
+        canonicalBreakdown?.totals?.owner_cash_today ??
+        canonicalCashbox.owner_handover_cash_final ??
+        0
+      ),
+      owner_cash_today: Number(canonicalBreakdown?.totals?.owner_cash_today ?? canonicalSnapshot.owner_cash_today ?? 0),
+      weekly_fund: Number(canonicalBreakdown?.totals?.weekly_fund ?? canonicalSnapshot.weekly_fund ?? 0),
+      season_fund_total: Number(canonicalBreakdown?.totals?.season_fund_total ?? canonicalSnapshot.season_fund_total ?? 0),
+      final_salary_total: Number(canonicalBreakdown?.totals?.final_salary_total ?? canonicalSnapshot.final_salary_total ?? 0),
+      salary_to_pay: Number(canonicalBreakdown?.totals?.final_salary_total ?? canonicalSnapshot.salary_to_pay ?? 0),
+      motivation_withhold: canonicalBreakdown?.withhold ?? canonicalSnapshot.motivation_withhold ?? null,
+      shift_close_breakdown: canonicalBreakdown,
+    });
+
     // Get live summary values (same logic as /summary endpoint)
     // We need to duplicate the calculation here to get all values in one transaction
     const summaryRow = db.prepare(`
@@ -358,82 +668,14 @@ router.post('/close', (req, res) => {
     `).get(businessDay);
     const totalRevenue = Number(summaryRow?.total_revenue || 0);
 
-    // Check if money_ledger has cash_amount/card_amount columns
     const ledgerCols = db.prepare(`PRAGMA table_info(money_ledger)`).all().map(r => r.name);
-    const hasCashAmt = ledgerCols.includes('cash_amount');
-    const hasCardAmt = ledgerCols.includes('card_amount');
-
-    // Collected from money_ledger
-    let collectedTotal = 0;
-    let collectedCash = 0;
-    let collectedCard = 0;
-
-    if (hasCashAmt && hasCardAmt) {
-      // money_ledger has cash_amount/card_amount columns - use them directly
-      const collectedRow = db.prepare(`
-        SELECT
-          COALESCE(SUM(amount), 0) AS collected_total,
-          COALESCE(SUM(CASE
-            WHEN method = 'CASH' THEN amount
-            WHEN method = 'MIXED' THEN COALESCE(cash_amount, 0)
-            ELSE 0
-          END), 0) AS collected_cash,
-          COALESCE(SUM(CASE
-            WHEN method = 'CARD' THEN amount
-            WHEN method = 'MIXED' THEN COALESCE(card_amount, 0)
-            ELSE 0
-          END), 0) AS collected_card
-        FROM money_ledger
-        WHERE status = 'POSTED'
-          AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-          AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
-          AND business_day = ?
-      `).get(businessDay);
-      collectedTotal = Number(collectedRow?.collected_total || 0);
-      collectedCash = Number(collectedRow?.collected_cash || 0);
-      collectedCard = Number(collectedRow?.collected_card || 0);
-    } else {
-      // money_ledger lacks cash_amount/card_amount - JOIN with presales for MIXED split
-      const collectedRow = db.prepare(`
-        SELECT
-          COALESCE(SUM(ml.amount), 0) AS collected_total,
-          COALESCE(SUM(CASE
-            WHEN ml.method = 'CASH' THEN ml.amount
-            WHEN ml.method = 'MIXED' THEN COALESCE(p.payment_cash_amount, 0)
-            ELSE 0
-          END), 0) AS collected_cash,
-          COALESCE(SUM(CASE
-            WHEN ml.method = 'CARD' THEN ml.amount
-            WHEN ml.method = 'MIXED' THEN COALESCE(p.payment_card_amount, 0)
-            ELSE 0
-          END), 0) AS collected_card
-        FROM money_ledger ml
-        LEFT JOIN presales p ON p.id = ml.presale_id
-        WHERE ml.status = 'POSTED'
-          AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-          AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
-          AND ml.business_day = ?
-      `).get(businessDay);
-      collectedTotal = Number(collectedRow?.collected_total || 0);
-      collectedCash = Number(collectedRow?.collected_cash || 0);
-      collectedCard = Number(collectedRow?.collected_card || 0);
-    }
-
-    // Refunds
-    const refundRow = db.prepare(`
-      SELECT
-        COALESCE(SUM(ABS(amount)), 0) AS refund_total,
-        COALESCE(SUM(CASE WHEN method = 'CASH' THEN ABS(amount) ELSE 0 END), 0) AS refund_cash,
-        COALESCE(SUM(CASE WHEN method = 'CARD' THEN ABS(amount) ELSE 0 END), 0) AS refund_card
-      FROM money_ledger
-      WHERE status = 'POSTED'
-        AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-        AND type = 'SALE_CANCEL_REVERSE'
-        AND business_day = ?
-    `).get(businessDay);
-    const refundTotal = Number(refundRow?.refund_total || 0);
-    const refundCash = Number(refundRow?.refund_cash || 0);
-    const refundCard = Number(refundRow?.refund_card || 0);
+    const liveUiTotals = calcLiveUiLedgerTotals(businessDay);
+    const collectedTotal = Number(liveUiTotals?.collected_total || 0);
+    const collectedCash = Number(liveUiTotals?.collected_cash || 0);
+    const collectedCard = Number(liveUiTotals?.collected_card || 0);
+    const refundTotal = Number(liveUiTotals?.refund_total || 0);
+    const refundCash = Number(liveUiTotals?.refund_cash || 0);
+    const refundCard = Number(liveUiTotals?.refund_card || 0);
 
     // Net metrics
     const netCash = collectedCash - refundCash;
@@ -455,8 +697,8 @@ router.post('/close', (req, res) => {
     const depositCard = Number(depositRow?.deposit_card || 0);
 
     // Sellers/dispatchers data for snapshot UI ("По продавцам")
-    const mixedCashExpr = hasCashAmt ? 'COALESCE(ml.cash_amount, 0)' : 'COALESCE(p.payment_cash_amount, 0)';
-    const mixedCardExpr = hasCardAmt ? 'COALESCE(ml.card_amount, 0)' : 'COALESCE(p.payment_card_amount, 0)';
+    const mixedCashExpr = ledgerCols.includes('cash_amount') ? 'COALESCE(ml.cash_amount, 0)' : 'COALESCE(p.payment_cash_amount, 0)';
+    const mixedCardExpr = ledgerCols.includes('card_amount') ? 'COALESCE(ml.card_amount, 0)' : 'COALESCE(p.payment_card_amount, 0)';
     const sellersRows = db.prepare(`
       SELECT
         ml.seller_id,
@@ -485,6 +727,7 @@ router.post('/close', (req, res) => {
           ELSE 0 END), 0) AS deposit_card
       FROM money_ledger ml
       LEFT JOIN presales p ON p.id = ml.presale_id
+      JOIN users u ON u.id = ml.seller_id AND u.role = 'seller'
       WHERE ml.business_day = ?
         AND ml.status = 'POSTED'
         AND ml.seller_id IS NOT NULL
@@ -492,7 +735,7 @@ router.post('/close', (req, res) => {
       GROUP BY ml.seller_id
     `).all(businessDay);
     
-    const sellers = (sellersRows || []).map(r => {
+    const sellersLegacy = (sellersRows || []).map(r => {
       const collectedCashByUser = Number(r.collected_cash || 0);
       const collectedCardByUser = Number(r.collected_card || 0);
       const depositCashByUser = Number(r.deposit_cash || 0);
@@ -503,12 +746,10 @@ router.post('/close', (req, res) => {
       const status = balance === 0 ? 'CLOSED' : balance > 0 ? 'DEBT' : 'OVERPAID';
 
       let sellerName = `Продавец #${r.seller_id}`;
-      let sellerRole = 'seller';
-      try {
-        const userRow = db.prepare('SELECT username, role FROM users WHERE id = ?').get(r.seller_id);
-        if (userRow?.role) sellerRole = String(userRow.role);
+            try {
+        const userRow = db.prepare('SELECT username FROM users WHERE id = ?').get(r.seller_id);
         if (userRow?.username) {
-          sellerName = sellerRole === 'dispatcher' ? `Диспетчер: ${userRow.username}` : userRow.username;
+          sellerName = userRow.username;
         }
       } catch {}
 
@@ -516,7 +757,7 @@ router.post('/close', (req, res) => {
         seller_id: Number(r.seller_id || 0),
         seller_name: sellerName,
         name: sellerName,
-        role: sellerRole,
+        role: 'seller',
         accepted: Number(r.collected_total || 0),
         deposited: depositCashByUser + depositCardByUser,
         balance,
@@ -532,6 +773,10 @@ router.post('/close', (req, res) => {
         cash_due_to_owner: cashDue
       };
     });
+
+    const sellers = (Array.isArray(liveUiTotals?.sellers) ? liveUiTotals.sellers : []).map((seller) => ({
+      ...seller,
+    }));
 
     // Salary payouts from money_ledger (DISPATCHER_SHIFT)
     const salaryPaidRow = db.prepare(`
@@ -550,31 +795,49 @@ router.post('/close', (req, res) => {
     
     // Salary due from motivation engine + per-seller breakdown
     let salaryDue = 0;
+    let salaryBase = Math.max(0, netTotal);
+    let fundsWithholdCashToday = 0;
     let payoutsByUserId = new Map();
+    let motivationData = null;
+    let motivationWithhold = null;
     try {
-      const motivationResult = calcMotivationDay(db, businessDay);
+      const motivationResult = calcMotivationDay(
+        db,
+        businessDay,
+        getShiftCloseMotivationOptions(req.user)
+      );
       if (motivationResult?.data?.payouts) {
         for (const p of motivationResult.data.payouts) {
           payoutsByUserId.set(Number(p.user_id), p);
         }
         salaryDue = motivationResult.data.payouts.reduce((sum, p) => sum + Number(p.total || 0), 0);
       }
+      if (motivationResult?.data) {
+        motivationData = motivationResult.data;
+        motivationWithhold = motivationResult.data.withhold || null;
+        salaryBase = Number(motivationResult.data.salary_base ?? salaryBase);
+        fundsWithholdCashToday = getFundsWithholdCashToday(motivationResult.data.withhold);
+      }
     } catch (e) {
       salaryDue = 0;
     }
     
-    // Add per-seller salary fields to sellers_json
-    for (const s of sellers) {
-      const sid = Number(s.seller_id);
-      const payout = payoutsByUserId.get(sid);
-      s.salary_due = Number(payout?.total || 0);
-      s.salary_due_total = Number(payout?.total || 0);
-      s.salary_accrued = Number(payout?.total || 0);
+    // Add per-participant salary fields to sellers_json and persist dispatcher rows too.
+    for (let index = 0; index < sellers.length; index += 1) {
+      const seller = sellers[index];
+      const sid = Number(seller.seller_id);
+      sellers[index] = applySnapshotPayoutFields(seller, payoutsByUserId.get(sid));
+    }
+    for (const [userId, payout] of payoutsByUserId.entries()) {
+      const exists = sellers.some((seller) => Number(seller?.seller_id || 0) === Number(userId));
+      if (!exists) {
+        sellers.push(createSnapshotParticipantRowFromPayout(payout));
+      }
     }
 
     // --- CASHBOX SANITY CHECK ---
-    // Ensure cashbox_json column exists
-    ensureCashboxColumn();
+    // Ensure snapshot JSON columns exist
+    ensureShiftClosureJsonColumns();
 
     // Cash in cashbox = net_cash - deposit_cash - salary_paid_cash
     const cash_in_cashbox = netCash - depositCash - salaryPaidCash;
@@ -593,7 +856,18 @@ router.post('/close', (req, res) => {
 
     const futureTripsReserve = calcFutureTripsReserveForBusinessDay(businessDay);
     const owner_cash_available = netTotal - salaryDue - sellers_debt_total;
-    const owner_cash_available_after_future_reserve_cash = owner_cash_available - Number(futureTripsReserve.cash || 0);
+    const ownerCashMetrics = calcShiftOwnerCashMetrics({
+      netCash,
+      salaryDueTotal: salaryDue,
+      salaryPaidCash,
+      salaryPaidTotal,
+      sellers,
+      futureTripsReserveCash: Number(futureTripsReserve.cash || 0),
+      fundsWithholdCashToday,
+    });
+    const owner_cash_available_after_future_reserve_cash = ownerCashMetrics.owner_cash_available_after_future_reserve_cash;
+    const owner_cash_available_after_reserve_and_funds_cash = ownerCashMetrics.owner_cash_available_after_reserve_and_funds_cash;
+    const owner_handover_cash_final = ownerCashMetrics.owner_handover_cash_final;
 
     // Cash discrepancy = cash_in_cashbox - expected_sellers_cash_due
     const cash_discrepancy = cash_in_cashbox - expected_sellers_cash_due;
@@ -622,9 +896,34 @@ router.post('/close', (req, res) => {
       future_trips_reserve_card: Number(futureTripsReserve.card || 0),
       future_trips_reserve_total: Number(futureTripsReserve.total || 0),
       future_trips_reserve_unresolved_trip_day_count: Number(futureTripsReserve.unresolvedTripDayCount || 0),
+      salary_base: salaryBase,
+      funds_withhold_cash_today: fundsWithholdCashToday,
       owner_cash_available,
-      owner_cash_available_after_future_reserve_cash
+      owner_cash_available_after_future_reserve_cash,
+      owner_cash_available_after_reserve_and_funds_cash,
+      owner_handover_cash_final
     });
+    const shiftCloseBreakdown = buildShiftCloseBreakdown({
+      businessDay,
+      source: 'snapshot',
+      sellers,
+      collectedCash,
+      collectedCard,
+      collectedTotal,
+      reserveCash: Number(futureTripsReserve.cash || 0),
+      reserveCard: Number(futureTripsReserve.card || 0),
+      reserveTotal: Number(futureTripsReserve.total || 0),
+      salaryBase,
+      salaryDueTotal: salaryDue,
+      salaryPaidCash,
+      salaryPaidCard,
+      salaryPaidTotal,
+      ownerCashMetrics,
+      fundsWithholdCashToday,
+      motivationData,
+      motivationWithhold,
+    });
+    const calculationJson = JSON.stringify(shiftCloseBreakdown);
 
     // Insert snapshot
     db.prepare(`
@@ -648,8 +947,9 @@ router.post('/close', (req, res) => {
         salary_paid_card,
         salary_paid_total,
         sellers_json,
-        cashbox_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        cashbox_json,
+        calculation_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       businessDay,
       userId,
@@ -670,7 +970,8 @@ router.post('/close', (req, res) => {
       salaryPaidCard,
       salaryPaidTotal,
       JSON.stringify(sellers),
-      cashboxJson
+      cashboxJson,
+      calculationJson
     );
 
     console.log(`[SHIFT_CLOSE] business_day=${businessDay} closed_by=${userId} total_revenue=${totalRevenue} collected=${collectedTotal}`);
@@ -679,7 +980,7 @@ router.post('/close', (req, res) => {
     // SOFT-LOCK: Check if day is already locked (has WITHHOLD entries)
     const isDayLocked = db.prepare(`
       SELECT 1 FROM money_ledger
-      WHERE business_day = ? AND kind = 'FUND' AND type IN ('WITHHOLD_WEEKLY', 'WITHHOLD_SEASON') AND status = 'POSTED'
+      WHERE business_day = ? AND kind = 'FUND' AND type IN ('WITHHOLD_VIKLIF', 'WITHHOLD_WEEKLY', 'WITHHOLD_SEASON') AND status = 'POSTED'
       LIMIT 1
     `).get(businessDay);
     
@@ -688,7 +989,12 @@ router.post('/close', (req, res) => {
     } else {
       // Get withhold amounts from motivation engine
       try {
-        const motivationResult = calcMotivationDay(db, businessDay);
+        const motivationResult = calcMotivationDay(
+          db,
+          businessDay,
+          getShiftCloseMotivationOptions(req.user)
+        );
+        const viklifAmount = Number(motivationResult?.data?.withhold?.viklif_amount || 0);
         const weeklyAmount = Number(motivationResult?.data?.withhold?.weekly_amount || 0);
         const seasonAmount = Number(motivationResult?.data?.withhold?.season_amount || 0);
         
@@ -696,6 +1002,21 @@ router.post('/close', (req, res) => {
         
         // Use transaction for atomic check-and-insert (prevents race condition)
         const insertWithhold = db.transaction(() => {
+          // Check VIKLIF
+          const existingViklif = db.prepare(`
+            SELECT 1 FROM money_ledger
+            WHERE business_day = ? AND kind = 'FUND' AND type = 'WITHHOLD_VIKLIF' AND status = 'POSTED'
+            LIMIT 1
+          `).get(businessDay);
+
+          if (!existingViklif && viklifAmount > 0) {
+            db.prepare(`
+              INSERT INTO money_ledger (kind, type, method, amount, status, seller_id, business_day, event_time, decision_final)
+              VALUES ('FUND', 'WITHHOLD_VIKLIF', 'INTERNAL', ?, 'POSTED', NULL, ?, ?, 1)
+            `).run(viklifAmount, businessDay, now);
+            console.log(`[SHIFT_CLOSE] Inserted WITHHOLD_VIKLIF ledger: ${viklifAmount} for ${businessDay}`);
+          }
+
           // Check WEEKLY
           const existingWeekly = db.prepare(`
             SELECT 1 FROM money_ledger 
@@ -750,8 +1071,7 @@ router.post('/close', (req, res) => {
     // Update seller season stats (accumulation)
     try {
       // Load owner settings for coefficients
-      const ownerRow = db.prepare("SELECT settings_json FROM owner_settings WHERE id = 1").get();
-      const savedSettings = ownerRow?.settings_json ? JSON.parse(ownerRow.settings_json) : {};
+      const savedSettings = resolveOwnerSettings(db);
       
       // Coefficients from settings (defaults match OWNER_SETTINGS_DEFAULTS in owner.mjs)
       const k_speed = Number(savedSettings.k_speed ?? 1.2);
@@ -892,13 +1212,31 @@ router.post('/close', (req, res) => {
         deposits_cash_total: depositCash,
         salary_paid_cash: salaryPaidCash,
         cash_discrepancy,
-        warnings
+        warnings,
+        future_trips_reserve_cash: Number(futureTripsReserve.cash || 0),
+        future_trips_reserve_card: Number(futureTripsReserve.card || 0),
+        future_trips_reserve_total: Number(futureTripsReserve.total || 0),
+        salary_base: salaryBase,
+        funds_withhold_cash_today: fundsWithholdCashToday,
+        owner_cash_available_after_future_reserve_cash,
+        owner_cash_available_after_reserve_and_funds_cash,
+        owner_handover_cash_final
       },
       // Top-level convenience fields
       cash_in_cashbox,
       expected_sellers_cash_due,
       cash_discrepancy,
-      warnings
+      warnings,
+      future_trips_reserve_cash: Number(futureTripsReserve.cash || 0),
+      future_trips_reserve_card: Number(futureTripsReserve.card || 0),
+      future_trips_reserve_total: Number(futureTripsReserve.total || 0),
+      salary_base: salaryBase,
+      funds_withhold_cash_today: fundsWithholdCashToday,
+      owner_cash_available_after_future_reserve_cash,
+      owner_cash_available_after_reserve_and_funds_cash,
+      owner_handover_cash_final,
+      motivation_withhold: shiftCloseBreakdown.withhold,
+      shift_close_breakdown: shiftCloseBreakdown
     });
   } catch (e) {
     console.error('[DISPATCHER SHIFT CLOSE ERROR]', e);

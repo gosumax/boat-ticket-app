@@ -85,7 +85,37 @@ describe('INVARIANTS ENDPOINT', () => {
       
       // Verify: fund - withhold == fund_after
       const v = res.body.data.day.values;
-      expect(v.fund_total_original - v.weekly_amount - v.season_amount - v.dispatcher_amount_total).toBe(v.fund_total_after_withhold);
+      expect(v.fund_total_original - v.weekly_amount - v.season_from_revenue - v.dispatcher_amount_total).toBe(v.fund_total_after_withhold);
+    });
+
+    it('uses full season obligation including SEASON_PREPAY_DELETE in day invariant formula', async () => {
+      const sellerId = seedData?.users?.sellerA?.id || db.prepare(`SELECT id FROM users WHERE role = 'seller' AND is_active = 1 LIMIT 1`).get()?.id;
+
+      db.prepare(`
+        INSERT INTO money_ledger (type, kind, method, amount, status, business_day, seller_id)
+        VALUES ('SALE_PREPAYMENT_CASH', 'SELLER_SHIFT', 'CASH', 100000, 'POSTED', ?, ?)
+      `).run(BASE_DAY, sellerId);
+
+      db.prepare(`
+        INSERT INTO money_ledger (type, kind, method, amount, status, business_day, seller_id)
+        VALUES ('SEASON_PREPAY_DELETE', 'FUND', 'INTERNAL', 1200, 'POSTED', ?, NULL)
+      `).run(BASE_DAY);
+
+      const res = await request(app)
+        .get(`/api/owner/invariants?business_day=${BASE_DAY}`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.data.day).toBeDefined();
+      expect(res.body.data.day.ok).toBe(true);
+
+      const v = res.body.data.day.values;
+      expect(v.season_from_prepayment_transfer).toBe(1200);
+      expect(v.season_amount_from_cancelled_prepayment).toBe(1200);
+      expect(v.season_total).toBe(v.season_from_revenue + 1200);
+      expect(v.season_fund_total).toBe(v.season_total);
+      expect(v.fund_total_original - v.weekly_amount - v.season_from_revenue - v.dispatcher_amount_total).toBe(v.fund_total_after_withhold);
     });
   });
   

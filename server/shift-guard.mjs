@@ -1,4 +1,8 @@
 import db from './db.js';
+import {
+  hasCanonicalShiftClosureRow,
+  listLegacyShiftClosureBusinessDays,
+} from './shift-closure-schema.mjs';
 
 export const SHIFT_CLOSED_CODE = 'SHIFT_CLOSED';
 const SHIFT_CLOSED_MESSAGE = 'Нельзя выполнить операцию: смена за этот день уже закрыта. Обратитесь к owner.';
@@ -21,9 +25,9 @@ export function createShiftClosedError(businessDay) {
 export function assertShiftOpen(businessDay) {
   const day = String(businessDay || '').trim();
 
-  const closed = db
-    .prepare('SELECT 1 FROM shift_closures WHERE business_day = ? LIMIT 1')
-    .get(day);
+  const closed =
+    hasCanonicalShiftClosureRow(db, day, { requireCalculationJson: true }) ||
+    listLegacyShiftClosureBusinessDays(db).includes(day);
 
   if (closed) {
     throw createShiftClosedError(day);

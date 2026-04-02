@@ -13,6 +13,7 @@ import db from './db.js';
 import { startAutoCompleteTrips } from './auto-complete-trips.mjs';
 import dispatcherShiftLedgerRoutes from './dispatcher-shift-ledger.mjs';
 import dispatcherShiftRouter from './dispatcher-shift.mjs'; // <<< ADDED
+import { backfillAllLegacyShiftClosures } from './shift-closure-backfill.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -38,6 +39,19 @@ app.use('/api/selling', tripTemplateRoutes);
 app.use('/api/selling', scheduleTemplateItemRoutes);
 app.use('/api/admin', authenticateToken, adminRoutes);
 app.use('/api/owner', authenticateToken, canOwnerAccess, ownerRouter);
+
+try {
+  const backfillResult = backfillAllLegacyShiftClosures(db, {
+    snapshotSource: 'snapshot_backfill',
+  });
+  if (Number(backfillResult?.scanned_days || 0) > 0) {
+    console.log(
+      `[SHIFT_CLOSURES_BACKFILL] scanned_days=${backfillResult.scanned_days} backfilled_days=${backfillResult.backfilled_days}`
+    );
+  }
+} catch (error) {
+  console.error('[SHIFT_CLOSURES_BACKFILL] startup error:', error?.message || error);
+}
 
 // Export app for testing (imported without starting server)
 export { app };

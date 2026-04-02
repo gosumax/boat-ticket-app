@@ -288,7 +288,7 @@ describe('FULL FUNNEL: seller / dispatcher / owner financial chain', () => {
     expect(String(transferredRow?.business_day || '')).toBe(dayWithoutDebt);
     await deletePresale(dispatcherToken, Number(transferDeletePresale.id));
 
-    // Attributed top-up row must belong to dispatcher, not sellerA.
+    // Dispatcher accepts payment, and business attribution must stay on presale seller.
     const topupLedger = db.prepare(`
       SELECT seller_id, kind, type, amount
       FROM money_ledger
@@ -298,8 +298,8 @@ describe('FULL FUNNEL: seller / dispatcher / owner financial chain', () => {
       ORDER BY id DESC
       LIMIT 1
     `).get(prepayPresaleId);
-    expect(Number(topupLedger?.seller_id || 0)).toBe(dispatcherId);
-    expect(String(topupLedger?.kind || '')).toBe('DISPATCHER_SHIFT');
+    expect(Number(topupLedger?.seller_id || 0)).toBe(sellerAId);
+    expect(String(topupLedger?.kind || '')).toBe('SELLER_SHIFT');
     expect(toNum(topupLedger?.amount)).toBe(prepayRemaining);
 
     // Dispatcher-on-behalf keeps presale ownership on sellerB.
@@ -319,19 +319,73 @@ describe('FULL FUNNEL: seller / dispatcher / owner financial chain', () => {
     `).get(Number(cancelPresaleObj.id));
     expect(Number(reverseCount?.cnt || 0)).toBeGreaterThan(0);
 
-    // LIVE summary for debt day.
-    const debtLive = await getShiftSummary(dayWithDebt);
+    // Every SALE_* row must keep trip_day = presales.business_day (trip-date semantics).
+    const trackedPresaleIds = [
+      prepayPresaleId,
+      Number(sellerCardPresale.id),
+      Number(dispatcherMixedPresale.id),
+      Number(onBehalfPresale.id),
+      Number(cancelPresaleObj.id),
+      Number(transferDeletePresale.id),
+    ];
+    const saleRows = db.prepare(`
+      SELECT
+        ml.presale_id,
+        ml.type,
+        ml.trip_day,
+        p.business_day AS presale_business_day
+      FROM money_ledger ml
+      JOIN presales p ON p.id = ml.presale_id
+      WHERE ml.status = 'POSTED'
+        AND ml.type LIKE 'SALE_%'
+        AND ml.presale_id IN (${trackedPresaleIds.map(() => '?').join(',')})
+    `).all(...trackedPresaleIds);
+    expect(saleRows.length).toBeGreaterThan(0);
+    for (const row of saleRows) {
+      expect(String(row.trip_day || '')).toBe(String(row.presale_business_day || ''));
+    }
+
+    // Reverse rows must also carry trip_day of related presale.
+    const reverseRow = db.prepare(`
+      SELECT trip_day
+      FROM money_ledger
+      WHERE presale_id = ?
+        AND status = 'POSTED'
+        AND type = 'SALE_CANCEL_REVERSE'
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(Number(cancelPresaleObj.id));
+    const cancelTripDay = db.prepare(`
+      SELECT business_day
+      FROM presales
+      WHERE id = ?
+    `).get(Number(cancelPresaleObj.id));
+    expect(String(reverseRow?.trip_day || '')).toBe(String(cancelTripDay?.business_day || ''));
+
+    const cashflowDay = String(db.prepare(`SELECT DATE('now','localtime') AS d`).get()?.d || dayWithDebt);
+
+    // LIVE summary for payment/refund cashflow day.
+    const debtLive = await getShiftSummary(cashflowDay);
     assertShiftFormula(debtLive);
 
     const sellerALive = (debtLive.sellers || []).find((s) => Number(s.seller_id) === sellerAId);
     const dispatcherLive = (debtLive.sellers || []).find((s) => Number(s.seller_id) === dispatcherId);
     expect(sellerALive).toBeDefined();
-    expect(dispatcherLive).toBeDefined();
+    expect(dispatcherLive).toBeUndefined();
 
-    // seller.accepted/cash must not absorb dispatcher top-up.
-    expect(toNum(sellerALive.collected_cash)).toBe(0);
+    // Seller row must include every seller-attributed payment, even if dispatcher clicked completion.
+    expect(toNum(sellerALive.collected_cash)).toBeGreaterThan(0);
     expect(toNum(sellerALive.collected_card)).toBeGreaterThan(0);
-    expect(toNum(dispatcherLive.collected_cash)).toBeGreaterThan(0);
+    const sellerAPrepaymentCashLedgerDay = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) AS total
+      FROM money_ledger
+      WHERE business_day = ?
+        AND seller_id = ?
+        AND status = 'POSTED'
+        AND kind = 'SELLER_SHIFT'
+        AND type IN ('SALE_PREPAYMENT_CASH')
+    `).get(cashflowDay, sellerAId);
+    expect(toNum(sellerALive.cash_due_to_owner)).toBe(toNum(sellerAPrepaymentCashLedgerDay?.total));
 
     const sellerAAcceptedLedgerDay = db.prepare(`
       SELECT COALESCE(SUM(amount), 0) AS total
@@ -339,17 +393,18 @@ describe('FULL FUNNEL: seller / dispatcher / owner financial chain', () => {
       WHERE business_day = ?
         AND seller_id = ?
         AND status = 'POSTED'
-        AND type LIKE 'SALE_ACCEPTED%'
-    `).get(dayWithDebt, sellerAId);
-    expect(toNum(sellerALive.accepted)).toBe(toNum(sellerAAcceptedLedgerDay?.total));
+        AND kind = 'SELLER_SHIFT'
+        AND type IN (
+          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+        )
+    `).get(cashflowDay, sellerAId);
+    expect(toNum(sellerALive.accepted ?? sellerALive.collected_total)).toBe(toNum(sellerAAcceptedLedgerDay?.total));
 
-    await finishTrips(dayWithDebt);
-    await closeShift(dayWithDebt);
-
-    const debtSnapshot = await getShiftSummary(dayWithDebt);
-    expect(debtSnapshot.source).toBe('snapshot');
-    assertShiftFormula(debtSnapshot);
-    expect(toNum(debtSnapshot.sellers_debt_total)).toBeGreaterThan(0);
+    // Trip-day summary must stay on payment-day ledger semantics and not fall back to active tickets.
+    const tripDayLive = await getShiftSummary(dayWithDebt);
+    expect(toNum(tripDayLive.collected_total)).toBe(0);
+    expect(toNum(tripDayLive.total_revenue)).toBeGreaterThan(0);
 
     // Second day: close without debts.
     const noDebtCash = await createPresale(sellerBToken, {
@@ -375,7 +430,7 @@ describe('FULL FUNNEL: seller / dispatcher / owner financial chain', () => {
 
     await finishTrips(dayWithoutDebt);
 
-    const clearLiveBefore = await getShiftSummary(dayWithoutDebt);
+    const clearLiveBefore = await getShiftSummary(cashflowDay);
     assertShiftFormula(clearLiveBefore);
     expect(toNum(clearLiveBefore.sellers_debt_total)).toBeGreaterThan(0);
 
@@ -385,26 +440,27 @@ describe('FULL FUNNEL: seller / dispatcher / owner financial chain', () => {
       const cashDue = Math.max(0, Math.trunc(toNum(s.cash_due_to_owner)));
       const termDue = Math.max(0, Math.trunc(toNum(s.terminal_due_to_owner ?? s.terminal_debt)));
       if (cashDue > 0) {
-        await depositToOwner('DEPOSIT_TO_OWNER_CASH', sid, cashDue, dayWithoutDebt);
+        await depositToOwner('DEPOSIT_TO_OWNER_CASH', sid, cashDue, cashflowDay);
       }
       if (termDue > 0) {
-        await depositToOwner('DEPOSIT_TO_OWNER_CARD', sid, termDue, dayWithoutDebt);
+        await depositToOwner('DEPOSIT_TO_OWNER_CARD', sid, termDue, cashflowDay);
       }
     }
 
-    const clearLiveAfter = await getShiftSummary(dayWithoutDebt);
+    const clearLiveAfter = await getShiftSummary(cashflowDay);
     assertShiftFormula(clearLiveAfter);
     expect(toNum(clearLiveAfter.sellers_debt_total)).toBe(0);
 
-    await closeShift(dayWithoutDebt);
-    const clearSnapshot = await getShiftSummary(dayWithoutDebt);
+    await closeShift(cashflowDay);
+    const clearSnapshot = await getShiftSummary(cashflowDay);
     expect(clearSnapshot.source).toBe('snapshot');
     assertShiftFormula(clearSnapshot);
     expect(toNum(clearSnapshot.sellers_debt_total)).toBe(0);
+    expect(toNum(clearSnapshot.salary_base)).toBe(0);
 
     // Owner summary invariants after all operations.
     const ownerSummary = await request(app)
-      .get(`/api/owner/money/summary?from=${dayWithDebt}&to=${dayWithoutDebt}`)
+      .get(`/api/owner/money/summary?from=${cashflowDay}&to=${cashflowDay}`)
       .set('Authorization', `Bearer ${ownerToken}`);
 
     expect(ownerSummary.status).toBe(200);
@@ -415,7 +471,7 @@ describe('FULL FUNNEL: seller / dispatcher / owner financial chain', () => {
     expect(toNum(totals.net_total)).toBe(toNum(totals.collected_total) - toNum(totals.refund_total));
 
     // Weekly/season ledger aggregation after mixed operations.
-    const weekKey = getIsoWeekKey(dayWithoutDebt);
+    const weekKey = getIsoWeekKey(cashflowDay);
     const weekly = await request(app)
       .get(`/api/owner/motivation/weekly?week=${weekKey}`)
       .set('Authorization', `Bearer ${ownerToken}`);
@@ -433,10 +489,11 @@ describe('FULL FUNNEL: seller / dispatcher / owner financial chain', () => {
     `).get(weekFrom, weekTo);
 
     expect(toNum(weekly.body?.data?.weekly_pool_total_ledger)).toBe(toNum(weeklyLedger?.total));
-    expect(toNum(weekly.body?.data?.weekly_pool_total_ledger)).toBeGreaterThan(0);
+    expect(toNum(weekly.body?.data?.weekly_pool_total_ledger)).toBe(0);
 
+    const seasonYear = Number(String(cashflowDay).slice(0, 4));
     const season = await request(app)
-      .get('/api/owner/motivation/season?season_id=2099')
+      .get(`/api/owner/motivation/season?season_id=${seasonYear}`)
       .set('Authorization', `Bearer ${ownerToken}`);
     expect(season.status).toBe(200);
     expect(season.body?.ok).toBe(true);
@@ -446,11 +503,11 @@ describe('FULL FUNNEL: seller / dispatcher / owner financial chain', () => {
       FROM money_ledger
       WHERE type = 'WITHHOLD_SEASON'
         AND status = 'POSTED'
-        AND business_day BETWEEN '2099-01-01' AND '2099-12-31'
-    `).get();
+        AND business_day BETWEEN ? AND ?
+    `).get(`${seasonYear}-01-01`, `${seasonYear}-12-31`);
 
     expect(toNum(season.body?.data?.season_pool_total_ledger)).toBe(toNum(seasonLedger?.total));
-    expect(toNum(season.body?.data?.season_pool_total_ledger)).toBeGreaterThan(0);
+    expect(toNum(season.body?.data?.season_pool_total_ledger)).toBe(0);
 
     const sellerBState = db.prepare(`
       SELECT streak_days

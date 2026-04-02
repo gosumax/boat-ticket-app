@@ -12,7 +12,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'boat_ticket_secret_key';
 let app, db, ownerToken, ownerUserId;
 
 // Test users
-let sellerId, boatSpeedId, boatCruiseId, boatBananaId, slotSpeedId, slotCruiseId, slotBananaId;
+let sellerId, dispatcherId, boatSpeedId, boatCruiseId, boatBananaId, slotSpeedId, slotCruiseId, slotBananaId;
 
 // Different test days for each scenario
 const DAY1 = '2030-02-01';
@@ -45,6 +45,12 @@ beforeAll(async () => {
     VALUES (?, ?, 'seller', 1, 'center')
   `).run('test_seller', hashedPassword);
   sellerId = sellerRes.lastInsertRowid;
+
+  const dispatcherRes = db.prepare(`
+    INSERT INTO users (username, password_hash, role, is_active, zone)
+    VALUES (?, ?, 'dispatcher', 1, 'center')
+  `).run('test_dispatcher', hashedPassword);
+  dispatcherId = dispatcherRes.lastInsertRowid;
   
   // Create boats of different types
   const speedBoatRes = db.prepare(`
@@ -118,6 +124,13 @@ function createSale(day, amount, sellerUserId, boatType = 'speed', zoneAtSale = 
   `).run(presaleId, slotId, day, day, 'SELLER_SHIFT', 'SALE_ACCEPTED_CASH', 'CASH', amount, 'POSTED', sellerUserId);
   
   return presaleId;
+}
+
+function createDispatcherSale(day, amount, dispatcherUserId) {
+  db.prepare(`
+    INSERT INTO money_ledger (trip_day, business_day, kind, type, method, amount, status, seller_id)
+    VALUES (?, ?, 'DISPATCHER_SHIFT', 'SALE_ACCEPTED_CASH', 'CASH', ?, 'POSTED', ?)
+  `).run(day, day, amount, dispatcherUserId);
 }
 
 describe('ADAPTIVE RECALCULATION PARAMETERS', () => {
@@ -232,9 +245,16 @@ describe('ADAPTIVE RECALCULATION PARAMETERS', () => {
       expect(res.body.data.individualFund).toBeDefined();
       expect(res.body.data.teamFund).toBeDefined();
       
-      // individualFund + teamFund should equal fundTotal
+      // individualFund + teamFund should equal salary fund after withholds
       const sum = res.body.data.individualFund + res.body.data.teamFund;
-      expect(sum).toBeCloseTo(res.body.data.fundTotal, -1); // Within 10 RUB due to rounding
+      expect(sum).toBeCloseTo(
+        Number(
+          res.body.data.salary_fund_total ??
+          res.body.data.withhold?.fund_total_after_withhold ??
+          0
+        ),
+        -1
+      );
     });
     
     it('changing individual_share changes distribution', async () => {
@@ -281,6 +301,103 @@ describe('ADAPTIVE RECALCULATION PARAMETERS', () => {
       
       // ratio2 (4:1) should be greater than ratio1 (3:2)
       expect(ratio2).toBeGreaterThan(ratio1);
+    });
+
+    it('dispatcher multiplier changes team weights in adaptive team portion', async () => {
+      await request(app)
+        .put('/api/owner/settings/full')
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({
+          motivationType: 'adaptive',
+          motivation_percent: 0.15,
+          individual_share: 0,
+          team_share: 1,
+          k_dispatchers: 1,
+          teamIncludeSellers: true,
+          teamIncludeDispatchers: true,
+        });
+
+      createSale(DAY3, 100000, sellerId, 'speed');
+      createDispatcherSale(DAY3, 100000, dispatcherId);
+
+      const equalRes = await request(app)
+        .get(`/api/owner/motivation/day?day=${DAY3}`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+
+      expect(equalRes.status).toBe(200);
+      const equalSeller = equalRes.body.data.payouts.find((p) => Number(p.user_id) === Number(sellerId));
+      const equalDispatcher = equalRes.body.data.payouts.find((p) => Number(p.user_id) === Number(dispatcherId));
+      expect(equalSeller).toBeDefined();
+      expect(equalDispatcher).toBeDefined();
+      expect(Number(equalSeller.total || 0)).toBeCloseTo(Number(equalDispatcher.total || 0), 6);
+
+      db.prepare(`DELETE FROM motivation_day_settings WHERE business_day = ?`).run(DAY4);
+
+      await request(app)
+        .put('/api/owner/settings/full')
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({
+          motivationType: 'adaptive',
+          motivation_percent: 0.15,
+          individual_share: 0,
+          team_share: 1,
+          k_dispatchers: 1.5,
+          teamIncludeSellers: true,
+          teamIncludeDispatchers: true,
+        });
+
+      createSale(DAY4, 100000, sellerId, 'speed');
+      createDispatcherSale(DAY4, 100000, dispatcherId);
+
+      const weightedRes = await request(app)
+        .get(`/api/owner/motivation/day?day=${DAY4}`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+
+      expect(weightedRes.status).toBe(200);
+      const weightedSeller = weightedRes.body.data.payouts.find((p) => Number(p.user_id) === Number(sellerId));
+      const weightedDispatcher = weightedRes.body.data.payouts.find((p) => Number(p.user_id) === Number(dispatcherId));
+      expect(weightedSeller).toBeDefined();
+      expect(weightedDispatcher).toBeDefined();
+      expect(Number(weightedDispatcher.total || 0)).toBeGreaterThan(Number(weightedSeller.total || 0));
+      expect(Number(weightedDispatcher.team_part || 0) / Number(weightedSeller.team_part || 1)).toBeCloseTo(1.5, 6);
+      expect(Number(weightedDispatcher.total || 0) / Number(weightedSeller.total || 1)).toBeCloseTo(1.5, 6);
+    });
+
+    it('individual portion is distributed by revenue and ignores points', async () => {
+      await request(app)
+        .put('/api/owner/settings/full')
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({
+          motivationType: 'adaptive',
+          motivation_percent: 0.15,
+          individual_share: 1,
+          team_share: 0,
+          k_speed: 10,
+          k_zone_center: 10,
+          teamIncludeSellers: true,
+          teamIncludeDispatchers: true,
+        });
+
+      createSale(DAY5, 10000, sellerId, 'speed', 'center');
+      createDispatcherSale(DAY5, 40000, dispatcherId);
+
+      const res = await request(app)
+        .get(`/api/owner/motivation/day?day=${DAY5}`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+
+      expect(res.status).toBe(200);
+
+      const sellerPayout = res.body.data.payouts.find((p) => Number(p.user_id) === Number(sellerId));
+      const dispatcherPayout = res.body.data.payouts.find((p) => Number(p.user_id) === Number(dispatcherId));
+      const sellerPoints = res.body.data.points_by_user.find((p) => Number(p.user_id) === Number(sellerId));
+
+      expect(sellerPayout).toBeDefined();
+      expect(dispatcherPayout).toBeDefined();
+      expect(Number(sellerPoints?.points_total || 0)).toBeGreaterThan(0);
+      expect(Number(sellerPayout.team_part || 0)).toBe(0);
+      expect(Number(dispatcherPayout.team_part || 0)).toBe(0);
+      expect(Number(dispatcherPayout.individual_part || 0) / Number(sellerPayout.individual_part || 1)).toBeCloseTo(4, 6);
+      expect(Number(dispatcherPayout.total || 0) / Number(sellerPayout.total || 1)).toBeCloseTo(4, 6);
     });
   });
   

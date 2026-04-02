@@ -1,0 +1,549 @@
+{
+  "methods": [
+    {
+      "name": "getCurrentUser",
+      "line": 113,
+      "reqs": [
+        "/auth/me"
+      ]
+    },
+    {
+      "name": "getTrips",
+      "line": 120,
+      "reqs": [
+        "/selling/dispatcher/slots"
+      ]
+    },
+    {
+      "name": "getSlots",
+      "line": 124,
+      "reqs": [
+        "/selling/slots"
+      ]
+    },
+    {
+      "name": "getBoats",
+      "line": 129,
+      "reqs": [
+        "/selling/boats"
+      ]
+    },
+    {
+      "name": "getBoatSlotsByType",
+      "line": 133,
+      "reqs": [
+        "/selling/boats/${encodeURIComponent(type)}/slots"
+      ]
+    },
+    {
+      "name": "getAllDispatcherSlots",
+      "line": 138,
+      "reqs": [
+        "/selling/dispatcher/slots"
+      ]
+    },
+    {
+      "name": "getAllDispatcherBoats",
+      "line": 142,
+      "reqs": [
+        "/selling/dispatcher/boats"
+      ]
+    },
+    {
+      "name": "createDispatcherSlot",
+      "line": 146,
+      "reqs": [
+        "/selling/dispatcher/slots"
+      ]
+    },
+    {
+      "name": "updateDispatcherSlot",
+      "line": 153,
+      "reqs": [
+        "/selling/dispatcher/slots/${id}"
+      ]
+    },
+    {
+      "name": "deactivateDispatcherSlot",
+      "line": 160,
+      "reqs": [
+        "/selling/dispatcher/slots/${id}/active"
+      ]
+    },
+    {
+      "name": "deleteDispatcherSlot",
+      "line": 168,
+      "reqs": [
+        "/selling/dispatcher/slots/${id}"
+      ]
+    },
+    {
+      "name": "removeTripsForDeletedBoats",
+      "line": 172,
+      "reqs": [
+        "/selling/dispatcher/remove-trips-for-deleted-boats"
+      ]
+    },
+    {
+      "name": "createPresale",
+      "line": 178,
+      "reqs": [
+        "/selling/presales"
+      ]
+    },
+    {
+      "name": "getPresales",
+      "line": 182,
+      "reqs": [
+        "/selling/presales"
+      ]
+    },
+    {
+      "name": "getPresalesCancelledTripPending",
+      "line": 215,
+      "reqs": [
+        "/selling/presales/cancelled-trip-pending"
+      ]
+    },
+    {
+      "name": "getPresale",
+      "line": 219,
+      "reqs": [
+        "/selling/presales/${id}"
+      ]
+    },
+    {
+      "name": "acceptPayment",
+      "line": 224,
+      "reqs": [
+        "/selling/presales/${id}/accept-payment"
+      ]
+    },
+    {
+      "name": "cancelTripPending",
+      "line": 230,
+      "reqs": [
+        "/selling/presales/${id}/cancel-trip-pending"
+      ]
+    },
+    {
+      "name": "transferPresaleToSlot",
+      "line": 235,
+      "reqs": [
+        "/selling/presales/${presaleId}/transfer"
+      ]
+    },
+    {
+      "name": "markPresalePayment",
+      "line": 239,
+      "reqs": [
+        "/selling/presales/${id}/payment"
+      ]
+    },
+    {
+      "name": "cancelPresale",
+      "line": 243,
+      "reqs": [
+        "/selling/presales/${id}/cancel"
+      ]
+    },
+    {
+      "name": "movePresale",
+      "line": 247,
+      "reqs": [
+        "/selling/presales/${id}/move"
+      ]
+    },
+    {
+      "name": "updatePresaleSeats",
+      "line": 251,
+      "reqs": [
+        "/selling/presales/${id}/seats"
+      ]
+    },
+    {
+      "name": "markPresaleUsed",
+      "line": 255,
+      "reqs": [
+        "/selling/presales/${id}/used"
+      ]
+    },
+    {
+      "name": "refundPresale",
+      "line": 259,
+      "reqs": [
+        "/selling/presales/${id}/refund"
+      ]
+    },
+    {
+      "name": "deletePresale",
+      "line": 263,
+      "reqs": [
+        "/selling/presales/${id}/delete"
+      ]
+    },
+    {
+      "name": "getPresaleTickets",
+      "line": 267,
+      "reqs": [
+        "/selling/presales/${presaleId}/tickets"
+      ]
+    },
+    {
+      "name": "getSlotTickets",
+      "line": 271,
+      "reqs": [
+        "/selling/slots/${slotId}/tickets"
+      ]
+    },
+    {
+      "name": "markTicketUsed",
+      "line": 276,
+      "reqs": [
+        "/selling/tickets/${ticketId}/used"
+      ]
+    },
+    {
+      "name": "refundTicket",
+      "line": 280,
+      "reqs": [
+        "/selling/tickets/${ticketId}/refund"
+      ]
+    },
+    {
+      "name": "deleteTicket",
+      "line": 284,
+      "reqs": [
+        "/selling/tickets/${ticketId}/delete"
+      ]
+    },
+    {
+      "name": "transferTicket",
+      "line": 288,
+      "reqs": [
+        "/selling/tickets/${ticketId}/transfer"
+      ]
+    },
+    {
+      "name": "markTicketAsUsed",
+      "line": 294,
+      "reqs": []
+    },
+    {
+      "name": "transferTicketToSlot",
+      "line": 298,
+      "reqs": []
+    },
+    {
+      "name": "getAllActiveSlots",
+      "line": 303,
+      "reqs": []
+    },
+    {
+      "name": "getTransferOptions",
+      "line": 307,
+      "reqs": [
+        "/selling/transfer-options"
+      ]
+    },
+    {
+      "name": "getScheduleTemplates",
+      "line": 313,
+      "reqs": [
+        "/selling/schedule-templates"
+      ]
+    },
+    {
+      "name": "createScheduleTemplate",
+      "line": 317,
+      "reqs": [
+        "/selling/schedule-templates"
+      ]
+    },
+    {
+      "name": "updateScheduleTemplate",
+      "line": 321,
+      "reqs": [
+        "/selling/schedule-templates/${id}"
+      ]
+    },
+    {
+      "name": "deleteScheduleTemplate",
+      "line": 325,
+      "reqs": [
+        "/selling/schedule-templates/${id}"
+      ]
+    },
+    {
+      "name": "getScheduleTemplateItems",
+      "line": 331,
+      "reqs": [
+        "/selling/schedule-templates/${templateId}/items",
+        "/selling/schedule-template-items"
+      ]
+    },
+    {
+      "name": "createScheduleTemplateItem",
+      "line": 338,
+      "reqs": [
+        "/selling/schedule-templates/${templateId}/items",
+        "/selling/schedule-template-items"
+      ]
+    },
+    {
+      "name": "updateScheduleTemplateItem",
+      "line": 348,
+      "reqs": [
+        "/selling/schedule-template-items/${itemId}"
+      ]
+    },
+    {
+      "name": "deleteScheduleTemplateItem",
+      "line": 352,
+      "reqs": [
+        "/selling/schedule-template-items/${itemId}${q}"
+      ]
+    },
+    {
+      "name": "generateSchedule",
+      "line": 357,
+      "reqs": [
+        "/selling/schedule-template-items/generate"
+      ]
+    },
+    {
+      "name": "generateSlotsFromTemplateItems",
+      "line": 362,
+      "reqs": []
+    },
+    {
+      "name": "getOwnerDashboard",
+      "line": 367,
+      "reqs": [
+        "/owner/dashboard"
+      ]
+    }
+  ],
+  "consumers": {
+    "getCurrentUser": [
+      "src\\contexts\\AuthContext.jsx:34"
+    ],
+    "getTrips": [
+      "src\\components\\dispatcher\\TicketSellingView.jsx:95"
+    ],
+    "getSlots": [],
+    "getBoats": [
+      "src\\components\\admin\\BoatManagement.jsx:56"
+    ],
+    "getBoatSlotsByType": [
+      "src\\views\\SellerView.jsx:212"
+    ],
+    "getAllDispatcherSlots": [
+      "src\\components\\dispatcher\\PassengerList.jsx:187",
+      "src\\components\\dispatcher\\PassengerList.jsx:326",
+      "src\\components\\dispatcher\\SlotManagement.jsx:168",
+      "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:127",
+      "src\\components\\dispatcher\\TripListView.jsx:97"
+    ],
+    "getAllDispatcherBoats": [
+      "src\\components\\dispatcher\\ScheduleTemplates.jsx:53",
+      "src\\components\\dispatcher\\SlotManagement.jsx:169",
+      "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:128"
+    ],
+    "createDispatcherSlot": [
+      "src\\components\\dispatcher\\SlotManagement.jsx:337",
+      "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:303"
+    ],
+    "updateDispatcherSlot": [
+      "src\\components\\dispatcher\\SlotManagement.jsx:325",
+      "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:292"
+    ],
+    "deactivateDispatcherSlot": [
+      "src\\components\\dispatcher\\SlotManagement.jsx:385",
+      "src\\components\\dispatcher\\SlotManagement.jsx:454",
+      "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:351",
+      "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:405"
+    ],
+    "deleteDispatcherSlot": [
+      "src\\components\\dispatcher\\SlotManagement.jsx:419",
+      "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:383"
+    ],
+    "removeTripsForDeletedBoats": [
+      "src\\components\\dispatcher\\SlotManagement.jsx:490"
+    ],
+    "createPresale": [
+      "src\\components\\dispatcher\\QuickSaleForm.jsx:285",
+      "src\\views\\SellerView.jsx:166"
+    ],
+    "getPresales": [
+      "src\\components\\dispatcher\\PresaleListView.jsx:79",
+      "src\\components\\seller\\SalesHistory.jsx:25"
+    ],
+    "getPresalesCancelledTripPending": [],
+    "getPresale": [],
+    "acceptPayment": [
+      "src\\components\\dispatcher\\PassengerList.jsx:841"
+    ],
+    "cancelTripPending": [
+      "src\\components\\dispatcher\\PassengerList.jsx:780"
+    ],
+    "transferPresaleToSlot": [
+      "src\\components\\dispatcher\\PassengerList.jsx:428"
+    ],
+    "markPresalePayment": [],
+    "cancelPresale": [
+      "src\\components\\seller\\ConfirmationScreen.jsx:82"
+    ],
+    "movePresale": [],
+    "updatePresaleSeats": [],
+    "markPresaleUsed": [],
+    "refundPresale": [],
+    "deletePresale": [
+      "src\\components\\dispatcher\\PassengerList.jsx:798",
+      "src\\components\\dispatcher\\PassengerList.jsx:808"
+    ],
+    "getPresaleTickets": [
+      "src\\components\\dispatcher\\PassengerList.jsx:267",
+      "src\\components\\dispatcher\\PassengerList.jsx:635"
+    ],
+    "getSlotTickets": [],
+    "markTicketUsed": [],
+    "refundTicket": [
+      "src\\components\\dispatcher\\PassengerList.jsx:623"
+    ],
+    "deleteTicket": [
+      "src\\components\\dispatcher\\PassengerList.jsx:629"
+    ],
+    "transferTicket": [],
+    "markTicketAsUsed": [
+      "src\\components\\dispatcher\\PassengerList.jsx:621"
+    ],
+    "transferTicketToSlot": [
+      "src\\components\\dispatcher\\PassengerList.jsx:430"
+    ],
+    "getAllActiveSlots": [],
+    "getTransferOptions": [],
+    "getScheduleTemplates": [
+      "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:129",
+      "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:143"
+    ],
+    "createScheduleTemplate": [],
+    "updateScheduleTemplate": [],
+    "deleteScheduleTemplate": [],
+    "getScheduleTemplateItems": [
+      "src\\components\\dispatcher\\ScheduleTemplates.jsx:52"
+    ],
+    "createScheduleTemplateItem": [
+      "src\\components\\dispatcher\\ScheduleTemplates.jsx:230"
+    ],
+    "updateScheduleTemplateItem": [
+      "src\\components\\dispatcher\\ScheduleTemplates.jsx:225"
+    ],
+    "deleteScheduleTemplateItem": [
+      "src\\components\\dispatcher\\ScheduleTemplates.jsx:324"
+    ],
+    "generateSchedule": [],
+    "generateSlotsFromTemplateItems": [
+      "src\\components\\dispatcher\\ScheduleTemplates.jsx:357"
+    ],
+    "getOwnerDashboard": []
+  },
+  "directRequest": [
+    {
+      "path": "/selling/dispatcher/sellers",
+      "loc": "src\\components\\dispatcher\\QuickSaleForm.jsx:132"
+    },
+    {
+      "path": "/owner/manual/day?date=${encodeURIComponent(d)}",
+      "loc": "src\\components\\owner\\OwnerLoadView.jsx:95"
+    },
+    {
+      "path": "/owner/manual/day",
+      "loc": "src\\components\\owner\\OwnerLoadView.jsx:186"
+    },
+    {
+      "path": "/owner/manual/lock",
+      "loc": "src\\components\\owner\\OwnerLoadView.jsx:212"
+    },
+    {
+      "path": "/dispatcher/shift-ledger/summary?business_day=${encodeURIComponent(day)}",
+      "loc": "src\\views\\DispatcherShiftClose.jsx:84"
+    },
+    {
+      "path": "/dispatcher/shift/deposit",
+      "loc": "src\\views\\DispatcherShiftClose.jsx:363"
+    },
+    {
+      "path": "/dispatcher/shift/deposit",
+      "loc": "src\\views\\DispatcherShiftClose.jsx:390"
+    },
+    {
+      "path": "/dispatcher/shift/deposit",
+      "loc": "src\\views\\DispatcherShiftClose.jsx:417"
+    },
+    {
+      "path": "/dispatcher/shift/close",
+      "loc": "src\\views\\DispatcherShiftClose.jsx:453"
+    },
+    {
+      "path": "/owner/settings/full",
+      "loc": "src\\views\\OwnerMotivationView.jsx:125"
+    },
+    {
+      "path": "/owner/motivation/day?day=${q}",
+      "loc": "src\\views\\OwnerMotivationView.jsx:215"
+    },
+    {
+      "path": "/owner/motivation/weekly?week=${q}",
+      "loc": "src\\views\\OwnerMotivationView.jsx:402"
+    },
+    {
+      "path": "/owner/motivation/season?season_id=${q}",
+      "loc": "src\\views\\OwnerMotivationView.jsx:711"
+    },
+    {
+      "path": "/owner/settings/full",
+      "loc": "src\\views\\OwnerSettingsView.jsx:105"
+    },
+    {
+      "path": "/owner/settings/full",
+      "loc": "src\\views\\OwnerSettingsView.jsx:265"
+    },
+    {
+      "path": "/owner/sellers/list",
+      "loc": "src\\views\\OwnerSettingsView.jsx:287"
+    },
+    {
+      "path": "/owner/sellers/${sellerId}/zone",
+      "loc": "src\\views\\OwnerSettingsView.jsx:309"
+    },
+    {
+      "path": "/owner/boats?preset=all",
+      "loc": "src\\views\\OwnerView.jsx:52"
+    },
+    {
+      "path": "/owner/sellers?preset=all",
+      "loc": "src\\views\\OwnerView.jsx:67"
+    }
+  ],
+  "unusedMethods": [
+    "getSlots",
+    "getPresalesCancelledTripPending",
+    "getPresale",
+    "markPresalePayment",
+    "movePresale",
+    "updatePresaleSeats",
+    "markPresaleUsed",
+    "refundPresale",
+    "getSlotTickets",
+    "markTicketUsed",
+    "transferTicket",
+    "getAllActiveSlots",
+    "getTransferOptions",
+    "createScheduleTemplate",
+    "updateScheduleTemplate",
+    "deleteScheduleTemplate",
+    "generateSchedule",
+    "getOwnerDashboard"
+  ]
+}

@@ -1,8 +1,20 @@
 import express from 'express';
 import db from './db.js';
+import {
+  OWNER_SETTINGS_DEFAULTS,
+  mergeOwnerSettings,
+  parseOwnerSettingsJson,
+  resolveOwnerSettings,
+} from './owner-settings.mjs';
 import { getStreakMultiplier, getSellerState } from './seller-motivation-state.mjs';
 import { roundDownTo50 } from './utils/money-rounding.mjs';
 import { calcMotivationDay } from './motivation/engine.mjs';
+import {
+  calcFutureTripsReserveByPaymentDay,
+  calcLiveUiLedgerTotals,
+  calcShiftOwnerCashMetrics,
+} from './dispatcher-shift-ledger.mjs';
+import { buildShiftCloseBreakdown } from './shift-close-breakdown.mjs';
 
 const router = express.Router();
 const SEASON_FUND_TYPES_SQL = `'WITHHOLD_SEASON','SEASON_PREPAY_DELETE'`;
@@ -78,7 +90,7 @@ function getFundWithholdDaysInRange(dateFrom, dateTo) {
     SELECT DISTINCT DATE(business_day) AS business_day
     FROM money_ledger
     WHERE kind = 'FUND'
-      AND type IN ('WITHHOLD_WEEKLY', 'WITHHOLD_SEASON')
+      AND type IN ('WITHHOLD_WEEKLY', 'WITHHOLD_SEASON', 'WITHHOLD_VIKLIF')
       AND status = 'POSTED'
       AND DATE(business_day) BETWEEN ? AND ?
     ORDER BY DATE(business_day)
@@ -88,20 +100,24 @@ function getFundWithholdDaysInRange(dateFrom, dateTo) {
 function getFundWithholdTotalsInRange(dateFrom, dateTo) {
   const row = db.prepare(`
     SELECT
+      COALESCE(SUM(CASE WHEN type = 'WITHHOLD_VIKLIF' THEN amount ELSE 0 END), 0) AS viklif_total,
       COALESCE(SUM(CASE WHEN type = 'WITHHOLD_WEEKLY' THEN amount ELSE 0 END), 0) AS weekly_total,
       COALESCE(SUM(CASE WHEN type = 'WITHHOLD_SEASON' THEN amount ELSE 0 END), 0) AS season_total,
+      COALESCE(SUM(CASE WHEN type = 'WITHHOLD_VIKLIF' THEN 1 ELSE 0 END), 0) AS viklif_rows,
       COALESCE(SUM(CASE WHEN type = 'WITHHOLD_WEEKLY' THEN 1 ELSE 0 END), 0) AS weekly_rows,
       COALESCE(SUM(CASE WHEN type = 'WITHHOLD_SEASON' THEN 1 ELSE 0 END), 0) AS season_rows
     FROM money_ledger
     WHERE kind = 'FUND'
-      AND type IN ('WITHHOLD_WEEKLY', 'WITHHOLD_SEASON')
+      AND type IN ('WITHHOLD_WEEKLY', 'WITHHOLD_SEASON', 'WITHHOLD_VIKLIF')
       AND status = 'POSTED'
       AND DATE(business_day) BETWEEN ? AND ?
   `).get(dateFrom, dateTo) || {};
 
   return {
+    viklifTotal: roundToKopecks(Number(row.viklif_total || 0)),
     weeklyTotal: roundToKopecks(Number(row.weekly_total || 0)),
     seasonTotal: roundToKopecks(Number(row.season_total || 0)),
+    viklifRows: Number(row.viklif_rows || 0),
     weeklyRows: Number(row.weekly_rows || 0),
     seasonRows: Number(row.season_rows || 0),
   };
@@ -275,6 +291,15 @@ function getTripDayExpr() {
   return presaleDayFallback;
 }
 
+function getLedgerTripDayExpr() {
+  // money_ledger.trip_day is the primary trip-date source for sale/refund journal rows.
+  // Keep fallback to presales for backward compatibility and older rows.
+  if (hasColumn('money_ledger', 'trip_day')) {
+    return `COALESCE(NULLIF(ml.trip_day, ''), ${getTripDayExpr()})`;
+  }
+  return getTripDayExpr();
+}
+
 function salesLedgerWhere() {
   // Only sales-related entries.
   // Keep it conservative to avoid counting deposits/salary.
@@ -291,10 +316,25 @@ function getCashCardCaseExprs() {
   const hasCardAmt = hasColumn('money_ledger', 'card_amount');
 
   if (hasCashAmt && hasCardAmt) {
-    // MIXED payments: split by cash_amount/card_amount
+    // MIXED payments: prefer money_ledger split when present,
+    // otherwise fall back to presales.payment_cash_amount/payment_card_amount.
     return {
-      cash: `CASE WHEN ml.method = 'CASH' THEN ml.amount WHEN ml.method = 'MIXED' THEN COALESCE(ml.cash_amount, 0) ELSE 0 END`,
-      card: `CASE WHEN ml.method = 'CARD' THEN ml.amount WHEN ml.method = 'MIXED' THEN COALESCE(ml.card_amount, 0) ELSE 0 END`,
+      cash: `CASE
+        WHEN ml.method = 'CASH' THEN ml.amount
+        WHEN ml.method = 'MIXED' THEN CASE
+          WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+            THEN COALESCE(ml.cash_amount, 0)
+          ELSE COALESCE(p.payment_cash_amount, ml.amount)
+        END
+        ELSE 0 END`,
+      card: `CASE
+        WHEN ml.method = 'CARD' THEN ml.amount
+        WHEN ml.method = 'MIXED' THEN CASE
+          WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+            THEN COALESCE(ml.card_amount, 0)
+          ELSE COALESCE(p.payment_card_amount, 0)
+        END
+        ELSE 0 END`,
     };
   }
   // money_ledger doesn't have cash_amount/card_amount columns.
@@ -311,6 +351,159 @@ function getCashCardCaseExprs() {
       WHEN ml.method = 'MIXED' THEN COALESCE(p.payment_card_amount, 0) 
       WHEN ml.method = 'CASH' THEN 0
       ELSE 0 END`,
+  };
+}
+
+function getCollectedByPaymentDayGroupedByTripDay(businessDay) {
+  const day = String(businessDay || '').trim();
+  const zero = { revenue: 0, cash: 0, card: 0 };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return {
+      collected_day: day || null,
+      by_trip_day: {
+        today: { ...zero },
+        tomorrow: { ...zero },
+        day2: { ...zero },
+      },
+    };
+  }
+
+  const tomorrow = db.prepare(`SELECT DATE(?, '+1 day') AS d`).get(day)?.d || day;
+  const day2 = db.prepare(`SELECT DATE(?, '+2 day') AS d`).get(day)?.d || tomorrow;
+  const ledgerTripDayExpr = getLedgerTripDayExpr();
+  const presaleTripDayExpr = getTripDayExpr();
+
+  const totalRow = db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(CASE WHEN (${ledgerTripDayExpr}) = ? THEN ml.amount ELSE 0 END), 0) AS total_today,
+         COALESCE(SUM(CASE WHEN (${ledgerTripDayExpr}) = ? THEN ml.amount ELSE 0 END), 0) AS total_tomorrow,
+         COALESCE(SUM(CASE WHEN (${ledgerTripDayExpr}) = ? THEN ml.amount ELSE 0 END), 0) AS total_day2
+       FROM money_ledger ml
+       JOIN presales p ON p.id = ml.presale_id
+       WHERE ml.status = 'POSTED'
+         AND ${salesLedgerWhere()}
+         AND DATE(ml.business_day) = ?`
+    )
+    .get(day, tomorrow, day2, day);
+
+  let usedStc = false;
+  let cashToday = 0;
+  let cardToday = 0;
+  let cashTomorrow = 0;
+  let cardTomorrow = 0;
+  let cashDay2 = 0;
+  let cardDay2 = 0;
+
+  try {
+    const stcExists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`).get();
+    if (stcExists) {
+      const stcCols = db.prepare(`PRAGMA table_info(sales_transactions_canonical)`).all().map((row) => row.name);
+      const hasCashAmt = stcCols.includes('cash_amount');
+      const hasCardAmt = stcCols.includes('card_amount');
+      const hasBusinessDay = stcCols.includes('business_day');
+
+      if (hasCashAmt && hasCardAmt && hasBusinessDay) {
+        const stcRow = db
+          .prepare(
+            `SELECT
+               COALESCE(SUM(CASE WHEN (${presaleTripDayExpr}) = ? THEN stc.cash_amount ELSE 0 END), 0) AS cash_today,
+               COALESCE(SUM(CASE WHEN (${presaleTripDayExpr}) = ? THEN stc.card_amount ELSE 0 END), 0) AS card_today,
+               COALESCE(SUM(CASE WHEN (${presaleTripDayExpr}) = ? THEN stc.cash_amount ELSE 0 END), 0) AS cash_tomorrow,
+               COALESCE(SUM(CASE WHEN (${presaleTripDayExpr}) = ? THEN stc.card_amount ELSE 0 END), 0) AS card_tomorrow,
+               COALESCE(SUM(CASE WHEN (${presaleTripDayExpr}) = ? THEN stc.cash_amount ELSE 0 END), 0) AS cash_day2,
+               COALESCE(SUM(CASE WHEN (${presaleTripDayExpr}) = ? THEN stc.card_amount ELSE 0 END), 0) AS card_day2
+             FROM sales_transactions_canonical stc
+             JOIN presales p ON p.id = stc.presale_id
+             WHERE stc.status = 'VALID'
+               AND DATE(stc.business_day) = ?`
+          )
+          .get(day, day, tomorrow, tomorrow, day2, day2, day);
+        const stcCashToday = Number(stcRow?.cash_today || 0);
+        const stcCardToday = Number(stcRow?.card_today || 0);
+        const stcCashTomorrow = Number(stcRow?.cash_tomorrow || 0);
+        const stcCardTomorrow = Number(stcRow?.card_tomorrow || 0);
+        const stcCashDay2 = Number(stcRow?.cash_day2 || 0);
+        const stcCardDay2 = Number(stcRow?.card_day2 || 0);
+        const stcTotalToday = roundToKopecks(stcCashToday + stcCardToday);
+        const stcTotalTomorrow = roundToKopecks(stcCashTomorrow + stcCardTomorrow);
+        const stcTotalDay2 = roundToKopecks(stcCashDay2 + stcCardDay2);
+        const ledgerTotalToday = roundToKopecks(Number(totalRow?.total_today || 0));
+        const ledgerTotalTomorrow = roundToKopecks(Number(totalRow?.total_tomorrow || 0));
+        const ledgerTotalDay2 = roundToKopecks(Number(totalRow?.total_day2 || 0));
+        const hasAnySplit =
+          Math.abs(stcCashToday) > 0 ||
+          Math.abs(stcCardToday) > 0 ||
+          Math.abs(stcCashTomorrow) > 0 ||
+          Math.abs(stcCardTomorrow) > 0 ||
+          Math.abs(stcCashDay2) > 0 ||
+          Math.abs(stcCardDay2) > 0;
+        const splitMatchesLedgerTotals =
+          stcTotalToday === ledgerTotalToday &&
+          stcTotalTomorrow === ledgerTotalTomorrow &&
+          stcTotalDay2 === ledgerTotalDay2;
+
+        if (hasAnySplit && splitMatchesLedgerTotals) {
+          cashToday = stcCashToday;
+          cardToday = stcCardToday;
+          cashTomorrow = stcCashTomorrow;
+          cardTomorrow = stcCardTomorrow;
+          cashDay2 = stcCashDay2;
+          cardDay2 = stcCardDay2;
+          usedStc = true;
+        }
+      }
+    }
+  } catch {
+    // Fallback below.
+  }
+
+  if (!usedStc) {
+    const cashCardExpr = getCashCardCaseExprs();
+    const mlRow = db
+      .prepare(
+        `SELECT
+           COALESCE(SUM(CASE WHEN (${ledgerTripDayExpr}) = ? THEN ${cashCardExpr.cash} ELSE 0 END), 0) AS cash_today,
+           COALESCE(SUM(CASE WHEN (${ledgerTripDayExpr}) = ? THEN ${cashCardExpr.card} ELSE 0 END), 0) AS card_today,
+           COALESCE(SUM(CASE WHEN (${ledgerTripDayExpr}) = ? THEN ${cashCardExpr.cash} ELSE 0 END), 0) AS cash_tomorrow,
+           COALESCE(SUM(CASE WHEN (${ledgerTripDayExpr}) = ? THEN ${cashCardExpr.card} ELSE 0 END), 0) AS card_tomorrow,
+           COALESCE(SUM(CASE WHEN (${ledgerTripDayExpr}) = ? THEN ${cashCardExpr.cash} ELSE 0 END), 0) AS cash_day2,
+           COALESCE(SUM(CASE WHEN (${ledgerTripDayExpr}) = ? THEN ${cashCardExpr.card} ELSE 0 END), 0) AS card_day2
+         FROM money_ledger ml
+         JOIN presales p ON p.id = ml.presale_id
+         WHERE ml.status = 'POSTED'
+           AND ${salesLedgerWhere()}
+           AND DATE(ml.business_day) = ?`
+      )
+      .get(day, day, tomorrow, tomorrow, day2, day2, day);
+
+    cashToday = Number(mlRow?.cash_today || 0);
+    cardToday = Number(mlRow?.card_today || 0);
+    cashTomorrow = Number(mlRow?.cash_tomorrow || 0);
+    cardTomorrow = Number(mlRow?.card_tomorrow || 0);
+    cashDay2 = Number(mlRow?.cash_day2 || 0);
+    cardDay2 = Number(mlRow?.card_day2 || 0);
+  }
+
+  return {
+    collected_day: day,
+    by_trip_day: {
+      today: {
+        revenue: Number(totalRow?.total_today || 0),
+        cash: cashToday,
+        card: cardToday,
+      },
+      tomorrow: {
+        revenue: Number(totalRow?.total_tomorrow || 0),
+        cash: cashTomorrow,
+        card: cardTomorrow,
+      },
+      day2: {
+        revenue: Number(totalRow?.total_day2 || 0),
+        cash: cashDay2,
+        card: cardDay2,
+      },
+    },
   };
 }
 
@@ -769,7 +962,7 @@ router.get('/money/summary', (req, res) => {
     // Fallback: если stc недоступна, используем money_ledger
     if (paidByTripDay.revenue === 0 && paidByTripDay.cash === 0 && paidByTripDay.card === 0) {
       try {
-        const tripDayExpr = getTripDayExpr();
+        const tripDayExpr = getLedgerTripDayExpr();
         const cashCardExpr = getCashCardCaseExprs();
         const paidRow = db
           .prepare(
@@ -887,18 +1080,48 @@ router.get('/money/summary', (req, res) => {
     const netTotal = collectedTotal - refundTotal;
     const netCash = collectedCash - refundCash;
     const netCard = collectedCard - refundCard;
-    const tripDayExpr = getTripDayExpr();
+    const tripDayExpr = getLedgerTripDayExpr();
     const reserveCashCardExpr = getCashCardCaseExprs();
+    const reserveMixedRefundCashExpr = mlHasCashAmt
+      ? "CASE WHEN COALESCE(ml.cash_amount, 0) > 0 THEN ABS(COALESCE(ml.cash_amount, 0)) ELSE ABS(COALESCE(p.payment_cash_amount, 0)) END"
+      : 'ABS(COALESCE(p.payment_cash_amount, 0))';
+    const reserveMixedRefundCardExpr = mlHasCardAmt
+      ? "CASE WHEN COALESCE(ml.card_amount, 0) > 0 THEN ABS(COALESCE(ml.card_amount, 0)) ELSE ABS(COALESCE(p.payment_card_amount, 0)) END"
+      : 'ABS(COALESCE(p.payment_card_amount, 0))';
     const futureReserveRow = db
       .prepare(
         `SELECT
-           COALESCE(SUM(CASE WHEN (${tripDayExpr}) > DATE(ml.business_day) THEN ${reserveCashCardExpr.cash} ELSE 0 END), 0) AS reserve_cash,
-           COALESCE(SUM(CASE WHEN (${tripDayExpr}) > DATE(ml.business_day) THEN ${reserveCashCardExpr.card} ELSE 0 END), 0) AS reserve_card
+           COALESCE(SUM(CASE
+             WHEN (${tripDayExpr}) > DATE(ml.business_day)
+               AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+               THEN ${reserveCashCardExpr.cash}
+             WHEN (${tripDayExpr}) > DATE(ml.business_day)
+               AND ml.type = 'SALE_CANCEL_REVERSE'
+               THEN CASE
+                 WHEN ml.method = 'CASH' THEN -ABS(ml.amount)
+                 WHEN ml.method = 'MIXED' THEN -(${reserveMixedRefundCashExpr})
+                 ELSE 0
+               END
+             ELSE 0
+           END), 0) AS reserve_cash,
+           COALESCE(SUM(CASE
+             WHEN (${tripDayExpr}) > DATE(ml.business_day)
+               AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+               THEN ${reserveCashCardExpr.card}
+             WHEN (${tripDayExpr}) > DATE(ml.business_day)
+               AND ml.type = 'SALE_CANCEL_REVERSE'
+               THEN CASE
+                 WHEN ml.method = 'CARD' THEN -ABS(ml.amount)
+                 WHEN ml.method = 'MIXED' THEN -(${reserveMixedRefundCardExpr})
+                 ELSE 0
+               END
+             ELSE 0
+           END), 0) AS reserve_card
          FROM money_ledger ml
          LEFT JOIN presales p ON p.id = ml.presale_id
          WHERE ml.status = 'POSTED'
            AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-           AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+           AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED', 'SALE_CANCEL_REVERSE')
            AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
       )
       .get();
@@ -907,6 +1130,7 @@ router.get('/money/summary', (req, res) => {
     const futureTripsReserveTotal = futureTripsReserveCash + futureTripsReserveCard;
     const ownerAvailableCashBeforeReserve = netCash;
     const ownerAvailableCashAfterReserve = ownerAvailableCashBeforeReserve - futureTripsReserveCash;
+    let fundsWithholdViklifToday = 0;
     let fundsWithholdWeeklyToday = 0;
     let fundsWithholdSeasonToday = 0;
     let fundsWithholdDispatcherBonusToday = 0;
@@ -917,30 +1141,37 @@ router.get('/money/summary', (req, res) => {
       const fundDays = getFundWithholdDaysInRange(summaryDateFrom, summaryDateTo);
       const withholdDays = [...new Set([...(salesDays || []), ...(fundDays || [])])].sort();
       const fundLedgerTotals = getFundWithholdTotalsInRange(summaryDateFrom, summaryDateTo);
-      const hasFundLedger = (fundLedgerTotals.weeklyRows + fundLedgerTotals.seasonRows) > 0;
+      const hasFundLedger = (fundLedgerTotals.viklifRows + fundLedgerTotals.weeklyRows + fundLedgerTotals.seasonRows) > 0;
       if (withholdDays.length > 0) {
+        const viklifCalc = calcWithholdTotalForDays(withholdDays, 'viklif_amount');
         const weeklyCalc = calcWithholdTotalForDays(withholdDays, 'weekly_amount');
         const seasonCalc = calcWithholdTotalForDays(withholdDays, 'season_amount');
         const dispatcherCalc = calcWithholdTotalForDays(withholdDays, 'dispatcher_amount_total');
         const roundingCalc = calcWithholdTotalForDays(withholdDays, 'rounding_to_season_amount_total');
+        fundsWithholdViklifToday = hasFundLedger ? Number(fundLedgerTotals.viklifTotal || 0) : Number(viklifCalc.total || 0);
         fundsWithholdWeeklyToday = hasFundLedger ? Number(fundLedgerTotals.weeklyTotal || 0) : Number(weeklyCalc.total || 0);
         fundsWithholdSeasonToday = hasFundLedger ? Number(fundLedgerTotals.seasonTotal || 0) : Number(seasonCalc.total || 0);
         fundsWithholdDispatcherBonusToday = Number(dispatcherCalc.total || 0);
         fundsWithholdRoundingToSeasonToday = Number(roundingCalc.total || 0);
         fundsCalcErrorsCount =
+          (viklifCalc.errors?.length || 0) +
           (weeklyCalc.errors?.length || 0) +
           (seasonCalc.errors?.length || 0) +
           (dispatcherCalc.errors?.length || 0) +
           (roundingCalc.errors?.length || 0);
       } else if (hasFundLedger) {
         // Closed day with fund ledger entries but no sales rows in range.
+        fundsWithholdViklifToday = Number(fundLedgerTotals.viklifTotal || 0);
         fundsWithholdWeeklyToday = Number(fundLedgerTotals.weeklyTotal || 0);
         fundsWithholdSeasonToday = Number(fundLedgerTotals.seasonTotal || 0);
       }
     }
     // Rounding is already included in season withhold; do not add it twice.
     const fundsWithholdTotalToday = roundToKopecks(
-      fundsWithholdWeeklyToday + fundsWithholdSeasonToday + fundsWithholdDispatcherBonusToday
+      fundsWithholdViklifToday +
+      fundsWithholdWeeklyToday +
+      fundsWithholdSeasonToday +
+      fundsWithholdDispatcherBonusToday
     );
     // money_ledger fund entries are INTERNAL and have no cash/card split, so obligations are shown as cash-only.
     const fundsWithholdCashToday = fundsWithholdTotalToday;
@@ -950,19 +1181,162 @@ router.get('/money/summary', (req, res) => {
     if (fundsCalcErrorsCount > 0) {
       warnings.push(`fund_withhold_calc_partial:${fundsCalcErrorsCount}`);
     }
+    let shiftCloseBreakdown = null;
+    let ownerDecisionMetrics = null;
+    if (summaryDateFrom && summaryDateFrom === summaryDateTo) {
+      try {
+        const businessDay = summaryDateFrom;
+        const collectedByTripDayForBusinessDay = getCollectedByPaymentDayGroupedByTripDay(businessDay);
+        const tomorrowObligations = collectedByTripDayForBusinessDay?.by_trip_day?.tomorrow || {};
+        const ledgerCols = new Set(pragmaTableInfo('money_ledger').map((row) => row.name));
+        const hasLedger = ledgerCols.size > 0;
+        const canonicalFutureReserve = calcFutureTripsReserveByPaymentDay({
+          businessDay,
+          ledgerCols,
+          hasLedger,
+          ledgerHasBDay: ledgerCols.has('business_day'),
+        });
+        const canonicalReserveCash = Number(canonicalFutureReserve?.cash || 0);
+        const canonicalReserveCard = Number(canonicalFutureReserve?.card || 0);
+        const canonicalReserveTotal = Number(canonicalFutureReserve?.total || (canonicalReserveCash + canonicalReserveCard));
+        const liveUiTotals = calcLiveUiLedgerTotals(businessDay);
+        const canonicalCollectedCash = Number(liveUiTotals?.collected_cash ?? collectedCash ?? 0);
+        const canonicalCollectedCard = Number(liveUiTotals?.collected_card ?? collectedCard ?? 0);
+        const canonicalCollectedTotal = Number(liveUiTotals?.collected_total ?? collectedTotal ?? 0);
+        const canonicalNetCash = Number(liveUiTotals?.net_cash ?? netCash ?? 0);
+        let canonicalSalaryBase = 0;
+        let canonicalSalaryDueTotal = 0;
+        let canonicalMotivationData = null;
+        try {
+          const motivationResult = calcMotivationDay(db, businessDay, {
+            profile: 'dispatcher_shift_close',
+            dispatcherUserId: null,
+          });
+          if (motivationResult?.data) {
+            canonicalMotivationData = motivationResult.data;
+            canonicalSalaryBase = Number(motivationResult.data.salary_base ?? 0);
+            canonicalSalaryDueTotal = Array.isArray(motivationResult.data.payouts)
+              ? motivationResult.data.payouts.reduce((sum, payout) => sum + Number(payout?.total || 0), 0)
+              : 0;
+          }
+        } catch (motivationError) {
+          warnings.push(`owner_shift_close_motivation_partial:${motivationError?.message || 'failed'}`);
+        }
+        const salaryPaidRow = db
+          .prepare(
+            `SELECT
+               COALESCE(SUM(CASE WHEN type = 'SALARY_PAYOUT_CASH' THEN amount ELSE 0 END), 0) AS salary_paid_cash,
+               COALESCE(SUM(CASE WHEN type = 'SALARY_PAYOUT_CARD' THEN amount ELSE 0 END), 0) AS salary_paid_card
+             FROM money_ledger
+             WHERE status = 'POSTED'
+               AND kind = 'DISPATCHER_SHIFT'
+               AND type IN ('SALARY_PAYOUT_CASH', 'SALARY_PAYOUT_CARD')
+               AND business_day = ?`
+          )
+          .get(businessDay);
+        const canonicalSalaryPaidCash = Number(salaryPaidRow?.salary_paid_cash || 0);
+        const canonicalSalaryPaidCard = Number(salaryPaidRow?.salary_paid_card || 0);
+        const canonicalSalaryPaidTotal = canonicalSalaryPaidCash + canonicalSalaryPaidCard;
+        const shiftCloseFundsWithholdCashToday = roundToKopecks(
+          Number(canonicalMotivationData?.withhold?.weekly_amount ?? fundsWithholdWeeklyToday) +
+          Number(
+            canonicalMotivationData?.withhold?.season_from_revenue ??
+            canonicalMotivationData?.withhold?.season_amount ??
+            fundsWithholdSeasonToday
+          ) +
+          Number(canonicalMotivationData?.withhold?.dispatcher_amount_total ?? fundsWithholdDispatcherBonusToday)
+        );
+        const canonicalSellers = Array.isArray(liveUiTotals?.sellers) ? liveUiTotals.sellers : [];
+        const canonicalOwnerCashMetrics = calcShiftOwnerCashMetrics({
+          netCash: canonicalNetCash,
+          salaryDueTotal: canonicalSalaryDueTotal,
+          salaryPaidCash: canonicalSalaryPaidCash,
+          salaryPaidTotal: canonicalSalaryPaidTotal,
+          sellers: canonicalSellers,
+          futureTripsReserveCash: canonicalReserveCash,
+          fundsWithholdCashToday: shiftCloseFundsWithholdCashToday,
+        });
+        shiftCloseBreakdown = buildShiftCloseBreakdown({
+          businessDay,
+          source: 'owner_summary_live',
+          sellers: canonicalSellers,
+          collectedCash: canonicalCollectedCash,
+          collectedCard: canonicalCollectedCard,
+          collectedTotal: canonicalCollectedTotal,
+          reserveCash: canonicalReserveCash,
+          reserveCard: canonicalReserveCard,
+          reserveTotal: canonicalReserveTotal,
+          salaryBase: canonicalSalaryBase,
+          salaryDueTotal: canonicalSalaryDueTotal,
+          salaryPaidCash: canonicalSalaryPaidCash,
+          salaryPaidCard: canonicalSalaryPaidCard,
+          salaryPaidTotal: canonicalSalaryPaidTotal,
+          ownerCashMetrics: canonicalOwnerCashMetrics,
+          fundsWithholdCashToday: shiftCloseFundsWithholdCashToday,
+          motivationData: canonicalMotivationData,
+        });
+        ownerDecisionMetrics = {
+          business_day: businessDay,
+          source: 'shift_close_breakdown',
+          can_take_cash_today: Number(
+            shiftCloseBreakdown?.totals?.owner_cash_today ??
+            canonicalOwnerCashMetrics.owner_handover_cash_final ??
+            0
+          ),
+          received_cash_today: Number(shiftCloseBreakdown?.totals?.cash_received ?? canonicalCollectedCash),
+          received_card_today: Number(shiftCloseBreakdown?.totals?.card_received ?? canonicalCollectedCard),
+          received_total_today: Number(shiftCloseBreakdown?.totals?.total_received ?? canonicalCollectedTotal),
+          withhold_weekly_today: Number(shiftCloseBreakdown?.totals?.weekly_fund ?? fundsWithholdWeeklyToday),
+          withhold_season_today: Number(shiftCloseBreakdown?.totals?.season_fund_total ?? fundsWithholdSeasonToday),
+          obligations_tomorrow_cash: Number(tomorrowObligations.cash || 0),
+          obligations_tomorrow_card: Number(tomorrowObligations.card || 0),
+          obligations_tomorrow_total: Number(tomorrowObligations.revenue || 0),
+          reserve_future_cash: Number(shiftCloseBreakdown?.totals?.reserve_cash ?? canonicalReserveCash),
+          reserve_future_card: Number(shiftCloseBreakdown?.totals?.reserve_card ?? canonicalReserveCard),
+          reserve_future_total: Number(shiftCloseBreakdown?.totals?.reserve_total ?? canonicalReserveTotal),
+        };
+      } catch (shiftCloseMetricsError) {
+        warnings.push(`owner_shift_close_metrics_partial:${shiftCloseMetricsError?.message || 'failed'}`);
+        ownerDecisionMetrics = {
+          business_day: summaryDateFrom,
+          source: 'owner_summary_legacy_fallback',
+          can_take_cash_today: Number(cashTakeawayAfterReserveAndFunds || 0),
+          received_cash_today: Number(collectedCash || 0),
+          received_card_today: Number(collectedCard || 0),
+          received_total_today: Number(collectedTotal || 0),
+          withhold_weekly_today: Number(fundsWithholdWeeklyToday || 0),
+          withhold_season_today: Number(fundsWithholdSeasonToday || 0),
+          obligations_tomorrow_cash: 0,
+          obligations_tomorrow_card: 0,
+          obligations_tomorrow_total: 0,
+          reserve_future_cash: Number(futureTripsReserveCash || 0),
+          reserve_future_card: Number(futureTripsReserveCard || 0),
+          reserve_future_total: Number(futureTripsReserveTotal || 0),
+        };
+      }
+    }
 
     return res.json({
       ok: true,
       data: {
         preset,
-        range: { from: null, to: null },
+        range: { from: summaryDateFrom || null, to: summaryDateTo || null },
         totals: {
+          // Received (cashflow) metrics by payment/refund day.
           revenue: collectedTotal,  // backward compat
           cash: collectedCash,
           card: collectedCard,
           collected_total: collectedTotal,
           collected_cash: collectedCash,
           collected_card: collectedCard,
+          received_total: collectedTotal,
+          received_cash: collectedCash,
+          received_card: collectedCard,
+          // Earned metrics by trip day.
+          total_revenue: Number(paidByTripDay?.revenue || 0),
+          earned_total: Number(paidByTripDay?.revenue || 0),
+          earned_cash: Number(paidByTripDay?.cash || 0),
+          earned_card: Number(paidByTripDay?.card || 0),
           // Refund metrics
           refund_total: refundTotal,
           refund_cash: refundCash,
@@ -976,7 +1350,17 @@ router.get('/money/summary', (req, res) => {
           future_trips_reserve_total: futureTripsReserveTotal,
           owner_available_cash_before_future_reserve: ownerAvailableCashBeforeReserve,
           owner_available_cash_after_future_reserve: ownerAvailableCashAfterReserve,
+          owner_cash_available_without_future_reserve: Number(
+            shiftCloseBreakdown?.totals?.owner_cash_before_reserve ?? ownerAvailableCashBeforeReserve
+          ),
+          owner_cash_available_after_future_reserve_cash: Number(
+            shiftCloseBreakdown?.totals?.owner_cash_after_reserve ?? ownerAvailableCashAfterReserve
+          ),
+          owner_cash_today: Number(
+            ownerDecisionMetrics?.can_take_cash_today ?? cashTakeawayAfterReserveAndFunds
+          ),
           // Additive fund-obligations metrics (existing fields stay unchanged)
+          funds_withhold_viklif_today: fundsWithholdViklifToday,
           funds_withhold_weekly_today: fundsWithholdWeeklyToday,
           funds_withhold_season_today: fundsWithholdSeasonToday,
           funds_withhold_dispatcher_bonus_today: fundsWithholdDispatcherBonusToday,
@@ -984,13 +1368,22 @@ router.get('/money/summary', (req, res) => {
           funds_withhold_total_today: fundsWithholdTotalToday,
           funds_withhold_cash_today: fundsWithholdCashToday,
           funds_withhold_card_today: fundsWithholdCardToday,
+          weekly_fund: Number(ownerDecisionMetrics?.withhold_weekly_today ?? fundsWithholdWeeklyToday),
+          season_fund_total: Number(ownerDecisionMetrics?.withhold_season_today ?? fundsWithholdSeasonToday),
+          obligations_tomorrow_cash: Number(ownerDecisionMetrics?.obligations_tomorrow_cash ?? 0),
+          obligations_tomorrow_card: Number(ownerDecisionMetrics?.obligations_tomorrow_card ?? 0),
+          obligations_tomorrow_total: Number(ownerDecisionMetrics?.obligations_tomorrow_total ?? 0),
           cash_takeaway_after_reserve_and_funds: cashTakeawayAfterReserveAndFunds,
+          salary_to_pay: Number(shiftCloseBreakdown?.totals?.final_salary_total ?? 0),
+          sellers_collect_total: Number(shiftCloseBreakdown?.totals?.collect_from_sellers ?? 0),
           pending_amount: pendingAmount,
           tickets,
           trips,
           fillPercent,
         },
         paid_by_trip_day: paidByTripDay,
+        owner_decision_metrics: ownerDecisionMetrics,
+        shift_close_breakdown: shiftCloseBreakdown,
       },
       meta: { warnings },
     });
@@ -2202,9 +2595,7 @@ router.get('/motivation/weekly', (req, res) => {
     const dateTo = weekRange.dateTo;
     
     // Get settings for coefficients (load from owner_settings table)
-    const ownerRow = db.prepare("SELECT settings_json FROM owner_settings WHERE id = 1").get();
-    const savedSettings = ownerRow?.settings_json ? JSON.parse(ownerRow.settings_json) : {};
-    const settings = { ...OWNER_SETTINGS_DEFAULTS, ...savedSettings };
+    const settings = resolveOwnerSettings(db);
     const k_speed = Number(settings.k_speed ?? 1.2);
     const k_cruise = Number(settings.k_cruise ?? 3.0);
     const k_zone_hedgehog = Number(settings.k_zone_hedgehog ?? 1.3);
@@ -2510,9 +2901,7 @@ router.get('/motivation/season', (req, res) => {
     }
     
     // Settings for backward-compatible season pool percent
-    const ownerRow = db.prepare("SELECT settings_json FROM owner_settings WHERE id = 1").get();
-    const savedSettings = ownerRow?.settings_json ? JSON.parse(ownerRow.settings_json) : {};
-    const settings = { ...OWNER_SETTINGS_DEFAULTS, ...savedSettings };
+    const settings = resolveOwnerSettings(db);
     const season_percent = Number(settings.season_percent ?? 0.02);
     const seasonRange = resolveSeasonDateRange(seasonId, settings);
     const seasonFrom = seasonRange.seasonFrom;
@@ -2806,14 +3195,24 @@ router.get('/invariants', (req, res) => {
       const w = motivationResult?.data?.withhold || {};
       const fundTotal = Number(w.fund_total_original || 0);
       const weeklyAmount = Number(w.weekly_amount || 0);
-      const seasonAmount = Number(w.season_amount || 0);
+      const seasonFromRevenue = Number(w.season_from_revenue || w.season_amount || 0);
+      const seasonFromPrepaymentTransfer = Number(
+        w.season_from_prepayment_transfer ||
+        w.season_amount_from_cancelled_prepayment ||
+        0
+      );
+      const seasonFundTotal = Number(
+        w.season_total ||
+        w.season_fund_total ||
+        (seasonFromRevenue + seasonFromPrepaymentTransfer)
+      );
       const dispatcherAmount = Number(w.dispatcher_amount_total || 0);
       const fundAfter = Number(w.fund_total_after_withhold || 0);
       
-      // Check: fund_total_original - withhold == fund_total_after_withhold
-      const expectedAfter = roundToKopecks(fundTotal - weeklyAmount - seasonAmount - dispatcherAmount);
+      // Check: only revenue-based season withhold reduces the current day motivation fund.
+      const expectedAfter = roundToKopecks(fundTotal - weeklyAmount - seasonFromRevenue - dispatcherAmount);
       if (!isMoneyEqual(expectedAfter, fundAfter)) {
-        dayErrors.push(`fund mismatch: ${fundTotal} - ${weeklyAmount} - ${seasonAmount} - ${dispatcherAmount} = ${expectedAfter}, but fund_total_after_withhold = ${fundAfter}`);
+        dayErrors.push(`fund mismatch: ${fundTotal} - ${weeklyAmount} - ${seasonFromRevenue} - ${dispatcherAmount} = ${expectedAfter}, but fund_total_after_withhold = ${fundAfter}`);
       }
       
       result.data.day = {
@@ -2823,7 +3222,12 @@ router.get('/invariants', (req, res) => {
         values: {
           fund_total_original: fundTotal,
           weekly_amount: weeklyAmount,
-          season_amount: seasonAmount,
+          season_amount: seasonFromRevenue,
+          season_from_revenue: seasonFromRevenue,
+          season_amount_from_cancelled_prepayment: seasonFromPrepaymentTransfer,
+          season_from_prepayment_transfer: seasonFromPrepaymentTransfer,
+          season_fund_total: seasonFundTotal,
+          season_total: seasonFundTotal,
           dispatcher_amount_total: dispatcherAmount,
           fund_total_after_withhold: fundAfter
         }
@@ -2857,7 +3261,7 @@ router.get('/invariants', (req, res) => {
         
         // Compare calc (from snapshot) vs ledger
         const calcWeekly = weeklyAmount;
-        const calcSeason = seasonAmount;
+        const calcSeason = seasonFromRevenue;
         
         if (!isMoneyEqual(ledgerWeekly, calcWeekly)) {
           immutabilityErrors.push(`ledger weekly (${ledgerWeekly}) differs from snapshot calc (${calcWeekly})`);
@@ -2973,9 +3377,7 @@ router.get('/invariants', (req, res) => {
           daily_sum: 0
         };
       } else {
-        const ownerRow = db.prepare("SELECT settings_json FROM owner_settings WHERE id = 1").get();
-        const savedSettings = ownerRow?.settings_json ? JSON.parse(ownerRow.settings_json) : {};
-        const settings = { ...OWNER_SETTINGS_DEFAULTS, ...savedSettings };
+        const settings = resolveOwnerSettings(db);
         const seasonRange = resolveSeasonDateRange(season_id, settings);
         const seasonFrom = seasonRange.seasonFrom;
         const seasonTo = seasonRange.seasonTo;
@@ -3434,112 +3836,12 @@ router.put('/sellers/:id/zone', (req, res) => {
 // =====================
 router.get('/money/collected-today-by-tripday', (req, res) => {
   try {
-    const todayExpr = "DATE('now','localtime')";
-    const tomorrowExpr = "DATE('now','localtime','+1 day')";
-    const day2Expr = "DATE('now','localtime','+2 day')";
-    const tripDayExpr = getTripDayExpr();
-
-    // Total из money_ledger (по ДАТЕ ОПЛАТЫ = сегодня, группируем по tripDayExpr)
-    const totalRow = db
-      .prepare(
-        `SELECT
-           COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${todayExpr} THEN ml.amount ELSE 0 END), 0) AS total_today,
-           COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${tomorrowExpr} THEN ml.amount ELSE 0 END), 0) AS total_tomorrow,
-           COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${day2Expr} THEN ml.amount ELSE 0 END), 0) AS total_day2
-         FROM money_ledger ml
-         JOIN presales p ON p.id = ml.presale_id
-         WHERE ml.status = 'POSTED'
-           AND ml.kind = 'SELLER_SHIFT'
-           AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
-           AND DATE(ml.business_day) = ${todayExpr}`
-      )
-      .get();
-
-    // Cash/Card из sales_transactions_canonical (MIXED уже разнесён)
-    let usedStc = false;
-    let cashToday = 0, cardToday = 0;
-    let cashTomorrow = 0, cardTomorrow = 0;
-    let cashDay2 = 0, cardDay2 = 0;
-
-    try {
-      const stcExists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_transactions_canonical'`).get();
-      if (stcExists) {
-        const stcCols = db.prepare(`PRAGMA table_info(sales_transactions_canonical)`).all().map(r => r.name);
-        const hasCashAmt = stcCols.includes('cash_amount');
-        const hasCardAmt = stcCols.includes('card_amount');
-        const hasBusinessDay = stcCols.includes('business_day');
-
-        if (hasCashAmt && hasCardAmt && hasBusinessDay) {
-          const stcRow = db
-            .prepare(
-              `SELECT
-                 COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${todayExpr} THEN stc.cash_amount ELSE 0 END), 0) AS cash_today,
-                 COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${todayExpr} THEN stc.card_amount ELSE 0 END), 0) AS card_today,
-                 COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${tomorrowExpr} THEN stc.cash_amount ELSE 0 END), 0) AS cash_tomorrow,
-                 COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${tomorrowExpr} THEN stc.card_amount ELSE 0 END), 0) AS card_tomorrow,
-                 COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${day2Expr} THEN stc.cash_amount ELSE 0 END), 0) AS cash_day2,
-                 COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${day2Expr} THEN stc.card_amount ELSE 0 END), 0) AS card_day2
-               FROM sales_transactions_canonical stc
-               JOIN presales p ON p.id = stc.presale_id
-               WHERE stc.status = 'VALID'
-                 AND DATE(stc.business_day) = ${todayExpr}`
-            )
-            .get();
-          cashToday = Number(stcRow?.cash_today || 0);
-          cardToday = Number(stcRow?.card_today || 0);
-          cashTomorrow = Number(stcRow?.cash_tomorrow || 0);
-          cardTomorrow = Number(stcRow?.card_tomorrow || 0);
-          cashDay2 = Number(stcRow?.cash_day2 || 0);
-          cardDay2 = Number(stcRow?.card_day2 || 0);
-          usedStc = true;
-        }
-      }
-    } catch {
-      // Fallback below
-    }
-
-    // Fallback: если stc недоступна, читаем cash/card из money_ledger (старая логика)
-    if (!usedStc) {
-      const cashCardExpr = getCashCardCaseExprs();
-      const mlRow = db
-        .prepare(
-          `SELECT
-             COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${todayExpr} THEN ${cashCardExpr.cash} ELSE 0 END), 0) AS cash_today,
-             COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${todayExpr} THEN ${cashCardExpr.card} ELSE 0 END), 0) AS card_today,
-             COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${tomorrowExpr} THEN ${cashCardExpr.cash} ELSE 0 END), 0) AS cash_tomorrow,
-             COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${tomorrowExpr} THEN ${cashCardExpr.card} ELSE 0 END), 0) AS card_tomorrow,
-             COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${day2Expr} THEN ${cashCardExpr.cash} ELSE 0 END), 0) AS cash_day2,
-             COALESCE(SUM(CASE WHEN (${tripDayExpr}) = ${day2Expr} THEN ${cashCardExpr.card} ELSE 0 END), 0) AS card_day2
-           FROM money_ledger ml
-           JOIN presales p ON p.id = ml.presale_id
-           WHERE ml.status = 'POSTED'
-             AND ml.kind = 'SELLER_SHIFT'
-             AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
-             AND DATE(ml.business_day) = ${todayExpr}`
-        )
-        .get();
-      cashToday = Number(mlRow?.cash_today || 0);
-      cardToday = Number(mlRow?.card_today || 0);
-      cashTomorrow = Number(mlRow?.cash_tomorrow || 0);
-      cardTomorrow = Number(mlRow?.card_tomorrow || 0);
-      cashDay2 = Number(mlRow?.cash_day2 || 0);
-      cardDay2 = Number(mlRow?.card_day2 || 0);
-    }
-
-    const totalToday = Number(totalRow?.total_today || 0);
-    const totalTomorrow = Number(totalRow?.total_tomorrow || 0);
-    const totalDay2 = Number(totalRow?.total_day2 || 0);
+    const today = db.prepare(`SELECT DATE('now','localtime') AS d`).get()?.d || null;
+    const collectedByTripDay = getCollectedByPaymentDayGroupedByTripDay(today);
 
     return res.json({
       ok: true,
-      data: {
-        collected_day: 'today',
-        by_trip_day: {
-          today: { revenue: totalToday, cash: cashToday, card: cardToday },
-          tomorrow: { revenue: totalTomorrow, cash: cashTomorrow, card: cardTomorrow },
-          day2: { revenue: totalDay2, cash: cashDay2, card: cardDay2 },
-        },
-      },
+      data: collectedByTripDay,
       meta: { warnings: [] },
     });
   } catch (e) {
@@ -3929,7 +4231,7 @@ router.post('/manual/lock', (req, res) => {
 // GET /api/owner/settings/full
 // Returns owner settings with defaults if not set
 // =====================
-const OWNER_SETTINGS_DEFAULTS = {
+const RETIRED_OWNER_SETTINGS_DEFAULTS = {
   // Business settings
   businessName: "Морские прогулки",
   timezone: "Europe/Moscow (UTC+3)",
@@ -3985,6 +4287,7 @@ const OWNER_SETTINGS_DEFAULTS = {
   notifyChannel: "inapp",
   
   // Withhold settings (USED FOR LEDGER ENTRIES)
+  viklif_withhold_percent_total: 0,
   dispatcher_withhold_percent_total: 0.002,   // 0.2% total cap for dispatcher withhold
   weekly_withhold_percent_total: 0.008,       // 0.8% withhold for weekly pool
   season_withhold_percent_total: 0.005        // 0.5% withhold for season pool
@@ -4116,6 +4419,13 @@ function buildFullSettings(body, defaults) {
   if (body.dispatcher_withhold_percent_total !== undefined) {
     normalized.dispatcher_withhold_percent_total = Number(body.dispatcher_withhold_percent_total);
   }
+
+  if (body.viklifWithholdPercentTotal !== undefined) {
+    normalized.viklif_withhold_percent_total = Number(body.viklifWithholdPercentTotal) / 100;
+  }
+  if (body.viklif_withhold_percent_total !== undefined) {
+    normalized.viklif_withhold_percent_total = Number(body.viklif_withhold_percent_total);
+  }
   
   // Weekly withhold percent (come as percent from frontend, stored as fraction)
   if (body.weeklyWithholdPercentTotal !== undefined) {
@@ -4160,6 +4470,13 @@ function buildFullSettings(body, defaults) {
    'k_zone_hedgehog', 'k_zone_center', 'k_zone_sanatorium', 'k_zone_stationary'].forEach(k => {
     if (body[k] !== undefined) normalized[k] = clampMin(body[k], 0.0001);
   });
+
+  if (normalized.k_dispatchers !== undefined) {
+    const dispatcherWeight = Number(normalized.k_dispatchers);
+    if (Number.isFinite(dispatcherWeight)) {
+      normalized.k_dispatchers = Math.min(1.5, Math.max(1, dispatcherWeight));
+    }
+  }
   
   return normalized;
 }
@@ -4184,6 +4501,7 @@ function addLegacyFields(settings) {
   
   // Withhold percent field (show as percent in UI)
   result.dispatcherWithholdPercentTotalLegacy = (settings.dispatcher_withhold_percent_total ?? 0.002) * 100;
+  result.viklifWithholdPercentTotalLegacy = (settings.viklif_withhold_percent_total ?? 0) * 100;
   result.weeklyWithholdPercentTotalLegacy = (settings.weekly_withhold_percent_total ?? 0.008) * 100;
   result.seasonWithholdPercentTotalLegacy = (settings.season_withhold_percent_total ?? 0.005) * 100;
 
@@ -4204,10 +4522,7 @@ router.get('/settings/full', (req, res) => {
       return res.json({ ok: true, data: settings });
     }
     
-    const saved = JSON.parse(row.settings_json || '{}');
-    
-    // Merge with defaults to ensure complete object (saved overrides defaults)
-    const settings = addLegacyFields({ ...OWNER_SETTINGS_DEFAULTS, ...saved });
+    const settings = addLegacyFields(mergeOwnerSettings(parseOwnerSettingsJson(row.settings_json)));
     
     return res.json({ ok: true, data: settings });
   } catch (e) {

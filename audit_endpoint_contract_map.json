@@ -1,0 +1,5594 @@
+{
+  "generatedAt": "2026-03-30T02:32:29.010Z",
+  "note": "Static extraction from route windows; verify edge cases manually for final contracts.",
+  "summary": {
+    "endpointCount": 136,
+    "moduleCount": 10
+  },
+  "modules": {
+    "selling.mjs": [
+      {
+        "file": "selling.mjs",
+        "line": 525,
+        "method": "GET",
+        "routePath": "/boats",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/boats",
+        "frontendConsumers": [
+          {
+            "loc": "src\\components\\admin\\BoatManagement.jsx:56",
+            "via": "apiClient.getBoats",
+            "callPath": "/api/selling/boats"
+          }
+        ],
+        "inputContract": {
+          "params": [
+            "type"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 515,
+          "endLine": 665
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 545,
+        "method": "GET",
+        "routePath": "/boats/:type/slots",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/boats/:type/slots",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "type"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 535,
+          "endLine": 685
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 723,
+        "method": "POST",
+        "routePath": "/presales",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales",
+        "frontendConsumers": [
+          {
+            "loc": "src\\components\\dispatcher\\QuickSaleForm.jsx:285",
+            "via": "apiClient.createPresale",
+            "callPath": "/api/selling/presales"
+          },
+          {
+            "loc": "src\\views\\SellerView.jsx:166",
+            "via": "apiClient.createPresale",
+            "callPath": "/api/selling/presales"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\PresaleListView.jsx:79",
+            "via": "apiClient.getPresales",
+            "callPath": "/api/selling/presales"
+          },
+          {
+            "loc": "src\\components\\seller\\SalesHistory.jsx:25",
+            "via": "apiClient.getPresales",
+            "callPath": "/api/selling/presales"
+          }
+        ],
+        "inputContract": {
+          "params": [
+            "type"
+          ],
+          "query": [],
+          "body_keys": [
+            "tickets",
+            "slotUid",
+            "customerName",
+            "customerPhone",
+            "numberOfSeats",
+            "prepaymentAmount",
+            "prepaymentComment",
+            "sellerId"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 713,
+          "endLine": 863
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 1824,
+        "method": "GET",
+        "routePath": "/presales",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales",
+        "frontendConsumers": [
+          {
+            "loc": "src\\components\\dispatcher\\QuickSaleForm.jsx:285",
+            "via": "apiClient.createPresale",
+            "callPath": "/api/selling/presales"
+          },
+          {
+            "loc": "src\\views\\SellerView.jsx:166",
+            "via": "apiClient.createPresale",
+            "callPath": "/api/selling/presales"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\PresaleListView.jsx:79",
+            "via": "apiClient.getPresales",
+            "callPath": "/api/selling/presales"
+          },
+          {
+            "loc": "src\\components\\seller\\SalesHistory.jsx:25",
+            "via": "apiClient.getPresales",
+            "callPath": "/api/selling/presales"
+          }
+        ],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 1814,
+          "endLine": 1964
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 1868,
+        "method": "GET",
+        "routePath": "/presales/cancelled-trip-pending",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/cancelled-trip-pending",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE zone",
+            "UPDATE users"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 1858,
+          "endLine": 2008
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 1917,
+        "method": "GET",
+        "routePath": "/presales/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "boat_id",
+            "time",
+            "capacity",
+            "duration_minutes",
+            "active",
+            "price_adult",
+            "price_child",
+            "price_teen"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "seller_id",
+            "seller_name",
+            "zone"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE zone",
+            "UPDATE users"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 1907,
+          "endLine": 2057
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 1975,
+        "method": "PUT",
+        "routePath": "/dispatcher/sellers/:id/zone",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/dispatcher/sellers/:id/zone",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "boat_id",
+            "time",
+            "capacity",
+            "duration_minutes",
+            "active",
+            "price_adult",
+            "price_child",
+            "price_teen"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "seller_id",
+            "seller_name",
+            "zone"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE zone",
+            "UPDATE users"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 1965,
+          "endLine": 2115
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 2032,
+        "method": "POST",
+        "routePath": "/dispatcher/slots",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/dispatcher/slots",
+        "frontendConsumers": [
+          {
+            "loc": "src\\components\\dispatcher\\TicketSellingView.jsx:95",
+            "via": "apiClient.getTrips",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\PassengerList.jsx:187",
+            "via": "apiClient.getAllDispatcherSlots",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\PassengerList.jsx:326",
+            "via": "apiClient.getAllDispatcherSlots",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\SlotManagement.jsx:168",
+            "via": "apiClient.getAllDispatcherSlots",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:127",
+            "via": "apiClient.getAllDispatcherSlots",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\TripListView.jsx:97",
+            "via": "apiClient.getAllDispatcherSlots",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\SlotManagement.jsx:337",
+            "via": "apiClient.createDispatcherSlot",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:303",
+            "via": "apiClient.createDispatcherSlot",
+            "callPath": "/api/selling/dispatcher/slots"
+          }
+        ],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "boat_id",
+            "time",
+            "capacity",
+            "duration_minutes",
+            "active",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "price"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE zone",
+            "INSERT INTO boat_slots",
+            "UPDATE a"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2022,
+          "endLine": 2172
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 2144,
+        "method": "PATCH",
+        "routePath": "/dispatcher/slots/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/dispatcher/slots/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "time",
+            "price",
+            "capacity",
+            "duration_minutes",
+            "active",
+            "price_adult",
+            "price_child",
+            "price_teen"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE a",
+            "UPDATE const"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2134,
+          "endLine": 2284
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 2383,
+        "method": "PATCH",
+        "routePath": "/dispatcher/slots/:id/active",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/dispatcher/slots/:id/active",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "debug",
+            "endpoint",
+            "updatedPresales"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE const",
+            "UPDATE presales",
+            "UPDATE slot",
+            "UPDATE all",
+            "UPDATE the",
+            "UPDATE boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2373,
+          "endLine": 2523
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 2474,
+        "method": "DELETE",
+        "routePath": "/dispatcher/slots/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/dispatcher/slots/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "mode",
+            "message",
+            "slot",
+            "id",
+            "data",
+            "items"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE the",
+            "UPDATE boat_slots",
+            "DELETE FROM boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2464,
+          "endLine": 2614
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 2551,
+        "method": "GET",
+        "routePath": "/dispatcher/boats",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/dispatcher/boats",
+        "frontendConsumers": [
+          {
+            "loc": "src\\components\\dispatcher\\ScheduleTemplates.jsx:53",
+            "via": "apiClient.getAllDispatcherBoats",
+            "callPath": "/api/selling/dispatcher/boats"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\SlotManagement.jsx:169",
+            "via": "apiClient.getAllDispatcherBoats",
+            "callPath": "/api/selling/dispatcher/boats"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:128",
+            "via": "apiClient.getAllDispatcherBoats",
+            "callPath": "/api/selling/dispatcher/boats"
+          }
+        ],
+        "inputContract": {
+          "params": [
+            "id",
+            "slotId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "items"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 2541,
+          "endLine": 2691
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 2562,
+        "method": "GET",
+        "routePath": "/dispatcher/sellers",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/dispatcher/sellers",
+        "frontendConsumers": [
+          {
+            "loc": "src/components/dispatcher/QuickSaleForm.jsx:132",
+            "via": "apiClient.request",
+            "callPath": "/api/selling/dispatcher/sellers"
+          }
+        ],
+        "inputContract": {
+          "params": [
+            "slotId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "items"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 2552,
+          "endLine": 2702
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 2584,
+        "method": "GET",
+        "routePath": "/dispatcher/slots",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/dispatcher/slots",
+        "frontendConsumers": [
+          {
+            "loc": "src\\components\\dispatcher\\TicketSellingView.jsx:95",
+            "via": "apiClient.getTrips",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\PassengerList.jsx:187",
+            "via": "apiClient.getAllDispatcherSlots",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\PassengerList.jsx:326",
+            "via": "apiClient.getAllDispatcherSlots",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\SlotManagement.jsx:168",
+            "via": "apiClient.getAllDispatcherSlots",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:127",
+            "via": "apiClient.getAllDispatcherSlots",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\TripListView.jsx:97",
+            "via": "apiClient.getAllDispatcherSlots",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\SlotManagement.jsx:337",
+            "via": "apiClient.createDispatcherSlot",
+            "callPath": "/api/selling/dispatcher/slots"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\SlotManagementWithSchedule.jsx:303",
+            "via": "apiClient.createDispatcherSlot",
+            "callPath": "/api/selling/dispatcher/slots"
+          }
+        ],
+        "inputContract": {
+          "params": [
+            "slotId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 2574,
+          "endLine": 2724
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 2631,
+        "method": "GET",
+        "routePath": "/dispatcher/slots/:slotId/tickets",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/dispatcher/slots/:slotId/tickets",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "slotId",
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "additionalPayment"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "slot_id",
+            "slot_uid"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presale",
+            "UPDATE payment"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2621,
+          "endLine": 2771
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 2737,
+        "method": "PATCH",
+        "routePath": "/presales/:id/payment",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/:id/payment",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "slotId",
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "additionalPayment"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presale",
+            "UPDATE payment",
+            "UPDATE prepayment",
+            "UPDATE presales"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2727,
+          "endLine": 2877
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 2812,
+        "method": "PATCH",
+        "routePath": "/presales/:id/accept-payment",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/:id/accept-payment",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presales"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2802,
+          "endLine": 2952
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 3076,
+        "method": "PATCH",
+        "routePath": "/presales/:id/cancel",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/:id/cancel",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presales",
+            "INSERT INTO money_ledger",
+            "UPDATE tickets",
+            "UPDATE boat_slots",
+            "UPDATE generated_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3066,
+          "endLine": 3216
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 3233,
+        "method": "PATCH",
+        "routePath": "/presales/:id/move",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/:id/move",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "target_slot_id"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presale",
+            "INSERT INTO boat_slots",
+            "UPDATE the",
+            "UPDATE presales"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3223,
+          "endLine": 3373
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 3457,
+        "method": "PATCH",
+        "routePath": "/presales/:id/seats",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/:id/seats",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "number_of_seats",
+            "comment"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presale",
+            "UPDATE the",
+            "UPDATE presales",
+            "UPDATE boat_slots",
+            "UPDATE generated_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3447,
+          "endLine": 3597
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 3581,
+        "method": "PATCH",
+        "routePath": "/presales/:id/used",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/:id/used",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE the",
+            "UPDATE presales",
+            "UPDATE presale",
+            "UPDATE tickets",
+            "UPDATE all"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3571,
+          "endLine": 3721
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 3655,
+        "method": "PATCH",
+        "routePath": "/presales/:id/refund",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/:id/refund",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presale",
+            "UPDATE tickets",
+            "UPDATE the",
+            "UPDATE presales",
+            "UPDATE all",
+            "UPDATE generated_slots",
+            "UPDATE boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3645,
+          "endLine": 3795
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 3785,
+        "method": "PATCH",
+        "routePath": "/presales/:id/delete",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/:id/delete",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presales",
+            "INSERT INTO money_ledger",
+            "UPDATE tickets",
+            "UPDATE sales_transactions_canonical",
+            "UPDATE boat_slots",
+            "UPDATE generated_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3775,
+          "endLine": 3925
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 3955,
+        "method": "GET",
+        "routePath": "/presales/:id/tickets",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/:id/tickets",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id",
+            "slotId",
+            "ticketId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "ticket"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE tickets",
+            "UPDATE sales_transactions_canonical"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3945,
+          "endLine": 4095
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 3980,
+        "method": "GET",
+        "routePath": "/slots/:slotId/tickets",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/slots/:slotId/tickets",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id",
+            "slotId",
+            "ticketId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "ticket"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE tickets",
+            "UPDATE sales_transactions_canonical",
+            "UPDATE generated_slots",
+            "UPDATE boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3970,
+          "endLine": 4120
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 4025,
+        "method": "PATCH",
+        "routePath": "/tickets/:ticketId/used",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/tickets/:ticketId/used",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "slotId",
+            "ticketId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "ticket"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE tickets",
+            "UPDATE sales_transactions_canonical",
+            "UPDATE generated_slots",
+            "UPDATE boat_slots",
+            "UPDATE presales"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 4015,
+          "endLine": 4165
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 4060,
+        "method": "PATCH",
+        "routePath": "/tickets/:ticketId/refund",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/tickets/:ticketId/refund",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "ticketId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "ticket"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE tickets",
+            "UPDATE sales_transactions_canonical",
+            "UPDATE generated_slots",
+            "UPDATE boat_slots",
+            "UPDATE presales"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 4050,
+          "endLine": 4200
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 4179,
+        "method": "PATCH",
+        "routePath": "/tickets/:ticketId/delete",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/tickets/:ticketId/delete",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "ticketId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "ticket"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE tickets",
+            "UPDATE sales_transactions_canonical",
+            "UPDATE generated_slots",
+            "UPDATE boat_slots",
+            "INSERT INTO money_ledger"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 4169,
+          "endLine": 4319
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 4627,
+        "method": "POST",
+        "routePath": "/tickets/:ticketId/transfer",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots",
+          "transferTicketToAnotherSlot"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/tickets/:ticketId/transfer",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 4617,
+          "endLine": 4767
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 4628,
+        "method": "PATCH",
+        "routePath": "/tickets/:ticketId/transfer",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots",
+          "transferTicketToAnotherSlot"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/tickets/:ticketId/transfer",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 4618,
+          "endLine": 4768
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 4633,
+        "method": "GET",
+        "routePath": "/transfer-options",
+        "middlewares": [
+          "authenticateToken",
+          "canSell",
+          "canSellOrDispatch"
+        ],
+        "role": "seller|dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/transfer-options",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 4623,
+          "endLine": 4773
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 5164,
+        "method": "POST",
+        "routePath": "/presales/:id/transfer",
+        "middlewares": [
+          "authenticateToken",
+          "canSell",
+          "canSellOrDispatch"
+        ],
+        "role": "seller|dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/:id/transfer",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presales"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 5154,
+          "endLine": 5304
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 5198,
+        "method": "PATCH",
+        "routePath": "/presales/:id/transfer",
+        "middlewares": [
+          "authenticateToken",
+          "canSell",
+          "canSellOrDispatch"
+        ],
+        "role": "seller|dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/:id/transfer",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presales",
+            "INSERT INTO money_ledger"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 5188,
+          "endLine": 5338
+        }
+      },
+      {
+        "file": "selling.mjs",
+        "line": 5232,
+        "method": "PATCH",
+        "routePath": "/presales/:id/cancel-trip-pending",
+        "middlewares": [
+          "authenticateToken",
+          "canSell",
+          "canSellOrDispatch"
+        ],
+        "role": "seller|dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/presales/:id/cancel-trip-pending",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "message"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presales",
+            "INSERT INTO money_ledger",
+            "UPDATE already"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 5222,
+          "endLine": 5356
+        }
+      }
+    ],
+    "auth.js": [
+      {
+        "file": "auth.js",
+        "line": 141,
+        "method": "POST",
+        "routePath": "/login",
+        "middlewares": [],
+        "role": "public",
+        "mount": "/api/auth",
+        "fullPath": "/api/auth/login",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": [
+            "username",
+            "password"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "user",
+            "id",
+            "username",
+            "role"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 131,
+          "endLine": 177
+        }
+      },
+      {
+        "file": "auth.js",
+        "line": 167,
+        "method": "GET",
+        "routePath": "/me",
+        "middlewares": [
+          "authenticateToken"
+        ],
+        "role": "authenticated",
+        "mount": "/api/auth",
+        "fullPath": "/api/auth/me",
+        "frontendConsumers": [
+          {
+            "loc": "src\\contexts\\AuthContext.jsx:34",
+            "via": "apiClient.getCurrentUser",
+            "callPath": "/api/auth/me"
+          }
+        ],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "user",
+            "id",
+            "username",
+            "role"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 157,
+          "endLine": 177
+        }
+      }
+    ],
+    "dispatcher-shift-ledger.mjs": [
+      {
+        "file": "dispatcher-shift-ledger.mjs",
+        "line": 204,
+        "method": "GET",
+        "routePath": "/summary",
+        "middlewares": [
+          "authenticateToken"
+        ],
+        "role": "authenticated",
+        "mount": "/api/dispatcher/shift-ledger",
+        "fullPath": "/api/dispatcher/shift-ledger/summary",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "business_day",
+            "trip_day",
+            "day"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 194,
+          "endLine": 344
+        }
+      },
+      {
+        "file": "dispatcher-shift-ledger.mjs",
+        "line": 204,
+        "method": "GET",
+        "routePath": "/summary",
+        "middlewares": [
+          "authenticateToken"
+        ],
+        "role": "authenticated",
+        "mount": "/api/dispatcher",
+        "fullPath": "/api/dispatcher/summary",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "business_day",
+            "trip_day",
+            "day"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 194,
+          "endLine": 344
+        }
+      }
+    ],
+    "dispatcher-shift.mjs": [
+      {
+        "file": "dispatcher-shift.mjs",
+        "line": 135,
+        "method": "GET",
+        "routePath": "/diagnose",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/dispatcher/shift",
+        "fullPath": "/api/dispatcher/shift/diagnose",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": [
+            "type",
+            "amount",
+            "seller_id",
+            "business_day"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "business_day"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 125,
+          "endLine": 275
+        }
+      },
+      {
+        "file": "dispatcher-shift.mjs",
+        "line": 222,
+        "method": "POST",
+        "routePath": "/deposit",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/dispatcher/shift",
+        "fullPath": "/api/dispatcher/shift/deposit",
+        "frontendConsumers": [
+          {
+            "loc": "src/views/DispatcherShiftClose.jsx:363",
+            "via": "apiClient.request",
+            "callPath": "/api/dispatcher/shift/deposit"
+          },
+          {
+            "loc": "src/views/DispatcherShiftClose.jsx:390",
+            "via": "apiClient.request",
+            "callPath": "/api/dispatcher/shift/deposit"
+          },
+          {
+            "loc": "src/views/DispatcherShiftClose.jsx:417",
+            "via": "apiClient.request",
+            "callPath": "/api/dispatcher/shift/deposit"
+          }
+        ],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": [
+            "type",
+            "amount",
+            "seller_id",
+            "business_day"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "business_day",
+            "amount",
+            "is_closed",
+            "source",
+            "closed_at",
+            "closed_by"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO money_ledger"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 212,
+          "endLine": 362
+        }
+      },
+      {
+        "file": "dispatcher-shift.mjs",
+        "line": 316,
+        "method": "POST",
+        "routePath": "/close",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/dispatcher/shift",
+        "fullPath": "/api/dispatcher/shift/close",
+        "frontendConsumers": [
+          {
+            "loc": "src/views/DispatcherShiftClose.jsx:453",
+            "via": "apiClient.request",
+            "callPath": "/api/dispatcher/shift/close"
+          }
+        ],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "business_day",
+            "amount",
+            "is_closed",
+            "source",
+            "closed_at",
+            "closed_by"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 306,
+          "endLine": 456
+        }
+      }
+    ],
+    "trip-templates.mjs": [
+      {
+        "file": "trip-templates.mjs",
+        "line": 49,
+        "method": "GET",
+        "routePath": "/templates",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/templates",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "product_type",
+            "time",
+            "duration_minutes",
+            "capacity",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO trip_templates",
+            "UPDATE a"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 39,
+          "endLine": 189
+        }
+      },
+      {
+        "file": "trip-templates.mjs",
+        "line": 67,
+        "method": "GET",
+        "routePath": "/templates/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/templates/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "product_type",
+            "time",
+            "duration_minutes",
+            "capacity",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO trip_templates",
+            "UPDATE a",
+            "UPDATE query"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 57,
+          "endLine": 207
+        }
+      },
+      {
+        "file": "trip-templates.mjs",
+        "line": 95,
+        "method": "POST",
+        "routePath": "/templates",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/templates",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "product_type",
+            "time",
+            "duration_minutes",
+            "capacity",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO trip_templates",
+            "UPDATE a",
+            "UPDATE query"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 85,
+          "endLine": 235
+        }
+      },
+      {
+        "file": "trip-templates.mjs",
+        "line": 177,
+        "method": "PATCH",
+        "routePath": "/templates/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/templates/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "time",
+            "duration_minutes",
+            "capacity",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "message",
+            "id"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE a",
+            "UPDATE query",
+            "UPDATE trip_templates",
+            "DELETE FROM trip_templates"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 167,
+          "endLine": 317
+        }
+      },
+      {
+        "file": "trip-templates.mjs",
+        "line": 290,
+        "method": "DELETE",
+        "routePath": "/templates/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/templates/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "message",
+            "id"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "DELETE FROM trip_templates"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 280,
+          "endLine": 319
+        }
+      }
+    ],
+    "schedule-template-items.mjs": [
+      {
+        "file": "schedule-template-items.mjs",
+        "line": 66,
+        "method": "GET",
+        "routePath": "/schedule-template-items",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/schedule-template-items",
+        "frontendConsumers": [
+          {
+            "loc": "src\\components\\dispatcher\\ScheduleTemplates.jsx:52",
+            "via": "apiClient.getScheduleTemplateItems",
+            "callPath": "/api/selling/schedule-template-items"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\ScheduleTemplates.jsx:230",
+            "via": "apiClient.createScheduleTemplateItem",
+            "callPath": "/api/selling/schedule-template-items"
+          }
+        ],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "name",
+            "boat_id",
+            "type",
+            "departure_time",
+            "duration_minutes",
+            "capacity",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "weekdays_mask",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 56,
+          "endLine": 206
+        }
+      },
+      {
+        "file": "schedule-template-items.mjs",
+        "line": 93,
+        "method": "GET",
+        "routePath": "/schedule-template-items/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/schedule-template-items/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "name",
+            "boat_id",
+            "type",
+            "departure_time",
+            "duration_minutes",
+            "capacity",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "weekdays_mask",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 83,
+          "endLine": 233
+        }
+      },
+      {
+        "file": "schedule-template-items.mjs",
+        "line": 127,
+        "method": "POST",
+        "routePath": "/schedule-template-items",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/schedule-template-items",
+        "frontendConsumers": [
+          {
+            "loc": "src\\components\\dispatcher\\ScheduleTemplates.jsx:52",
+            "via": "apiClient.getScheduleTemplateItems",
+            "callPath": "/api/selling/schedule-template-items"
+          },
+          {
+            "loc": "src\\components\\dispatcher\\ScheduleTemplates.jsx:230",
+            "via": "apiClient.createScheduleTemplateItem",
+            "callPath": "/api/selling/schedule-template-items"
+          }
+        ],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "name",
+            "boat_id",
+            "type",
+            "departure_time",
+            "duration_minutes",
+            "capacity",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "weekdays_mask",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO schedule_template_items"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 117,
+          "endLine": 267
+        }
+      },
+      {
+        "file": "schedule-template-items.mjs",
+        "line": 287,
+        "method": "PATCH",
+        "routePath": "/schedule-template-items/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/schedule-template-items/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "name",
+            "boat_id",
+            "type",
+            "departure_time",
+            "duration_minutes",
+            "capacity",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "weekdays_mask",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE a",
+            "UPDATE query"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 277,
+          "endLine": 427
+        }
+      },
+      {
+        "file": "schedule-template-items.mjs",
+        "line": 469,
+        "method": "DELETE",
+        "routePath": "/schedule-template-items/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/schedule-template-items/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [
+            "deleteFutureTrips"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "item",
+            "message",
+            "id",
+            "deletedFutureTrips",
+            "futureTripsDeleted",
+            "changes",
+            "generated",
+            "skipped"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "DELETE FROM generated_slots",
+            "DELETE FROM schedule_template_items"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 459,
+          "endLine": 609
+        }
+      },
+      {
+        "file": "schedule-template-items.mjs",
+        "line": 548,
+        "method": "POST",
+        "routePath": "/schedule-template-items/generate",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/schedule-template-items/generate",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "message",
+            "generated",
+            "skipped"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO generated_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 538,
+          "endLine": 688
+        }
+      },
+      {
+        "file": "schedule-template-items.mjs",
+        "line": 763,
+        "method": "DELETE",
+        "routePath": "/trips-for-deleted-boats",
+        "middlewares": [
+          "authenticateToken",
+          "isAdmin"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/selling",
+        "fullPath": "/api/selling/trips-for-deleted-boats",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "message",
+            "deleted",
+            "deleted_generated",
+            "deleted_manual"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "DELETE FROM generated_slots",
+            "DELETE FROM boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 753,
+          "endLine": 821
+        }
+      }
+    ],
+    "admin.mjs": [
+      {
+        "file": "admin.mjs",
+        "line": 18,
+        "method": "GET",
+        "routePath": "/boats",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/boats",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "showArchived"
+          ],
+          "body_keys": [
+            "name",
+            "type",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "boat"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO boats",
+            "UPDATE a",
+            "UPDATE boats",
+            "UPDATE boat"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 8,
+          "endLine": 158
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 43,
+        "method": "GET",
+        "routePath": "/boats/:id",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/boats/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": [
+            "name",
+            "type",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "boat",
+            "ok",
+            "message",
+            "slots",
+            "generated_slots"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO boats",
+            "UPDATE a",
+            "UPDATE boats",
+            "UPDATE boat",
+            "DELETE FROM boats"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 33,
+          "endLine": 183
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 60,
+        "method": "POST",
+        "routePath": "/boats",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/boats",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": [
+            "name",
+            "type",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "boat",
+            "ok",
+            "message",
+            "slots",
+            "generated_slots"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO boats",
+            "UPDATE a",
+            "UPDATE boats",
+            "UPDATE boat",
+            "DELETE FROM boats"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 50,
+          "endLine": 200
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 86,
+        "method": "PUT",
+        "routePath": "/boats/:id",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/boats/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": [
+            "name",
+            "type",
+            "is_active",
+            "time",
+            "price",
+            "capacity",
+            "duration_minutes",
+            "price_adult",
+            "price_child",
+            "price_teen"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "boat",
+            "ok",
+            "message",
+            "slots",
+            "generated_slots"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE a",
+            "UPDATE boats",
+            "UPDATE boat",
+            "DELETE FROM boats"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 76,
+          "endLine": 226
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 117,
+        "method": "PATCH",
+        "routePath": "/boats/:id/active",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/boats/:id/active",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": [
+            "is_active",
+            "time",
+            "price",
+            "capacity",
+            "duration_minutes",
+            "price_adult",
+            "price_child",
+            "price_teen"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "boat",
+            "ok",
+            "message",
+            "slots",
+            "generated_slots"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE boat",
+            "UPDATE boats",
+            "DELETE FROM boats",
+            "INSERT INTO boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 107,
+          "endLine": 257
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 142,
+        "method": "DELETE",
+        "routePath": "/boats/:id",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/boats/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "role"
+          ],
+          "body_keys": [
+            "time",
+            "price",
+            "capacity",
+            "duration_minutes",
+            "price_adult",
+            "price_child",
+            "price_teen"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "boat",
+            "ok",
+            "message",
+            "slots",
+            "generated_slots"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE boat",
+            "UPDATE boats",
+            "DELETE FROM boats",
+            "INSERT INTO boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 132,
+          "endLine": 282
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 183,
+        "method": "GET",
+        "routePath": "/boats/:id/slots",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/boats/:id/slots",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "role"
+          ],
+          "body_keys": [
+            "time",
+            "price",
+            "capacity",
+            "duration_minutes",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "username",
+            "password",
+            "role"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO boat_slots",
+            "INSERT INTO users"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 173,
+          "endLine": 323
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 219,
+        "method": "POST",
+        "routePath": "/boats/:id/slots",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/boats/:id/slots",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [
+            "role"
+          ],
+          "body_keys": [
+            "time",
+            "price",
+            "capacity",
+            "duration_minutes",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "username",
+            "password",
+            "role",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO boat_slots",
+            "INSERT INTO users",
+            "UPDATE a",
+            "UPDATE users",
+            "UPDATE user"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 209,
+          "endLine": 359
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 267,
+        "method": "GET",
+        "routePath": "/users",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/users",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [
+            "role"
+          ],
+          "body_keys": [
+            "username",
+            "password",
+            "role",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "userId"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO users",
+            "UPDATE a",
+            "UPDATE users",
+            "UPDATE user"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 257,
+          "endLine": 407
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 291,
+        "method": "POST",
+        "routePath": "/users",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/users",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "username",
+            "password",
+            "role",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "userId"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO users",
+            "UPDATE a",
+            "UPDATE users",
+            "UPDATE user"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 281,
+          "endLine": 431
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 332,
+        "method": "PATCH",
+        "routePath": "/users/:id",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/users/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "is_active",
+            "password"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "userId"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE a",
+            "UPDATE users",
+            "UPDATE user"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 322,
+          "endLine": 472
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 356,
+        "method": "POST",
+        "routePath": "/users/:id/reset-password",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/users/:id/reset-password",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "password"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "userId"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE user",
+            "UPDATE users"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 346,
+          "endLine": 496
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 390,
+        "method": "DELETE",
+        "routePath": "/users/:id",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/users/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "coordinates",
+            "geometry"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "userId"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE users",
+            "UPDATE work"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 380,
+          "endLine": 530
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 419,
+        "method": "GET",
+        "routePath": "/stats",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/stats",
+        "frontendConsumers": [
+          {
+            "loc": "src/views/AdminView.jsx:54",
+            "via": "apiClient.get",
+            "callPath": "/api/admin/stats"
+          }
+        ],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": [
+            "coordinates",
+            "geometry"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "userId"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE work",
+            "UPDATE the",
+            "UPDATE settings",
+            "INSERT INTO settings"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 409,
+          "endLine": 549
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 475,
+        "method": "GET",
+        "routePath": "/work-zone",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/work-zone",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": [
+            "coordinates",
+            "geometry"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE work",
+            "UPDATE the",
+            "UPDATE settings",
+            "INSERT INTO settings"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 465,
+          "endLine": 549
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 499,
+        "method": "GET",
+        "routePath": "/settings/working-zone",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/settings/working-zone",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": [
+            "coordinates",
+            "geometry"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE work",
+            "UPDATE the",
+            "UPDATE settings",
+            "INSERT INTO settings"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 489,
+          "endLine": 549
+        }
+      },
+      {
+        "file": "admin.mjs",
+        "line": 523,
+        "method": "PUT",
+        "routePath": "/settings/working-zone",
+        "middlewares": [
+          "authenticateToken",
+          "requireAdminRole"
+        ],
+        "role": "admin(+owner for requireAdminRole)",
+        "mount": "/api/admin",
+        "fullPath": "/api/admin/settings/working-zone",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": [
+            "coordinates",
+            "geometry"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE work",
+            "UPDATE the",
+            "UPDATE settings",
+            "INSERT INTO settings"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 513,
+          "endLine": 549
+        }
+      }
+    ],
+    "owner.mjs": [
+      {
+        "file": "owner.mjs",
+        "line": 365,
+        "method": "GET",
+        "routePath": "/money/summary",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/money/summary",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "from",
+            "to",
+            "preset"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 355,
+          "endLine": 505
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 1111,
+        "method": "GET",
+        "routePath": "/money/pending-by-day",
+        "middlewares": [
+          "handlePendingByDay"
+        ],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/money/pending-by-day",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "preset"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 1101,
+          "endLine": 1251
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 1112,
+        "method": "GET",
+        "routePath": "/money/pending-by-day/:day",
+        "middlewares": [
+          "handlePendingByDay"
+        ],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/money/pending-by-day/:day",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "preset"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 1102,
+          "endLine": 1252
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 1118,
+        "method": "GET",
+        "routePath": "/money/compare-days",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/money/compare-days",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "preset"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 1108,
+          "endLine": 1258
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 1322,
+        "method": "GET",
+        "routePath": "/money/compare-periods",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/money/compare-periods",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "fromA",
+            "toA",
+            "presetA",
+            "fromB",
+            "toB",
+            "presetB"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 1312,
+          "endLine": 1462
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 1559,
+        "method": "GET",
+        "routePath": "/money/compare-periods-daily",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/money/compare-periods-daily",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "fromA",
+            "toA",
+            "fromB",
+            "toB",
+            "mode",
+            "boatId"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "periodA",
+            "from",
+            "to",
+            "days",
+            "periodB",
+            "points",
+            "meta",
+            "warnings"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 1549,
+          "endLine": 1699
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 1664,
+        "method": "GET",
+        "routePath": "/money/compare-boat-daily",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/money/compare-boat-daily",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "boatId",
+            "fromA",
+            "toA",
+            "fromB",
+            "toB",
+            "mode",
+            "sellerId"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "periodA",
+            "from",
+            "to",
+            "days",
+            "periodB",
+            "points",
+            "meta"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 1654,
+          "endLine": 1804
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 1784,
+        "method": "GET",
+        "routePath": "/money/compare-seller-daily",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/money/compare-seller-daily",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "sellerId",
+            "fromA",
+            "toA",
+            "fromB",
+            "toB",
+            "mode",
+            "limit",
+            "sort"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "periodA",
+            "from",
+            "to",
+            "days",
+            "periodB",
+            "points",
+            "meta"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 1774,
+          "endLine": 1924
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 1902,
+        "method": "GET",
+        "routePath": "/money/compare-boats",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/money/compare-boats",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "fromA",
+            "toA",
+            "fromB",
+            "toB",
+            "limit",
+            "sort"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "periodA",
+            "from",
+            "to",
+            "periodB",
+            "rows",
+            "total",
+            "meta"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 1892,
+          "endLine": 2042
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 2032,
+        "method": "GET",
+        "routePath": "/money/compare-sellers",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/money/compare-sellers",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "fromA",
+            "toA",
+            "fromB",
+            "toB",
+            "limit",
+            "sort",
+            "day"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "periodA",
+            "from",
+            "to",
+            "periodB",
+            "rows",
+            "total",
+            "meta"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 2022,
+          "endLine": 2172
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 2160,
+        "method": "GET",
+        "routePath": "/motivation/day",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/motivation/day",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "day",
+            "week"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "meta",
+            "warnings"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 2150,
+          "endLine": 2300
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 2187,
+        "method": "GET",
+        "routePath": "/motivation/weekly",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/motivation/weekly",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "week"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 2177,
+          "endLine": 2327
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 2497,
+        "method": "GET",
+        "routePath": "/motivation/season",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/motivation/season",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "season_id"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 2487,
+          "endLine": 2637
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 2781,
+        "method": "GET",
+        "routePath": "/invariants",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/invariants",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 2771,
+          "endLine": 2921
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 3067,
+        "method": "GET",
+        "routePath": "/boats",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/boats",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "preset"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "range",
+            "null",
+            "from",
+            "to",
+            "totals",
+            "meta"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 3057,
+          "endLine": 3207
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 3198,
+        "method": "GET",
+        "routePath": "/sellers/list",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/sellers/list",
+        "frontendConsumers": [
+          {
+            "loc": "src/views/OwnerSettingsView.jsx:287",
+            "via": "apiClient.request",
+            "callPath": "/api/owner/sellers/list"
+          }
+        ],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "preset"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 3188,
+          "endLine": 3338
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 3229,
+        "method": "GET",
+        "routePath": "/sellers",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/sellers",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "preset"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "range",
+            "null",
+            "from",
+            "to",
+            "meta"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 3219,
+          "endLine": 3369
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 3376,
+        "method": "PUT",
+        "routePath": "/sellers/:id/zone",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/sellers/:id/zone",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "seller_id",
+            "seller_name",
+            "zone"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE seller",
+            "UPDATE zone",
+            "UPDATE users"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3366,
+          "endLine": 3516
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 3435,
+        "method": "GET",
+        "routePath": "/money/collected-today-by-tripday",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/money/collected-today-by-tripday",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data",
+            "collected_day",
+            "by_trip_day",
+            "today",
+            "revenue",
+            "cash",
+            "card",
+            "tomorrow",
+            "day2",
+            "meta",
+            "warnings"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE zone"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3425,
+          "endLine": 3575
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 3636,
+        "method": "GET",
+        "routePath": "/manual/day",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/manual/day",
+        "frontendConsumers": [
+          {
+            "loc": "src/components/owner/OwnerLoadView.jsx:186",
+            "via": "apiClient.request",
+            "callPath": "/api/owner/manual/day"
+          }
+        ],
+        "inputContract": {
+          "params": [],
+          "query": [
+            "date",
+            "day"
+          ],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "period",
+            "locked",
+            "lockedAt",
+            "drafts",
+            "id",
+            "author",
+            "savedAt"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 3626,
+          "endLine": 3776
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 3737,
+        "method": "PUT",
+        "routePath": "/manual/day",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/manual/day",
+        "frontendConsumers": [
+          {
+            "loc": "src/components/owner/OwnerLoadView.jsx:186",
+            "via": "apiClient.request",
+            "callPath": "/api/owner/manual/day"
+          }
+        ],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "id",
+            "savedAt"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE manual_batches",
+            "INSERT INTO manual_batches",
+            "INSERT INTO manual_days",
+            "UPDATE SET",
+            "DELETE FROM manual_boat_stats",
+            "DELETE FROM manual_seller_stats",
+            "INSERT INTO manual_boat_stats"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3727,
+          "endLine": 3877
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 3816,
+        "method": "POST",
+        "routePath": "/manual/lock",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/manual/lock",
+        "frontendConsumers": [
+          {
+            "loc": "src/components/owner/OwnerLoadView.jsx:212",
+            "via": "apiClient.request",
+            "callPath": "/api/owner/manual/lock"
+          }
+        ],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "id",
+            "savedAt",
+            "locked",
+            "lockedAt",
+            "lockedBy",
+            "totals",
+            "forecast"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE manual_batches",
+            "INSERT INTO manual_days",
+            "UPDATE SET",
+            "DELETE FROM manual_boat_stats",
+            "DELETE FROM manual_seller_stats",
+            "INSERT INTO manual_boat_stats",
+            "INSERT INTO manual_seller_stats"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3806,
+          "endLine": 3956
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 4197,
+        "method": "GET",
+        "routePath": "/settings/full",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/settings/full",
+        "frontendConsumers": [
+          {
+            "loc": "src/views/OwnerMotivationView.jsx:125",
+            "via": "apiClient.request",
+            "callPath": "/api/owner/settings/full"
+          },
+          {
+            "loc": "src/views/OwnerSettingsView.jsx:105",
+            "via": "apiClient.request",
+            "callPath": "/api/owner/settings/full"
+          },
+          {
+            "loc": "src/views/OwnerSettingsView.jsx:265",
+            "via": "apiClient.request",
+            "callPath": "/api/owner/settings/full"
+          }
+        ],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE owner_settings"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 4187,
+          "endLine": 4274
+        }
+      },
+      {
+        "file": "owner.mjs",
+        "line": 4223,
+        "method": "PUT",
+        "routePath": "/settings/full",
+        "middlewares": [],
+        "role": "unknown",
+        "mount": "/api/owner",
+        "fullPath": "/api/owner/settings/full",
+        "frontendConsumers": [
+          {
+            "loc": "src/views/OwnerMotivationView.jsx:125",
+            "via": "apiClient.request",
+            "callPath": "/api/owner/settings/full"
+          },
+          {
+            "loc": "src/views/OwnerSettingsView.jsx:105",
+            "via": "apiClient.request",
+            "callPath": "/api/owner/settings/full"
+          },
+          {
+            "loc": "src/views/OwnerSettingsView.jsx:265",
+            "via": "apiClient.request",
+            "callPath": "/api/owner/settings/full"
+          }
+        ],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "data"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE owner_settings"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 4213,
+          "endLine": 4274
+        }
+      }
+    ],
+    "schedule-templates.mjs": [
+      {
+        "file": "schedule-templates.mjs",
+        "line": 49,
+        "method": "GET",
+        "routePath": "/schedule-templates",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/schedule-templates",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "weekday",
+            "time",
+            "product_type",
+            "boat_id",
+            "boat_type",
+            "capacity",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "duration_minutes",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO schedule_templates"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 39,
+          "endLine": 189
+        }
+      },
+      {
+        "file": "schedule-templates.mjs",
+        "line": 69,
+        "method": "GET",
+        "routePath": "/schedule-templates/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/schedule-templates/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "auto_generate",
+            "weekday",
+            "time",
+            "product_type",
+            "boat_id",
+            "boat_type",
+            "capacity",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "duration_minutes",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO schedule_templates"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 59,
+          "endLine": 209
+        }
+      },
+      {
+        "file": "schedule-templates.mjs",
+        "line": 99,
+        "method": "POST",
+        "routePath": "/schedule-templates",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/schedule-templates",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "auto_generate",
+            "weekday",
+            "time",
+            "product_type",
+            "boat_id",
+            "boat_type",
+            "capacity",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "duration_minutes",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO schedule_templates"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 89,
+          "endLine": 239
+        }
+      },
+      {
+        "file": "schedule-templates.mjs",
+        "line": 306,
+        "method": "POST",
+        "routePath": "/schedule-templates/:id/generate",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/schedule-templates/:id/generate",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "fromDate",
+            "days",
+            "weekday",
+            "time",
+            "product_type",
+            "boat_id",
+            "boat_type",
+            "capacity",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "duration_minutes",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "message",
+            "created",
+            "skipped",
+            "reasons",
+            "already_exists",
+            "generated_slots",
+            "skipped_slots"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE a",
+            "UPDATE query"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 296,
+          "endLine": 446
+        }
+      },
+      {
+        "file": "schedule-templates.mjs",
+        "line": 388,
+        "method": "PATCH",
+        "routePath": "/schedule-templates/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/schedule-templates/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "weekday",
+            "time",
+            "product_type",
+            "boat_id",
+            "boat_type",
+            "capacity",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "duration_minutes",
+            "is_active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE a",
+            "UPDATE query",
+            "UPDATE schedule_templates"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 378,
+          "endLine": 528
+        }
+      },
+      {
+        "file": "schedule-templates.mjs",
+        "line": 542,
+        "method": "DELETE",
+        "routePath": "/schedule-templates/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/schedule-templates/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "date_from",
+            "date_to"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "message",
+            "id",
+            "generated",
+            "skipped",
+            "generated_slots",
+            "skipped_slots"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "DELETE FROM schedule_templates",
+            "INSERT INTO generated_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 532,
+          "endLine": 682
+        }
+      },
+      {
+        "file": "schedule-templates.mjs",
+        "line": 572,
+        "method": "POST",
+        "routePath": "/schedule-templates/generate",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/schedule-templates/generate",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "date_from",
+            "date_to"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "message",
+            "id",
+            "generated",
+            "skipped",
+            "generated_slots",
+            "skipped_slots"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO generated_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 562,
+          "endLine": 712
+        }
+      },
+      {
+        "file": "schedule-templates.mjs",
+        "line": 686,
+        "method": "GET",
+        "routePath": "/generated-slots",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/generated-slots",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 676,
+          "endLine": 760
+        }
+      },
+      {
+        "file": "schedule-templates.mjs",
+        "line": 728,
+        "method": "GET",
+        "routePath": "/generated-slots/active",
+        "middlewares": [
+          "authenticateToken"
+        ],
+        "role": "authenticated",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/generated-slots/active",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 718,
+          "endLine": 760
+        }
+      }
+    ],
+    ".mjs": [
+      {
+        "file": ".mjs",
+        "line": 245,
+        "method": "GET",
+        "routePath": "/boats",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/boats",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "type"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 235,
+          "endLine": 385
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 265,
+        "method": "GET",
+        "routePath": "/boats/:type/slots",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/boats/:type/slots",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "type"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 255,
+          "endLine": 405
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 444,
+        "method": "POST",
+        "routePath": "/presales",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "type"
+          ],
+          "query": [],
+          "body_keys": [
+            "tickets",
+            "trip_date",
+            "tripDate",
+            "slotUid",
+            "customerName",
+            "customerPhone",
+            "numberOfSeats",
+            "prepaymentAmount",
+            "prepaymentComment"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 434,
+          "endLine": 584
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 1043,
+        "method": "GET",
+        "routePath": "/presales",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 1033,
+          "endLine": 1183
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 1086,
+        "method": "GET",
+        "routePath": "/presales/cancelled-trip-pending",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/cancelled-trip-pending",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "boat_id",
+            "time",
+            "capacity",
+            "duration_minutes",
+            "active",
+            "price_adult",
+            "price_child",
+            "price_teen"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 1076,
+          "endLine": 1226
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 1134,
+        "method": "GET",
+        "routePath": "/presales/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "boat_id",
+            "time",
+            "capacity",
+            "duration_minutes",
+            "active",
+            "price_adult",
+            "price_child",
+            "price_teen"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": []
+        },
+        "evidenceWindow": {
+          "startLine": 1124,
+          "endLine": 1274
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 1191,
+        "method": "POST",
+        "routePath": "/dispatcher/slots",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/dispatcher/slots",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "boat_id",
+            "time",
+            "capacity",
+            "duration_minutes",
+            "active",
+            "price_adult",
+            "price_child",
+            "price_teen",
+            "price"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "INSERT INTO boat_slots",
+            "UPDATE a"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 1181,
+          "endLine": 1331
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 1303,
+        "method": "PATCH",
+        "routePath": "/dispatcher/slots/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/dispatcher/slots/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "time",
+            "price",
+            "capacity",
+            "duration_minutes",
+            "active",
+            "price_adult",
+            "price_child",
+            "price_teen"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE a",
+            "UPDATE const"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 1293,
+          "endLine": 1443
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 1539,
+        "method": "PATCH",
+        "routePath": "/dispatcher/slots/:id/active",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/dispatcher/slots/:id/active",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "active"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "debug",
+            "endpoint",
+            "updatedPresales"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE const",
+            "UPDATE presales",
+            "UPDATE slot",
+            "UPDATE all",
+            "UPDATE the",
+            "UPDATE boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 1529,
+          "endLine": 1679
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 1628,
+        "method": "DELETE",
+        "routePath": "/dispatcher/slots/:id",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/dispatcher/slots/:id",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "ok",
+            "mode",
+            "message",
+            "slot",
+            "id"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE the",
+            "UPDATE boat_slots",
+            "DELETE FROM boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 1618,
+          "endLine": 1768
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 1705,
+        "method": "GET",
+        "routePath": "/dispatcher/boats",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/dispatcher/boats",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "additionalPayment"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presale",
+            "UPDATE prepayment",
+            "UPDATE presales"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 1695,
+          "endLine": 1845
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 1716,
+        "method": "GET",
+        "routePath": "/dispatcher/slots",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/dispatcher/slots",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "additionalPayment"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presale",
+            "UPDATE prepayment",
+            "UPDATE presales"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 1706,
+          "endLine": 1856
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 1759,
+        "method": "GET",
+        "routePath": "/slots",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/slots",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "additionalPayment"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presale",
+            "UPDATE prepayment",
+            "UPDATE presales"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 1749,
+          "endLine": 1899
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 1801,
+        "method": "PATCH",
+        "routePath": "/presales/:id/payment",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id/payment",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "additionalPayment"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "presale"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presale",
+            "UPDATE prepayment",
+            "UPDATE presales"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 1791,
+          "endLine": 1941
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 1861,
+        "method": "PATCH",
+        "routePath": "/presales/:id/paid",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id/paid",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "presale"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presales",
+            "UPDATE prepayment"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 1851,
+          "endLine": 2001
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 1954,
+        "method": "PATCH",
+        "routePath": "/presales/:id/accept-payment",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id/accept-payment",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "presale"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE prepayment",
+            "UPDATE presales",
+            "UPDATE presale",
+            "UPDATE tickets",
+            "UPDATE the",
+            "UPDATE all",
+            "UPDATE boat_slots",
+            "UPDATE generated_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 1944,
+          "endLine": 2094
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 2010,
+        "method": "PATCH",
+        "routePath": "/presales/:id/cancel",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id/cancel",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "target_slot_id"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presale",
+            "UPDATE tickets",
+            "UPDATE the",
+            "UPDATE presales",
+            "UPDATE all",
+            "UPDATE boat_slots",
+            "UPDATE generated_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2000,
+          "endLine": 2150
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 2125,
+        "method": "PATCH",
+        "routePath": "/presales/:id/move",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id/move",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "target_slot_id"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presale",
+            "INSERT INTO boat_slots",
+            "UPDATE the",
+            "UPDATE presales",
+            "UPDATE tickets",
+            "UPDATE boat_slots",
+            "UPDATE target"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2115,
+          "endLine": 2265
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 2323,
+        "method": "PATCH",
+        "routePath": "/presales/:id/seats",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id/seats",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": [
+            "number_of_seats",
+            "comment"
+          ]
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presale",
+            "UPDATE the",
+            "UPDATE presales",
+            "UPDATE boat_slots",
+            "UPDATE generated_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2313,
+          "endLine": 2463
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 2432,
+        "method": "PATCH",
+        "routePath": "/presales/:id/used",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id/used",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE the",
+            "UPDATE presales",
+            "UPDATE presale",
+            "UPDATE tickets",
+            "UPDATE all",
+            "UPDATE boat_slots",
+            "UPDATE generated_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2422,
+          "endLine": 2572
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 2499,
+        "method": "PATCH",
+        "routePath": "/presales/:id/refund",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id/refund",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presale",
+            "UPDATE tickets",
+            "UPDATE the",
+            "UPDATE presales",
+            "UPDATE all",
+            "UPDATE boat_slots",
+            "UPDATE generated_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2489,
+          "endLine": 2639
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 2613,
+        "method": "PATCH",
+        "routePath": "/presales/:id/delete",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id/delete",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id",
+            "slotId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presales",
+            "UPDATE tickets",
+            "UPDATE boat_slots",
+            "UPDATE generated_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2603,
+          "endLine": 2753
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 2700,
+        "method": "GET",
+        "routePath": "/presales/:id/tickets",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id/tickets",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id",
+            "slotId",
+            "ticketId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "ticket"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE tickets",
+            "UPDATE generated_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2690,
+          "endLine": 2840
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 2725,
+        "method": "GET",
+        "routePath": "/slots/:slotId/tickets",
+        "middlewares": [
+          "authenticateToken",
+          "canSell"
+        ],
+        "role": "seller|dispatcher",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/slots/:slotId/tickets",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id",
+            "slotId",
+            "ticketId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "ticket"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE tickets",
+            "UPDATE generated_slots",
+            "UPDATE boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2715,
+          "endLine": 2865
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 2770,
+        "method": "PATCH",
+        "routePath": "/tickets/:ticketId/used",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/tickets/:ticketId/used",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "slotId",
+            "ticketId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "ticket"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE tickets",
+            "UPDATE generated_slots",
+            "UPDATE boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2760,
+          "endLine": 2910
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 2805,
+        "method": "PATCH",
+        "routePath": "/tickets/:ticketId/refund",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/tickets/:ticketId/refund",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "ticketId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "ticket"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE tickets",
+            "UPDATE generated_slots",
+            "UPDATE boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2795,
+          "endLine": 2945
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 2862,
+        "method": "PATCH",
+        "routePath": "/tickets/:ticketId/delete",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/tickets/:ticketId/delete",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "ticketId"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "ticket"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE tickets",
+            "UPDATE generated_slots",
+            "UPDATE boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 2852,
+          "endLine": 3002
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 3126,
+        "method": "POST",
+        "routePath": "/tickets/:ticketId/transfer",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots",
+          "transferTicketToAnotherSlot"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/tickets/:ticketId/transfer",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE generated_slots",
+            "UPDATE boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3116,
+          "endLine": 3266
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 3127,
+        "method": "PATCH",
+        "routePath": "/tickets/:ticketId/transfer",
+        "middlewares": [
+          "authenticateToken",
+          "canDispatchManageSlots",
+          "transferTicketToAnotherSlot"
+        ],
+        "role": "dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/tickets/:ticketId/transfer",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE generated_slots",
+            "UPDATE boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3117,
+          "endLine": 3267
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 3132,
+        "method": "GET",
+        "routePath": "/transfer-options",
+        "middlewares": [
+          "authenticateToken",
+          "canSell",
+          "canSellOrDispatch"
+        ],
+        "role": "seller|dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/transfer-options",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": []
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE generated_slots",
+            "UPDATE boat_slots"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3122,
+          "endLine": 3272
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 3337,
+        "method": "POST",
+        "routePath": "/presales/:id/transfer",
+        "middlewares": [
+          "authenticateToken",
+          "canSell",
+          "canSellOrDispatch"
+        ],
+        "role": "seller|dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id/transfer",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "message"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presales"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3327,
+          "endLine": 3415
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 3359,
+        "method": "PATCH",
+        "routePath": "/presales/:id/transfer",
+        "middlewares": [
+          "authenticateToken",
+          "canSell",
+          "canSellOrDispatch"
+        ],
+        "role": "seller|dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id/transfer",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "message"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presales"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3349,
+          "endLine": 3415
+        }
+      },
+      {
+        "file": ".mjs",
+        "line": 3381,
+        "method": "PATCH",
+        "routePath": "/presales/:id/cancel-trip-pending",
+        "middlewares": [
+          "authenticateToken",
+          "canSell",
+          "canSellOrDispatch"
+        ],
+        "role": "seller|dispatcher|owner|admin",
+        "mount": "UNMOUNTED",
+        "fullPath": "UNMOUNTED/presales/:id/cancel-trip-pending",
+        "frontendConsumers": [],
+        "inputContract": {
+          "params": [
+            "id"
+          ],
+          "query": [],
+          "body_keys": []
+        },
+        "outputContract": {
+          "json_keys_seen": [
+            "success",
+            "message"
+          ]
+        },
+        "sideEffects": {
+          "db_writes": [
+            "UPDATE presales"
+          ]
+        },
+        "evidenceWindow": {
+          "startLine": 3371,
+          "endLine": 3415
+        }
+      }
+    ]
+  }
+}

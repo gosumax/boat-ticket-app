@@ -5,14 +5,285 @@
  */
 
 import { getStreakMultiplier, getSellerState } from '../seller-motivation-state.mjs';
+import {
+  OWNER_SETTINGS_DEFAULTS,
+  mergeOwnerSettings,
+  resolveOwnerSettings,
+} from '../owner-settings.mjs';
 import { roundDownTo50 } from '../utils/money-rounding.mjs';
 
 function roundToKopecks(amount) {
   return Math.round(Number(amount || 0) * 100) / 100;
 }
 
-// Default settings (synced with owner.mjs)
-export const OWNER_SETTINGS_DEFAULTS = {
+function safeTableExists(db, tableName) {
+  try {
+    const row = db
+      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE name = ? AND type IN ('table','view') LIMIT 1")
+      .get(tableName);
+    return !!row;
+  } catch {
+    return false;
+  }
+}
+
+function safeGetColumns(db, tableName) {
+  try {
+    if (!safeTableExists(db, tableName)) return new Set();
+    const rows = db.prepare(`PRAGMA table_info('${tableName}')`).all();
+    return new Set((rows || []).map((r) => r.name));
+  } catch {
+    return new Set();
+  }
+}
+
+function hasCol(colsSet, name) {
+  return colsSet && colsSet.has(name);
+}
+
+function getReserveTripDayExpr(db) {
+  const presaleCols = safeGetColumns(db, 'presales');
+  const ledgerCols = safeGetColumns(db, 'money_ledger');
+  const presaleTripDayExpr = hasCol(presaleCols, 'business_day')
+    ? "COALESCE(p.business_day, DATE(p.created_at))"
+    : 'DATE(p.created_at)';
+
+  if (hasCol(ledgerCols, 'trip_day')) {
+    return `COALESCE(NULLIF(ml.trip_day, ''), ${presaleTripDayExpr})`;
+  }
+
+  return presaleTripDayExpr;
+}
+
+function getPayrollEligibilitySql(db) {
+  const hasPresales = safeTableExists(db, 'presales');
+  const ledgerCols = safeGetColumns(db, 'money_ledger');
+  let tripDayExpr = 'NULL';
+
+  if (hasCol(ledgerCols, 'trip_day')) {
+    tripDayExpr = hasPresales
+      ? getReserveTripDayExpr(db)
+      : "NULLIF(ml.trip_day, '')";
+  } else if (hasPresales) {
+    tripDayExpr = getReserveTripDayExpr(db);
+  }
+
+  return {
+    presaleJoinSql: hasPresales ? 'LEFT JOIN presales p ON p.id = ml.presale_id' : '',
+    payrollEligiblePredicate: `(${tripDayExpr} IS NULL OR ${tripDayExpr} <= ?)`,
+  };
+}
+
+function calcFutureTripsReserveTotal(db, businessDay) {
+  try {
+    if (!safeTableExists(db, 'money_ledger') || !safeTableExists(db, 'presales')) return 0;
+
+    const ledgerCols = safeGetColumns(db, 'money_ledger');
+    if (!hasCol(ledgerCols, 'business_day')) return 0;
+
+    const tripDayExpr = getReserveTripDayExpr(db);
+    const row = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE
+          WHEN ${tripDayExpr} > ? AND ml.type IN (
+            'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+            'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+          ) THEN ABS(ml.amount)
+          WHEN ${tripDayExpr} > ? AND ml.type = 'SALE_CANCEL_REVERSE' THEN -ABS(ml.amount)
+          ELSE 0
+        END), 0) AS reserve_total
+      FROM money_ledger ml
+      LEFT JOIN presales p ON p.id = ml.presale_id
+      WHERE ml.business_day = ?
+        AND ml.status = 'POSTED'
+        AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+        AND ml.type IN (
+          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
+          'SALE_CANCEL_REVERSE'
+        )
+    `).get(businessDay, businessDay, businessDay);
+
+    return Math.max(0, Number(row?.reserve_total || 0));
+  } catch {
+    return 0;
+  }
+}
+
+function clampPercent(rawValue, fallback) {
+  let value = Number(rawValue);
+  if (!Number.isFinite(value)) value = Number(fallback);
+  if (!Number.isFinite(value)) value = 0;
+  if (value < 0) value = 0;
+  if (value > 0.05) value = 0.05;
+  return value;
+}
+
+function clampDispatcherTeamWeight(rawValue) {
+  let value = Number(rawValue);
+  if (!Number.isFinite(value)) value = 1;
+  if (value < 1) value = 1;
+  if (value > 1.5) value = 1.5;
+  return value;
+}
+
+function allocateAmountByBasis(totalAmount, members, getBasis, options = {}) {
+  const allocations = new Map();
+  const normalizedTotal = roundToKopecks(totalAmount);
+  if (!(normalizedTotal > 0) || !Array.isArray(members) || members.length === 0) {
+    return allocations;
+  }
+
+  const fallback = options.fallback === 'none' ? 'none' : 'equal';
+  const prepared = members
+    .map((member) => {
+      const userId = Number(member?.user_id);
+      if (!Number.isFinite(userId) || userId <= 0) return null;
+      return {
+        user_id: userId,
+        basis: Math.max(0, Number(getBasis(member) || 0))
+      };
+    })
+    .filter(Boolean);
+
+  if (prepared.length === 0) {
+    return allocations;
+  }
+
+  let working = prepared.filter((entry) => entry.basis > 0);
+  if (working.length === 0) {
+    if (fallback === 'none') return allocations;
+    working = prepared.map((entry) => ({ ...entry, basis: 1 }));
+  }
+
+  const basisTotal = working.reduce((sum, entry) => sum + Number(entry.basis || 0), 0);
+  if (!(basisTotal > 0)) {
+    return allocations;
+  }
+
+  let allocated = 0;
+  working.forEach((entry, index) => {
+    const share = index === working.length - 1
+      ? roundToKopecks(normalizedTotal - allocated)
+      : roundToKopecks((Number(entry.basis || 0) / basisTotal) * normalizedTotal);
+    allocated = roundToKopecks(allocated + share);
+    allocations.set(entry.user_id, share);
+  });
+
+  return allocations;
+}
+
+function upsertParticipant(map, participant) {
+  const userId = Number(participant?.user_id);
+  if (!Number.isFinite(userId) || userId <= 0) return;
+  if (!map.has(userId)) {
+    map.set(userId, {
+      ...participant,
+      user_id: userId,
+      revenue: Math.max(0, Number(participant?.revenue || 0))
+    });
+  }
+}
+
+function getUserNameById(db, userId, fallbackRole = 'dispatcher') {
+  const normalizedUserId = Number(userId || 0);
+  if (!Number.isFinite(normalizedUserId) || normalizedUserId <= 0) {
+    return `${fallbackRole === 'seller' ? 'Seller' : 'Dispatcher'} #${normalizedUserId || 0}`;
+  }
+
+  try {
+    const row = db.prepare('SELECT username FROM users WHERE id = ?').get(normalizedUserId);
+    const username = String(row?.username || '').trim();
+    if (username) return username;
+  } catch {
+    // Fall through to deterministic fallback name.
+  }
+
+  return `${fallbackRole === 'seller' ? 'Seller' : 'Dispatcher'} #${normalizedUserId}`;
+}
+
+function resolveShiftCloseDispatcherUserId(db, requestedUserId) {
+  const normalizedRequestedUserId = Number(requestedUserId || 0);
+  if (Number.isFinite(normalizedRequestedUserId) && normalizedRequestedUserId > 0) {
+    try {
+      const requestedRow = db
+        .prepare('SELECT id FROM users WHERE id = ? AND role = ? AND is_active = 1')
+        .get(normalizedRequestedUserId, 'dispatcher');
+      if (requestedRow?.id) return Number(requestedRow.id);
+    } catch {
+      // Fall back to deterministic single-dispatcher detection below.
+    }
+  }
+
+  try {
+    const activeDispatchers = db
+      .prepare('SELECT id FROM users WHERE role = ? AND is_active = 1 ORDER BY id ASC')
+      .all('dispatcher');
+    if (activeDispatchers.length === 1) {
+      return Number(activeDispatchers[0].id);
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function getUnattributedDispatcherRevenue(db, day) {
+  try {
+    const { presaleJoinSql, payrollEligiblePredicate } = getPayrollEligibilitySql(db);
+    const row = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE
+          WHEN ml.type IN (
+            'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+            'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+          ) THEN ABS(ml.amount)
+          ELSE 0
+        END), 0) AS revenue_gross,
+        COALESCE(SUM(CASE
+          WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount)
+          ELSE 0
+        END), 0) AS refunds
+      FROM money_ledger ml
+      ${presaleJoinSql}
+      WHERE ml.status = 'POSTED'
+        AND ml.kind = 'DISPATCHER_SHIFT'
+        AND DATE(ml.business_day) = ?
+        AND ${payrollEligiblePredicate}
+        AND ml.seller_id IS NULL
+        AND ml.type IN (
+          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
+          'SALE_CANCEL_REVERSE'
+        )
+    `).get(day, day);
+
+    return Math.max(0, Number(row?.revenue_gross || 0) - Number(row?.refunds || 0));
+  } catch {
+    return 0;
+  }
+}
+
+function calcSeasonPrepayRoutedAmount(db, businessDay) {
+  try {
+    if (!safeTableExists(db, 'money_ledger')) return 0;
+    const row = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) AS total
+      FROM money_ledger
+      WHERE kind = 'FUND'
+        AND type = 'SEASON_PREPAY_DELETE'
+        AND status = 'POSTED'
+        AND DATE(business_day) = ?
+    `).get(businessDay);
+    return Math.max(0, Number(row?.total || 0));
+  } catch {
+    return 0;
+  }
+}
+
+// OWNER_SETTINGS_DEFAULTS moved to ../owner-settings.mjs
+const RETIRED_OWNER_SETTINGS_DEFAULTS = {
   // Business settings
   businessName: "Морские прогулки",
   timezone: "Europe/Moscow (UTC+3)",
@@ -64,6 +335,7 @@ export const OWNER_SETTINGS_DEFAULTS = {
   notifyChannel: "inapp",
   
   // Withhold settings (USED FOR LEDGER ENTRIES)
+  viklif_withhold_percent_total: 0,
   dispatcher_withhold_percent_total: 0.002,   // 0.2% total cap for dispatcher withhold
   weekly_withhold_percent_total: 0.008,       // 0.8% withhold for weekly pool
   season_withhold_percent_total: 0.005        // 0.5% withhold for season pool
@@ -75,10 +347,15 @@ export const OWNER_SETTINGS_DEFAULTS = {
  * 
  * @param {Object} db - better-sqlite3 database instance
  * @param {string} day - Business day in YYYY-MM-DD format
+ * @param {Object} options - Internal calculation profile/options
  * @returns {Object} Motivation data with payouts array
  */
-export function calcMotivationDay(db, day) {
+export function calcMotivationDay(db, day, options = {}) {
   const warnings = [];
+  const profile = options?.profile === 'dispatcher_shift_close'
+    ? 'dispatcher_shift_close'
+    : 'default';
+  const shiftCloseFormulaEnabled = profile === 'dispatcher_shift_close';
   
   // Validate date format
   if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
@@ -110,13 +387,11 @@ export function calcMotivationDay(db, day) {
     settingsSource = 'snapshot';
   } else if (isLocked) {
     // Locked day without snapshot - use defaults (will be flagged in invariants)
-    settings = { ...OWNER_SETTINGS_DEFAULTS };
+    settings = mergeOwnerSettings();
     settingsSource = 'fallback';
     warnings.push('Locked day has no settings snapshot');
   } else {
-    const ownerRow = db.prepare("SELECT settings_json FROM owner_settings WHERE id = 1").get();
-    const savedSettings = ownerRow?.settings_json ? JSON.parse(ownerRow.settings_json) : {};
-    settings = { ...OWNER_SETTINGS_DEFAULTS, ...savedSettings };
+    settings = resolveOwnerSettings(db);
     settingsSource = 'owner_settings';
     
     const now = new Date().toISOString();
@@ -128,7 +403,7 @@ export function calcMotivationDay(db, day) {
   }
   
   // Guard: ensure settings is always a valid object (defensive, no mutation of defaults)
-  settings = { ...OWNER_SETTINGS_DEFAULTS, ...(settings || {}) };
+  settings = mergeOwnerSettings(settings);
   
   const mode = settings.motivationType || 'team';
   const p = Number(settings.motivation_percent ?? 0.15);
@@ -148,69 +423,98 @@ export function calcMotivationDay(db, day) {
   `).get(day);
   
   const revenue_total = Math.max(0, Number(revenueRow?.revenue_gross || 0) - Number(revenueRow?.refunds || 0));
-  const fundTotal = roundToKopecks(revenue_total * p);
+  const futureTripsReserveTotal = calcFutureTripsReserveTotal(db, day);
+  const salary_base = Math.max(0, roundToKopecks(revenue_total - futureTripsReserveTotal));
+  const fundTotal = roundToKopecks(salary_base * p);
+  const withholdBaseRevenue = shiftCloseFormulaEnabled ? salary_base : revenue_total;
+  const { presaleJoinSql, payrollEligiblePredicate } = getPayrollEligibilitySql(db);
   
   // ====================
   // STEP 2.5: Calculate WITHHOLDS from fundTotal
   // ====================
   const MAX_ACTIVE_DISPATCHERS = 2;
   
-  // Read weekly withhold percent from settings (with validation)
-  let weeklyPercentTotal = Number(settings.weekly_withhold_percent_total);
-  if (isNaN(weeklyPercentTotal) || weeklyPercentTotal === null) {
-    weeklyPercentTotal = Number(settings.weekly_percent);
-  }
-  if (isNaN(weeklyPercentTotal) || weeklyPercentTotal === null) weeklyPercentTotal = 0.008;
-  if (weeklyPercentTotal < 0) weeklyPercentTotal = 0;
-  if (weeklyPercentTotal > 0.05) weeklyPercentTotal = 0.05; // max 5%
-  
-  // Read season withhold percent from settings (with validation)
-  let seasonPercentTotal = Number(settings.season_withhold_percent_total);
-  if (isNaN(seasonPercentTotal) || seasonPercentTotal === null) {
-    seasonPercentTotal = Number(settings.season_percent);
-  }
-  if (isNaN(seasonPercentTotal) || seasonPercentTotal === null) seasonPercentTotal = 0.005;
-  if (seasonPercentTotal < 0) seasonPercentTotal = 0;
-  if (seasonPercentTotal > 0.05) seasonPercentTotal = 0.05; // max 5%
-  
-  // Read dispatcher withhold percent from settings (with validation)
-  let dispatcherPercentTotal = Number(settings.dispatcher_withhold_percent_total);
-  if (isNaN(dispatcherPercentTotal) || dispatcherPercentTotal === null) dispatcherPercentTotal = 0.002;
-  if (dispatcherPercentTotal < 0) dispatcherPercentTotal = 0;
-  if (dispatcherPercentTotal > 0.05) dispatcherPercentTotal = 0.05; // max 5%
+  const viklifPercentTotal = shiftCloseFormulaEnabled
+    ? 0
+    : clampPercent(
+        settings.viklif_withhold_percent_total,
+        0
+      );
+  const weeklyPercentTotal = clampPercent(
+    settings.weekly_withhold_percent_total,
+    OWNER_SETTINGS_DEFAULTS.weekly_withhold_percent_total
+  );
+  const seasonPercentTotal = clampPercent(
+    settings.season_withhold_percent_total,
+    OWNER_SETTINGS_DEFAULTS.season_withhold_percent_total
+  );
+  const dispatcherPercentTotal = clampPercent(
+    settings.dispatcher_withhold_percent_total,
+    0.002
+  );
   const dispatcherPercentPerPerson = dispatcherPercentTotal / 2;
   
-  // Find dispatchers with sales TODAY (active_dispatchers_today)
-  // A dispatcher is "active today" if they have sales in money_ledger with seller_id = dispatcher.id
+  // Find dispatchers with payroll-eligible sales today (trip day <= business day).
   const dispatchersWithSalesTodayRaw = db.prepare(`
     SELECT DISTINCT ml.seller_id
     FROM money_ledger ml
+    ${presaleJoinSql}
     JOIN users u ON u.id = ml.seller_id
     WHERE ml.status = 'POSTED'
       AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
       AND DATE(ml.business_day) = ?
+      AND ${payrollEligiblePredicate}
       AND ml.seller_id IS NOT NULL
       AND ml.seller_id > 0
       AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED')
       AND u.role = 'dispatcher'
-  `).all(day);
-  
-  const activeDispatchersTodayIdsRaw = (dispatchersWithSalesTodayRaw || []).map(r => Number(r.seller_id));
+  `).all(day, day);
+
+  let activeDispatchersTodayIdsRaw = (dispatchersWithSalesTodayRaw || []).map((r) => Number(r.seller_id));
+  const unattributedDispatcherRevenue = shiftCloseFormulaEnabled
+    ? getUnattributedDispatcherRevenue(db, day)
+    : 0;
+  const shiftCloseDispatcherUserId = shiftCloseFormulaEnabled
+    ? resolveShiftCloseDispatcherUserId(db, options?.dispatcherUserId)
+    : null;
+  if (shiftCloseFormulaEnabled && unattributedDispatcherRevenue > 0) {
+    if (Number.isFinite(shiftCloseDispatcherUserId) && shiftCloseDispatcherUserId > 0) {
+      if (!activeDispatchersTodayIdsRaw.includes(shiftCloseDispatcherUserId)) {
+        activeDispatchersTodayIdsRaw = [...activeDispatchersTodayIdsRaw, shiftCloseDispatcherUserId];
+      }
+    } else {
+      warnings.push('Dispatcher shift close has unattributed dispatcher revenue without a dispatcher user mapping');
+    }
+  }
+
   // Cap to max 2 active dispatchers
   const activeDispatchersTodayIds = activeDispatchersTodayIdsRaw.slice(0, MAX_ACTIVE_DISPATCHERS);
   const activeDispatchersTodayCount = activeDispatchersTodayIds.length;
+
+  const weeklyPercentEffective = shiftCloseFormulaEnabled
+    ? weeklyPercentTotal
+    : Number(
+        (weeklyPercentTotal + (activeDispatchersTodayCount === 1 ? dispatcherPercentPerPerson : 0)).toFixed(6)
+      );
+  const dispatcherPercentAppliedTotal = Number(
+    (dispatcherPercentPerPerson * activeDispatchersTodayCount).toFixed(6)
+  );
   
   // Calculate withhold amounts:
   // - weekly can be rounded down to 50
   // - season is never rounded and receives all rounding remainders
-  const weekly_withhold_amount_raw = roundToKopecks(fundTotal * weeklyPercentTotal);
+  const weekly_withhold_amount_raw = roundToKopecks(withholdBaseRevenue * weeklyPercentEffective);
   const weekly_withhold_amount = roundDownTo50(weekly_withhold_amount_raw);
   const weekly_rounding_to_season = roundToKopecks(Math.max(0, weekly_withhold_amount_raw - weekly_withhold_amount));
-  const season_withhold_amount_base = roundToKopecks(fundTotal * seasonPercentTotal);
+  const viklif_withhold_amount_raw = roundToKopecks(withholdBaseRevenue * viklifPercentTotal);
+  const viklif_withhold_amount = roundDownTo50(viklif_withhold_amount_raw);
+  const viklif_rounding_to_season = roundToKopecks(Math.max(0, viklif_withhold_amount_raw - viklif_withhold_amount));
+  const season_withhold_amount_base = roundToKopecks(withholdBaseRevenue * seasonPercentTotal);
+  const season_prepay_routed_amount = roundToKopecks(calcSeasonPrepayRoutedAmount(db, day));
   
   // Dispatcher withhold: per-person percent (capped to max 2)
   const dispatcher_withhold_per_person_raw = activeDispatchersTodayCount > 0
-    ? roundToKopecks(fundTotal * dispatcherPercentPerPerson)
+    ? roundToKopecks(withholdBaseRevenue * dispatcherPercentPerPerson)
     : 0;
   const dispatcher_withhold_per_person = activeDispatchersTodayCount > 0
     ? roundDownTo50(dispatcher_withhold_per_person_raw)
@@ -224,40 +528,104 @@ export function calcMotivationDay(db, day) {
     Math.max(0, dispatcher_withhold_per_person_raw - dispatcher_withhold_per_person) * activeDispatchersTodayCount
   );
   
-  // Final season value and fund-after-withhold are finalized after payout rounding is calculated.
-  let season_withhold_amount = season_withhold_amount_base;
+  // Final season value is shown as a total pool, but manual prepayment transfers
+  // do not reduce the current day motivation fund / owner handover.
+  let season_withhold_amount = roundToKopecks(
+    season_withhold_amount_base +
+    weekly_rounding_to_season +
+    viklif_rounding_to_season +
+    dispatcher_withhold_rounding_to_season
+  );
+  let season_fund_total = roundToKopecks(season_withhold_amount + season_prepay_routed_amount);
   let payouts_rounding_to_season = 0;
   let rounding_to_season_amount_total = roundToKopecks(
-    weekly_rounding_to_season + dispatcher_withhold_rounding_to_season
+    weekly_rounding_to_season +
+    viklif_rounding_to_season +
+    dispatcher_withhold_rounding_to_season
   );
   let fundTotal_after_withhold = roundToKopecks(
-    fundTotal - weekly_withhold_amount - season_withhold_amount - dispatcher_withhold_total
+    shiftCloseFormulaEnabled
+      ? fundTotal - weekly_withhold_amount - viklif_withhold_amount - season_withhold_amount
+      : fundTotal - weekly_withhold_amount - viklif_withhold_amount - season_withhold_amount - dispatcher_withhold_total
   );
   
   // ====================
   // STEP 3: Get sellers with revenue for the day
   // ====================
-  const sellersWithRevenue = db.prepare(`
+  const usersWithRevenue = db.prepare(`
     SELECT
       ml.seller_id,
       u.username,
-      COALESCE(SUM(ml.amount), 0) AS revenue
+      u.role,
+      COALESCE(SUM(CASE
+        WHEN ml.type IN (
+          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+        ) THEN ABS(ml.amount)
+        ELSE 0
+      END), 0) AS revenue_gross,
+      COALESCE(SUM(CASE
+        WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount)
+        ELSE 0
+      END), 0) AS refunds
     FROM money_ledger ml
+    ${presaleJoinSql}
     JOIN users u ON u.id = ml.seller_id
     WHERE ml.status = 'POSTED'
       AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
       AND DATE(ml.business_day) = ?
+      AND ${payrollEligiblePredicate}
       AND ml.seller_id IS NOT NULL
       AND ml.seller_id > 0
-      AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED')
-    GROUP BY ml.seller_id
-  `).all(day);
+      AND ml.type IN (
+        'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+        'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
+        'SALE_CANCEL_REVERSE'
+      )
+    GROUP BY ml.seller_id, u.username, u.role
+  `).all(day, day);
   
-  const activeSellersList = (sellersWithRevenue || []).map(r => ({
-    user_id: Number(r.seller_id),
-    name: r.username,
-    revenue: Math.max(0, Number(r.revenue || 0))
-  }));
+  const activeSellersList = (usersWithRevenue || [])
+    .filter((row) => String(row.role || '').toLowerCase() === 'seller')
+    .map((row) => ({
+      user_id: Number(row.seller_id),
+      role: 'seller',
+      name: row.username,
+      revenue: Math.max(0, Number(row.revenue_gross || 0) - Number(row.refunds || 0))
+    }));
+  const activeDispatchersRevenueList = (usersWithRevenue || [])
+    .filter((row) => String(row.role || '').toLowerCase() === 'dispatcher')
+    .map((row) => ({
+      user_id: Number(row.seller_id),
+      role: 'dispatcher',
+      name: row.username,
+      revenue: Math.max(0, Number(row.revenue_gross || 0) - Number(row.refunds || 0))
+    }));
+  if (
+    shiftCloseFormulaEnabled &&
+    unattributedDispatcherRevenue > 0 &&
+    Number.isFinite(shiftCloseDispatcherUserId) &&
+    shiftCloseDispatcherUserId > 0
+  ) {
+    const unattributedDispatcherName = getUserNameById(db, shiftCloseDispatcherUserId, 'dispatcher');
+    const existingIndex = activeDispatchersRevenueList.findIndex(
+      (dispatcher) => Number(dispatcher.user_id) === Number(shiftCloseDispatcherUserId)
+    );
+    if (existingIndex >= 0) {
+      const existing = activeDispatchersRevenueList[existingIndex];
+      activeDispatchersRevenueList[existingIndex] = {
+        ...existing,
+        revenue: Math.max(0, Number(existing.revenue || 0) + unattributedDispatcherRevenue)
+      };
+    } else {
+      activeDispatchersRevenueList.push({
+        user_id: Number(shiftCloseDispatcherUserId),
+        role: 'dispatcher',
+        name: unattributedDispatcherName,
+        revenue: unattributedDispatcherRevenue
+      });
+    }
+  }
   
   // ====================
   // STEP 4: Get active dispatchers
@@ -268,18 +636,29 @@ export function calcMotivationDay(db, day) {
     WHERE role = 'dispatcher' AND is_active = 1
   `).all();
   
-  const sellerUserIds = new Set(activeSellersList.map(s => s.user_id));
-  const pureDispatchersList = (dispatchersList || []).filter(d => !sellerUserIds.has(Number(d.id)));
+  const dispatchersById = new Map((dispatchersList || []).map((dispatcher) => [Number(dispatcher.id), dispatcher]));
+  const activeDispatchersRevenueMap = new Map(
+    (activeDispatchersRevenueList || []).map((dispatcher) => [dispatcher.user_id, dispatcher.revenue])
+  );
+  const activeDispatchersTodayList = activeDispatchersTodayIds
+    .map((dispatcherId) => dispatchersById.get(Number(dispatcherId)))
+    .filter(Boolean)
+    .map((dispatcher) => ({
+      user_id: Number(dispatcher.id),
+      role: 'dispatcher',
+      name: dispatcher.username,
+      revenue: Math.max(0, Number(activeDispatchersRevenueMap.get(Number(dispatcher.id)) || 0))
+    }));
   
-  let active_dispatchers = pureDispatchersList.length;
+  let active_dispatchers = activeDispatchersTodayList.length;
   let active_sellers = activeSellersList.length;
   
   // ====================
   // STEP 4.5: Build revenue map
   // ====================
   const personalRevenueMap = new Map();
-  for (const seller of activeSellersList) {
-    personalRevenueMap.set(seller.user_id, seller.revenue);
+  for (const participant of [...activeSellersList, ...activeDispatchersRevenueList]) {
+    personalRevenueMap.set(participant.user_id, participant.revenue);
   }
   
   // ====================
@@ -459,6 +838,7 @@ export function calcMotivationDay(db, day) {
   let points_by_user = [];
   
   if (mode === 'adaptive') {
+    const activeSellerIdSet = new Set(activeSellersList.map((seller) => seller.user_id));
     const revenueBySellerAndType = db.prepare(`
       SELECT
         ml.seller_id,
@@ -475,11 +855,12 @@ export function calcMotivationDay(db, day) {
       WHERE ml.status = 'POSTED'
         AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
         AND DATE(ml.business_day) = ?
+        AND ${payrollEligiblePredicate}
         AND ml.seller_id IS NOT NULL
         AND ml.seller_id > 0
         AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
       GROUP BY ml.seller_id, COALESCE(b.type, gb.type), p.zone_at_sale
-    `).all(day);
+    `).all(day, day);
     
     const sellerZones = db.prepare(`SELECT id, zone FROM users WHERE role = 'seller'`).all();
     const sellerZoneMap = new Map((sellerZones || []).map(r => [Number(r.id), r.zone]));
@@ -537,6 +918,7 @@ export function calcMotivationDay(db, day) {
     
     for (const row of (revenueBySellerAndType || [])) {
       const sellerId = Number(row.seller_id);
+      if (!activeSellerIdSet.has(sellerId)) continue;
       const boatType = row.boat_type || null;
       const zoneAtSale = row.zone_at_sale || null;
       const revenueGross = Number(row.revenue_gross || 0);
@@ -594,15 +976,15 @@ export function calcMotivationDay(db, day) {
       }
     }
     
-    for (const d of (dispatchersList || [])) {
-      const uid = Number(d.id);
+    for (const dispatcher of (activeDispatchersTodayList || [])) {
+      const uid = Number(dispatcher.user_id);
       if (!pointsByUserMap.has(uid)) {
         pointsByUserMap.set(uid, {
           user_id: uid,
           role: 'dispatcher',
-          name: d.username,
+          name: dispatcher.name,
           zone: null,
-          revenue_total: 0,
+          revenue_total: Number(dispatcher.revenue || 0),
           revenue_by_type: { speed: 0, cruise: 0, banana: 0 },
           points_by_type: { speed: 0, cruise: 0, banana: 0 },
           points_base: 0,
@@ -617,31 +999,206 @@ export function calcMotivationDay(db, day) {
     
     points_by_user = Array.from(pointsByUserMap.values());
   }
+
+  // Rebuild payouts from the agreed day model:
+  // revenue-based withholds + manual season transfer -> salary fund after withhold -> team/individual split.
+  // Raw fund-after can go negative when a manual season transfer exceeds the motivation pool,
+  // but payable salary cannot, so the actual salary pool is clamped at zero.
+  const salaryFundPool = Math.max(0, roundToKopecks(
+    shiftCloseFormulaEnabled
+      ? fundTotal_after_withhold - dispatcher_withhold_total
+      : fundTotal_after_withhold
+  ));
+  const stage3TeamIncludeSellers = settings.teamIncludeSellers !== false;
+  const stage3TeamIncludeDispatchers = settings.teamIncludeDispatchers !== false;
+  const stage3DispatcherWeight = clampDispatcherTeamWeight(settings.k_dispatchers ?? 1.0);
+  const stage3PayoutByUserId = new Map();
+  const stage3IndividualMetricByUserId = new Map();
+  const stage3AllRevenueParticipantsMap = new Map();
+
+  activeSellersList.forEach((seller) => upsertParticipant(stage3AllRevenueParticipantsMap, seller));
+  activeDispatchersRevenueList.forEach((dispatcher) => upsertParticipant(stage3AllRevenueParticipantsMap, dispatcher));
+  const stage3AllRevenueParticipants = Array.from(stage3AllRevenueParticipantsMap.values());
+
+  const ensureStage3Payout = (member) => {
+    const userId = Number(member.user_id);
+    if (!stage3PayoutByUserId.has(userId)) {
+      stage3PayoutByUserId.set(userId, {
+        user_id: userId,
+        role: member.role,
+        name: member.name,
+        revenue: Math.max(0, Number(member.revenue || personalRevenueMap.get(userId) || 0)),
+        team_part: 0,
+        individual_part: 0,
+        dispatcher_daily_bonus: 0,
+        total_raw: 0,
+        total: 0
+      });
+    }
+    return stage3PayoutByUserId.get(userId);
+  };
+
+  payouts = [];
+  participants = 0;
+  team_share = 0;
+  individual_share = 0;
+  teamFund = 0;
+  individualFund = 0;
+  teamPerPerson = 0;
+  active_dispatchers = activeDispatchersTodayList.length;
+  active_sellers = activeSellersList.length;
+  const useTeamIndividualSplitModel = shiftCloseFormulaEnabled || mode === 'adaptive';
+
+  if (mode === 'personal' && !useTeamIndividualSplitModel) {
+    individual_share = 1;
+    individualFund = salaryFundPool;
+    participants = stage3AllRevenueParticipants.length;
+    active_dispatchers = activeDispatchersRevenueList.length;
+
+    const individualAllocations = allocateAmountByBasis(
+      individualFund,
+      stage3AllRevenueParticipants,
+      (participant) => Number(participant.revenue || 0),
+      { fallback: 'none' }
+    );
+
+    if (individualFund > 0 && individualAllocations.size === 0) {
+      warnings.push('No participant revenue found for personal motivation allocation');
+    }
+
+    stage3AllRevenueParticipants.forEach((participant) => {
+      const payout = ensureStage3Payout(participant);
+      const participantRevenue = Math.max(0, Number(participant.revenue || 0));
+      stage3IndividualMetricByUserId.set(participant.user_id, participantRevenue);
+      payout.individual_part = Number(individualAllocations.get(participant.user_id) || 0);
+      payout.total_raw = roundToKopecks(payout.team_part + payout.individual_part);
+      payout.total = payout.total_raw;
+    });
+  } else {
+    if (mode === 'team' && !useTeamIndividualSplitModel) {
+      team_share = 1;
+      teamFund = salaryFundPool;
+    } else {
+      team_share = Number(settings.team_share ?? 0.4);
+      individual_share = Number(settings.individual_share ?? 0.6);
+
+      const shareSum = team_share + individual_share;
+      if (Math.abs(shareSum - 1) > 0.0001) {
+        if (shareSum > 0) {
+          team_share = team_share / shareSum;
+          individual_share = individual_share / shareSum;
+        } else {
+          team_share = 1;
+          individual_share = 0;
+        }
+      }
+
+      teamFund = roundToKopecks(salaryFundPool * team_share);
+      individualFund = roundToKopecks(salaryFundPool - teamFund);
+    }
+
+    const teamMembersMap = new Map();
+    if (stage3TeamIncludeSellers) {
+      activeSellersList.forEach((seller) => {
+        teamMembersMap.set(seller.user_id, {
+          user_id: seller.user_id,
+          role: 'seller',
+          name: seller.name,
+          revenue: seller.revenue
+        });
+      });
+    }
+    if (stage3TeamIncludeDispatchers) {
+      activeDispatchersRevenueList.forEach((dispatcher) => {
+        if (!teamMembersMap.has(dispatcher.user_id)) {
+          teamMembersMap.set(dispatcher.user_id, {
+            user_id: dispatcher.user_id,
+            role: 'dispatcher',
+            name: dispatcher.name,
+            revenue: dispatcher.revenue
+          });
+        }
+      });
+    }
+
+    const stage3TeamMembers = Array.from(teamMembersMap.values());
+    participants = stage3TeamMembers.length;
+    teamPerPerson = participants > 0 ? roundToKopecks(teamFund / participants) : 0;
+
+    if (teamFund > 0) {
+      const teamAllocations = allocateAmountByBasis(
+        teamFund,
+        stage3TeamMembers,
+        (member) => (member.role === 'dispatcher' ? stage3DispatcherWeight : 1),
+        { fallback: 'equal' }
+      );
+
+      if (teamAllocations.size > 0) {
+        stage3TeamMembers.forEach((member) => {
+          const payout = ensureStage3Payout(member);
+          payout.team_part = Number(teamAllocations.get(member.user_id) || 0);
+          payout.total_raw = roundToKopecks(payout.team_part + payout.individual_part);
+          payout.total = payout.total_raw;
+        });
+      } else {
+        warnings.push('No team weights available for motivation allocation');
+      }
+    }
+
+    if (individualFund > 0) {
+      const individualAllocations = allocateAmountByBasis(
+        individualFund,
+        stage3AllRevenueParticipants,
+        (participant) => Number(participant.revenue || 0),
+        { fallback: 'none' }
+      );
+
+      if (individualAllocations.size > 0) {
+        stage3AllRevenueParticipants.forEach((participant) => {
+          const revenueMetric = Math.max(0, Number(participant.revenue || 0));
+          stage3IndividualMetricByUserId.set(participant.user_id, revenueMetric);
+          const payout = ensureStage3Payout(participant);
+          payout.individual_part = Number(individualAllocations.get(participant.user_id) || 0);
+          payout.total_raw = roundToKopecks(payout.team_part + payout.individual_part);
+          payout.total = payout.total_raw;
+        });
+      } else {
+        warnings.push('No participant revenue available for individual motivation allocation');
+      }
+    }
+  }
+
+  payouts = Array.from(stage3PayoutByUserId.values()).map((payout) => {
+    const stage3Metric = stage3IndividualMetricByUserId.get(payout.user_id);
+    return {
+      ...payout,
+      ...(stage3Metric != null ? { weighted_revenue: Number(stage3Metric) } : {})
+    };
+  });
   
   // ====================
   // STEP 5.6: Dispatcher Daily Bonus
   // ====================
-  const DISPATCHER_DAILY_PERCENT = 0.001;
-  
-  const activeDispatchersWithRevenue = (dispatchersList || []).filter(d => {
-    const dispatcherId = Number(d.id);
-    const personalRevenue = personalRevenueMap.get(dispatcherId) || 0;
-    return personalRevenue > 0;
-  });
-  
-  const activeDispatchersCount = activeDispatchersWithRevenue.length;
-  const dispatcherDailyBonus = activeDispatchersCount > 0 ? roundDownTo50(revenue_total * DISPATCHER_DAILY_PERCENT) : 0;
-  const dispatcherDailyBonusTotal = activeDispatchersCount * dispatcherDailyBonus;
-  
-  const activeDispatcherUserIds = new Set(activeDispatchersWithRevenue.map(d => Number(d.id)));
-  
-  const payoutsWithDispatcherBonus = (Array.isArray(payouts) ? payouts : []).map(payout => {
+  const dispatcherDailyPercent = dispatcherPercentPerPerson;
+  const activeDispatchersCount = activeDispatchersTodayList.length;
+  const dispatcherDailyBonus = dispatcher_withhold_per_person;
+  const dispatcherDailyBonusTotal = dispatcher_withhold_total;
+
+  const activeDispatcherUserIds = new Set(activeDispatchersTodayList.map((dispatcher) => Number(dispatcher.user_id)));
+
+  const payoutsWithDispatcherBonus = (Array.isArray(payouts) ? payouts : []).map((payout) => {
     const personalRevenue = personalRevenueMap.get(payout.user_id) || 0;
     const isActiveDispatcher = activeDispatcherUserIds.has(payout.user_id);
+    const dispatcherBonus = isActiveDispatcher ? dispatcherDailyBonus : 0;
+    const totalRaw = shiftCloseFormulaEnabled
+      ? roundToKopecks(Number((payout.total_raw ?? payout.total) || 0) + dispatcherBonus)
+      : roundToKopecks(Number((payout.total_raw ?? payout.total) || 0));
     return {
       ...payout,
-      dispatcher_daily_bonus: isActiveDispatcher ? dispatcherDailyBonus : 0,
-      personal_revenue_day: personalRevenue
+      dispatcher_daily_bonus: dispatcherBonus,
+      personal_revenue_day: personalRevenue,
+      total_raw: totalRaw,
+      total: totalRaw
     };
   });
   
@@ -652,26 +1209,39 @@ export function calcMotivationDay(db, day) {
   // ====================
   payouts_rounding_to_season = roundToKopecks(
     (Array.isArray(payouts) ? payouts : []).reduce((sum, p) => {
-      const totalRaw = Number(p?.total || 0);
+      const totalRaw = Number((p?.total_raw ?? p?.total) || 0);
       const totalRounded = roundDownTo50(totalRaw);
       return sum + Math.max(0, totalRaw - totalRounded);
     }, 0)
   );
 
   rounding_to_season_amount_total = roundToKopecks(
-    weekly_rounding_to_season + dispatcher_withhold_rounding_to_season + payouts_rounding_to_season
+    weekly_rounding_to_season +
+    viklif_rounding_to_season +
+    dispatcher_withhold_rounding_to_season +
+    payouts_rounding_to_season
   );
   season_withhold_amount = roundToKopecks(season_withhold_amount_base + rounding_to_season_amount_total);
+  season_fund_total = roundToKopecks(season_withhold_amount + season_prepay_routed_amount);
   fundTotal_after_withhold = roundToKopecks(
-    fundTotal - weekly_withhold_amount - season_withhold_amount - dispatcher_withhold_total
+    shiftCloseFormulaEnabled
+      ? fundTotal - weekly_withhold_amount - viklif_withhold_amount - season_withhold_amount + payouts_rounding_to_season
+      : fundTotal - weekly_withhold_amount - viklif_withhold_amount - season_withhold_amount - dispatcher_withhold_total
   );
 
   payouts = payouts.map(p => ({
     ...p,
-    total: roundDownTo50(p.total),
-    individual_part: roundDownTo50(p.individual_part),
-    team_part: roundDownTo50(p.team_part),
-    dispatcher_daily_bonus: roundDownTo50(p.dispatcher_daily_bonus)
+    total_raw: roundToKopecks(Number((p.total_raw ?? p.total) || 0)),
+    salary_rounding_to_season: roundToKopecks(
+      Math.max(
+        0,
+        Number((p.total_raw ?? p.total) || 0) - roundDownTo50(Number((p.total_raw ?? p.total) || 0))
+      )
+    ),
+    total: roundDownTo50(Number((p.total_raw ?? p.total) || 0)),
+    individual_part: roundToKopecks(p.individual_part),
+    team_part: roundToKopecks(p.team_part),
+    dispatcher_daily_bonus: roundToKopecks(p.dispatcher_daily_bonus)
   }));
   
   // ====================
@@ -697,6 +1267,10 @@ export function calcMotivationDay(db, day) {
   const safeFundPercent = safeNum(fundPercent);
   const safeMotivationPercent = safeNum(p);
   const safeTeamPerPerson = safeNum(teamPerPerson);
+  const safeFundTotalAfterWithhold = safeNum(Math.max(0, fundTotal_after_withhold));
+  const safeSeasonFromRevenue = safeNum(season_withhold_amount);
+  const safeSeasonFundTotal = safeNum(season_fund_total);
+  const safeSeasonPrepayRoutedAmount = safeNum(season_prepay_routed_amount);
   
   const finalParticipants = meaningfulPayouts.length;
   const finalActiveSellers = meaningfulPayouts.filter(p => p?.role === 'seller').length;
@@ -706,13 +1280,16 @@ export function calcMotivationDay(db, day) {
     business_day: day,
     mode,
     revenue_total: safeRevenueTotal,
+    salary_base,
+    future_trips_reserve_total: futureTripsReserveTotal,
     motivation_percent: safeMotivationPercent,
     fundPercent: safeFundPercent,
     fundTotal: safeFundTotal,
+    salary_fund_total: safeFundTotalAfterWithhold,
     participants: finalParticipants,
     active_sellers: finalActiveSellers,
     active_dispatchers: finalActiveDispatchers,
-    dispatcher_daily_percent: DISPATCHER_DAILY_PERCENT,
+    dispatcher_daily_percent: dispatcherDailyPercent,
     active_dispatchers_count: activeDispatchersCount,
     dispatcher_daily_bonus_total: dispatcherDailyBonusTotal,
     payouts: payoutsWithPoints,
@@ -727,15 +1304,26 @@ export function calcMotivationDay(db, day) {
     teamPerPerson: safeTeamPerPerson,
     // NEW: Withhold breakdown
     withhold: {
-      weekly_percent: weeklyPercentTotal,
+      viklif_percent: viklifPercentTotal,
+      viklif_amount_raw: viklif_withhold_amount_raw,
+      viklif_amount: viklif_withhold_amount,
+      weekly_percent: weeklyPercentEffective,
+      weekly_percent_configured: weeklyPercentTotal,
       season_percent: seasonPercentTotal,
-      dispatcher_percent_total: dispatcherPercentTotal,
+      dispatcher_percent_total: dispatcherPercentAppliedTotal,
+      dispatcher_percent_total_configured: dispatcherPercentTotal,
       dispatcher_percent_per_person: dispatcherPercentPerPerson,
       weekly_amount_raw: weekly_withhold_amount_raw,
       weekly_amount: weekly_withhold_amount,
-      season_amount: season_withhold_amount,
+      season_amount: safeSeasonFromRevenue,
+      season_from_revenue: safeSeasonFromRevenue,
+      season_fund_total: safeSeasonFundTotal,
+      season_total: safeSeasonFundTotal,
       season_amount_base: season_withhold_amount_base,
       season_amount_from_rounding: rounding_to_season_amount_total,
+      season_amount_from_cancelled_prepayment: safeSeasonPrepayRoutedAmount,
+      season_from_prepayment_transfer: safeSeasonPrepayRoutedAmount,
+      viklif_rounding_to_season_amount: viklif_rounding_to_season,
       weekly_rounding_to_season_amount: weekly_rounding_to_season,
       dispatcher_rounding_to_season_amount: dispatcher_withhold_rounding_to_season,
       payouts_rounding_to_season_amount: payouts_rounding_to_season,
@@ -754,11 +1342,15 @@ export function calcMotivationDay(db, day) {
     },
     // NEW: Effective settings used for withhold calculation
     settings_effective: {
-      weekly_withhold_percent_total: weeklyPercentTotal,
+      viklif_withhold_percent_total: viklifPercentTotal,
+      weekly_withhold_percent_total: weeklyPercentEffective,
+      weekly_withhold_percent_total_configured: weeklyPercentTotal,
       season_withhold_percent_total: seasonPercentTotal,
-      dispatcher_withhold_percent_total: dispatcherPercentTotal,
+      dispatcher_withhold_percent_total: dispatcherPercentAppliedTotal,
+      dispatcher_withhold_percent_total_configured: dispatcherPercentTotal,
       dispatcher_withhold_percent_per_person: dispatcherPercentPerPerson
     },
+    settings_snapshot: { ...settings },
     // NEW: Lock status for immutability
     lock: {
       is_locked: isLocked,
@@ -768,13 +1360,13 @@ export function calcMotivationDay(db, day) {
   };
   
   // Clean up mode-inappropriate fields
-  if (mode === 'personal') {
+  if (mode === 'personal' && !useTeamIndividualSplitModel) {
     delete data.teamPerPerson;
     delete data.team_share;
     delete data.individual_share;
     delete data.teamFund;
     delete data.individualFund;
-  } else if (mode === 'team') {
+  } else if (mode === 'team' && !useTeamIndividualSplitModel) {
     delete data.team_share;
     delete data.individual_share;
     delete data.teamFund;

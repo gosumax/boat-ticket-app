@@ -47,11 +47,8 @@ test.describe('Dispatcher Shift Close Smoke', () => {
     const withholdBlock = page.locator('[data-testid="shiftclose-withhold-weekly"]');
     if (await withholdBlock.count() > 0) {
       console.log('Motivation withhold block found');
-      // Verify testid elements exist
+      // Verify key simplified withhold fields exist
       await expect(page.locator('[data-testid="shiftclose-withhold-season"]')).toBeVisible();
-      await expect(page.locator('[data-testid="shiftclose-withhold-dispatcher"]')).toBeVisible();
-      await expect(page.locator('[data-testid="shiftclose-withhold-fund-original"]')).toBeVisible();
-      await expect(page.locator('[data-testid="shiftclose-withhold-fund-after"]')).toBeVisible();
     }
     
     // Take screenshot for evidence

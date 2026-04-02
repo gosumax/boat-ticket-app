@@ -193,6 +193,39 @@ function resolveBusinessDayForPresaleRow(presale) {
   return resolveBusinessDayFromSlot(presale?.slot_uid, presale?.boat_slot_id);
 }
 
+function getUserRoleById(userId) {
+  const normalizedUserId = Number(userId || 0);
+  if (!Number.isFinite(normalizedUserId) || normalizedUserId <= 0) return null;
+  try {
+    const row = db.prepare('SELECT role FROM users WHERE id = ?').get(normalizedUserId);
+    return row?.role ? String(row.role).toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveSaleMoneyAttribution(attributedUserId, fallbackUserId = null) {
+  const candidateUserId = Number(attributedUserId ?? fallbackUserId ?? 0);
+  if (!Number.isFinite(candidateUserId) || candidateUserId <= 0) {
+    return {
+      attributed_user_id: null,
+      attributed_role: null,
+      ledger_kind: 'DISPATCHER_SHIFT',
+      is_seller_attributed: false,
+    };
+  }
+
+  const attributedRole = getUserRoleById(candidateUserId);
+  const isSellerAttributed = attributedRole === 'seller';
+
+  return {
+    attributed_user_id: candidateUserId,
+    attributed_role: attributedRole,
+    ledger_kind: isSellerAttributed ? 'SELLER_SHIFT' : 'DISPATCHER_SHIFT',
+    is_seller_attributed: isSellerAttributed,
+  };
+}
+
 function assertShiftOpenForPresaleDays(presaleId, primaryBusinessDay, extraBusinessDays = []) {
   const days = new Set();
   const primary = String(primaryBusinessDay || '').trim();
@@ -1447,15 +1480,15 @@ INSERT INTO presales (
 	    if (paidNow > 0 && paymentMethodUpper) {
 	      // idempotency: avoid duplicates for same presale
 	      const already = db.prepare(`
-	        SELECT 1
-	        FROM money_ledger
-	        WHERE presale_id = ?
-	          AND kind = 'SELLER_SHIFT'
-	          AND type LIKE 'SALE_%'
-	        LIMIT 1
+        SELECT 1
+        FROM money_ledger
+        WHERE presale_id = ?
+          AND type LIKE 'SALE_%'
+        LIMIT 1
 	      `).get(presaleResult.lastInsertRowid);
 
 	      if (!already) {
+          const saleAttribution = resolveSaleMoneyAttribution(sellerId);
 	        let ledgerType = 'SALE_PREPAYMENT';
 	        if (Number(paymentCashAmount) > 0 && Number(paymentCardAmount) > 0) ledgerType = 'SALE_PREPAYMENT_MIXED';
 	        else if (Number(paymentCashAmount) > 0) ledgerType = 'SALE_PREPAYMENT_CASH';
@@ -1467,18 +1500,20 @@ INSERT INTO presales (
 
 	        db.prepare(`
 	          INSERT INTO money_ledger (
-	            presale_id, slot_id, event_time, kind, type, method, amount, status, seller_id, business_day
+	            presale_id, slot_id, event_time, kind, type, method, amount, status, seller_id, business_day, trip_day
 	          ) VALUES (
-	            @presale_id, @slot_id, datetime('now','localtime'), 'SELLER_SHIFT', @type, @method, @amount, 'POSTED', @seller_id, @business_day
+	            @presale_id, @slot_id, datetime('now','localtime'), @kind, @type, @method, @amount, 'POSTED', @seller_id, @business_day, @trip_day
 	          )
 	        `).run({
 	          presale_id: presaleResult.lastInsertRowid,
 	          slot_id: boatSlotIdForFK ?? null,
+            kind: saleAttribution.ledger_kind,
 	          type: ledgerType,
 	          method: paymentMethodUpper || null,
 	          amount: paidNow,
-	          seller_id: sellerId ?? null,
-	          business_day: bd
+	          seller_id: saleAttribution.attributed_user_id,
+	          business_day: bd,
+	          trip_day: presaleBusinessDay ?? null
 	        });
 	      }
 	    }
@@ -1709,10 +1744,12 @@ return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedT
 
     let newPresaleId;
     try {
-      // Get seller's zone at sale time for historical motivation analytics
-      const effectiveSellerId = (req.user?.role === 'seller'
-        ? req.user?.id
-        : (Number.isFinite(Number(sellerId)) ? Number(sellerId) : req.user?.id));
+      // Money attribution follows business owner of the sale, not the clicking actor.
+      const saleAttribution = resolveSaleMoneyAttribution(
+        req.user?.role === 'seller' ? req.user?.id : sellerId,
+        req.user?.id
+      );
+      const effectiveSellerId = saleAttribution.attributed_user_id;
       
       let zoneAtSale = null;
       if (effectiveSellerId) {
@@ -2752,7 +2789,8 @@ router.patch('/presales/:id/payment', authenticateToken, canSell, (req, res) => 
     
     // Get the presale to check remaining amount and ownership
     const presale = db.prepare(`
-      SELECT total_price, prepayment_amount, seller_id, business_day, slot_uid, boat_slot_id
+      SELECT total_price, prepayment_amount, seller_id, business_day, slot_uid, boat_slot_id,
+             payment_method, payment_cash_amount, payment_card_amount
       FROM presales
       WHERE id = ?
     `).get(presaleId);
@@ -2777,15 +2815,102 @@ router.patch('/presales/:id/payment', authenticateToken, canSell, (req, res) => 
       return res.status(400).json({ error: 'Payment amount exceeds remaining balance' });
     }
     
-    // Update prepayment amount
-    const newPrepaymentAmount = presale.prepayment_amount + payment;
+    // Update prepayment amount and keep payment split in sync for legacy /payment flow.
+    const newPrepaymentAmount = Number(presale.prepayment_amount || 0) + Number(payment || 0);
+    const totalPrice = Number(presale.total_price || 0);
+    const isFullyPaidNow = newPrepaymentAmount >= totalPrice;
+
+    let paymentMethodUpper = String(presale.payment_method || '').toUpperCase();
+    let cashTotal = Math.max(0, Math.round(Number(presale.payment_cash_amount || 0)));
+    let cardTotal = Math.max(0, Math.round(Number(presale.payment_card_amount || 0)));
+
+    if (paymentMethodUpper !== 'CASH' && paymentMethodUpper !== 'CARD' && paymentMethodUpper !== 'MIXED') {
+      if (cashTotal > 0 && cardTotal > 0) paymentMethodUpper = 'MIXED';
+      else if (cardTotal > 0) paymentMethodUpper = 'CARD';
+      else paymentMethodUpper = 'CASH';
+    }
+
+    let deltaCash = 0;
+    let deltaCard = 0;
+    if (payment > 0) {
+      if (paymentMethodUpper === 'CASH') {
+        deltaCash = payment;
+      } else if (paymentMethodUpper === 'CARD') {
+        deltaCard = payment;
+      } else {
+        // Keep MIXED split stable across incremental /payment calls.
+        const baseCash = Math.max(0, cashTotal);
+        const baseCard = Math.max(0, cardTotal);
+        const baseSum = baseCash + baseCard;
+        if (baseSum > 0) {
+          deltaCash = Math.round((payment * baseCash) / baseSum);
+          deltaCash = Math.max(0, Math.min(payment, deltaCash));
+          deltaCard = payment - deltaCash;
+        } else {
+          deltaCash = Math.floor(payment / 2);
+          deltaCard = payment - deltaCash;
+        }
+      }
+    }
+
+    cashTotal += deltaCash;
+    cardTotal += deltaCard;
+
     const stmt = db.prepare(`
       UPDATE presales 
-      SET prepayment_amount = ?, updated_at = CURRENT_TIMESTAMP
+      SET
+        prepayment_amount = ?,
+        payment_method = ?,
+        payment_cash_amount = ?,
+        payment_card_amount = ?,
+        updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `);
     
-    stmt.run(newPrepaymentAmount, presaleId);
+    stmt.run(
+      newPrepaymentAmount,
+      paymentMethodUpper || null,
+      cashTotal,
+      cardTotal,
+      presaleId
+    );
+
+    // Legacy endpoint compatibility: write sale movement to money_ledger too,
+    // so shift-close (money_ledger source of truth) never misses accepted money.
+    try {
+      if (payment > 0) {
+        const todayBusinessDay = getLocalBusinessDay();
+        const tripBusinessDay = resolveBusinessDayForPresaleRow(presale);
+        const saleAttribution = resolveSaleMoneyAttribution(presale.seller_id, userId);
+        const ledgerKind = saleAttribution.ledger_kind;
+        const ledgerSellerId = saleAttribution.attributed_user_id;
+
+        let ledgerType = isFullyPaidNow ? 'SALE_ACCEPTED' : 'SALE_PREPAYMENT';
+        if (paymentMethodUpper === 'MIXED') ledgerType = `${ledgerType}_MIXED`;
+        else if (paymentMethodUpper === 'CARD') ledgerType = `${ledgerType}_CARD`;
+        else ledgerType = `${ledgerType}_CASH`;
+
+        db.prepare(`
+          INSERT INTO money_ledger (
+            presale_id, slot_id, event_time, kind, type, method, amount, status, seller_id, business_day, trip_day
+          ) VALUES (
+            @presale_id, @slot_id, datetime('now','localtime'), @kind, @type, @method, @amount, 'POSTED', @seller_id, @business_day, @trip_day
+          )
+        `).run({
+          presale_id: presaleId,
+          slot_id: presale.boat_slot_id ?? null,
+          kind: ledgerKind,
+          type: ledgerType,
+          method: paymentMethodUpper || null,
+          amount: Math.round(Number(payment || 0)),
+          seller_id: ledgerSellerId,
+          business_day: todayBusinessDay,
+          trip_day: tripBusinessDay
+        });
+      }
+    } catch (e) {
+      console.warn('[PAYMENT_UPDATE] money_ledger write skipped:', e?.message || e);
+    }
     
     // Get the updated presale
     const updatedPresale = db.prepare(`
@@ -2905,7 +3030,6 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
         SELECT 1
         FROM money_ledger
         WHERE presale_id = ?
-          AND kind = 'SELLER_SHIFT'
           AND type LIKE 'SALE_ACCEPTED%'
         LIMIT 1
       `).get(presaleId);
@@ -2915,16 +3039,15 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
           try { return db.prepare(`SELECT business_day FROM presales WHERE id = ?`).get(presaleId); }
           catch { return null; }
         })();
-
-        // business_day fallback: presales.business_day may be NULL in older data; use today local date
-        const bd = (bdRow?.business_day ?? (() => {
+        const todayBusinessDay = (() => {
           try { return db.prepare(`SELECT DATE('now','localtime') AS d`).get()?.d; } catch { return null; }
-        })()) ?? null;
+        })() ?? null;
+        const tripBusinessDay = (bdRow?.business_day ?? resolveBusinessDayFromSlot(presale?.slot_uid, presale?.boat_slot_id)) ?? null;
 
-        // persist business_day back to presales if missing (keeps future analytics consistent)
+        // Keep trip-day attribution in presales.business_day for earned-by-trip-day analytics.
         try {
-          if (!bdRow?.business_day && bd) {
-            db.prepare(`UPDATE presales SET business_day = ? WHERE id = ? AND (business_day IS NULL OR business_day = '')`).run(bd, presaleId);
+          if (!bdRow?.business_day && tripBusinessDay) {
+            db.prepare(`UPDATE presales SET business_day = ? WHERE id = ? AND (business_day IS NULL OR business_day = '')`).run(tripBusinessDay, presaleId);
           }
         } catch (e) {
           console.warn('[ACCEPT_PAYMENT] presales.business_day backfill skipped:', e?.message || e);
@@ -2932,29 +3055,21 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
 
         const totalAccepted = Math.round((Number(cashAmount || 0) + Number(cardAmount || 0)) || 0);
 
-        // Preserve seller flow, but attribute dispatcher/admin/owner accepted revenue
-        // to the actual acting user so shift-close per-user stats remain correct.
-        const presaleSeller = db.prepare(
-          "SELECT seller_id FROM presales WHERE id = ?"
-        ).get(presaleId);
-        const ledgerSellerId = userRole === 'seller'
-          ? (presaleSeller?.seller_id ?? userId ?? null)
-          : (userId ?? presaleSeller?.seller_id ?? null);
+        // Money attribution must follow the sale owner, not the UI actor.
+        const saleAttribution = resolveSaleMoneyAttribution(presale.seller_id, userId);
+        const ledgerSellerId = saleAttribution.attributed_user_id;
 
         let ledgerType = 'SALE_ACCEPTED';
         if (Number(cashAmount) > 0 && Number(cardAmount) > 0) ledgerType = 'SALE_ACCEPTED_MIXED';
         else if (Number(cashAmount) > 0) ledgerType = 'SALE_ACCEPTED_CASH';
         else if (Number(cardAmount) > 0) ledgerType = 'SALE_ACCEPTED_CARD';
-
-        // FIX: kind based on who accepted payment
-        // seller -> SELLER_SHIFT, dispatcher/admin/owner -> DISPATCHER_SHIFT
-        const ledgerKind = userRole === 'seller' ? 'SELLER_SHIFT' : 'DISPATCHER_SHIFT';
+        const ledgerKind = saleAttribution.ledger_kind;
 
         db.prepare(`
           INSERT INTO money_ledger (
-            presale_id, slot_id, event_time, kind, type, method, amount, status, seller_id, business_day
+            presale_id, slot_id, event_time, kind, type, method, amount, status, seller_id, business_day, trip_day
           ) VALUES (
-            @presale_id, @slot_id, datetime('now','localtime'), @kind, @type, @method, @amount, 'POSTED', @seller_id, @business_day
+            @presale_id, @slot_id, datetime('now','localtime'), @kind, @type, @method, @amount, 'POSTED', @seller_id, @business_day, @trip_day
           )
         `).run({
           presale_id: presaleId,
@@ -2964,7 +3079,10 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
           method: method || null,
           amount: totalAccepted,
           seller_id: ledgerSellerId,
-          business_day: bd
+          // business_day in money_ledger is payment/refund cashflow day.
+          business_day: todayBusinessDay,
+          // trip_day in money_ledger is the trip date (earned-by-trip-day / reserve semantics).
+          trip_day: tripBusinessDay
         });
       }
     } catch (e) {
@@ -3099,7 +3217,7 @@ router.patch('/presales/:id/cancel', authenticateToken, canSell, (req, res) => {
     // 4) verify ownership (seller can only cancel own presales)
     const transaction = db.transaction(() => {
       const presale = db.prepare(`
-        SELECT id, boat_slot_id, slot_uid, status, seller_id
+        SELECT id, boat_slot_id, slot_uid, business_day, status, seller_id
         FROM presales
         WHERE id = ?
       `).get(presaleId);
@@ -3129,6 +3247,7 @@ router.patch('/presales/:id/cancel', authenticateToken, canSell, (req, res) => {
           .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='money_ledger'`)
           .get();
         if (ledgerExists) {
+          const reverseTripDay = resolveBusinessDayForPresaleRow(presale);
           const nets = db.prepare(`
             SELECT business_day, kind, method, seller_id, slot_id, SUM(amount) AS net_amount
             FROM money_ledger
@@ -3139,15 +3258,16 @@ router.patch('/presales/:id/cancel', authenticateToken, canSell, (req, res) => {
 
           const insReverse = db.prepare(`
             INSERT INTO money_ledger
-              (business_day, kind, method, amount, status, seller_id, presale_id, slot_id, event_time, type, decision_final)
+              (business_day, trip_day, kind, method, amount, status, seller_id, presale_id, slot_id, event_time, type, decision_final)
             VALUES
-              (?, ?, ?, ?, 'POSTED', ?, ?, ?, CURRENT_TIMESTAMP, 'SALE_CANCEL_REVERSE', 'CANCELLED')
+              (?, ?, ?, ?, ?, 'POSTED', ?, ?, ?, CURRENT_TIMESTAMP, 'SALE_CANCEL_REVERSE', 'CANCELLED')
           `);
 
+          const refundBusinessDay = getLocalBusinessDay();
           for (const r of nets) {
-            const bd = r.business_day || db.prepare(`SELECT DATE('now','localtime') AS d`).get().d;
             insReverse.run(
-              bd,
+              refundBusinessDay,
+              reverseTripDay,
               r.kind,
               r.method,
               -Number(r.net_amount || 0),
@@ -3813,6 +3933,7 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
 	      .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='money_ledger'`)
 	      .get();
 	    if (ledgerExists) {
+	      const reverseTripDay = resolveBusinessDayForPresaleRow(presale);
 	      const nets = db.prepare(`
 	        SELECT business_day, kind, method, seller_id, slot_id, SUM(amount) AS net_amount
 	        FROM money_ledger
@@ -3823,15 +3944,16 @@ router.patch('/presales/:id/delete', authenticateToken, canDispatchManageSlots, 
 
 	      const insReverse = db.prepare(`
 	        INSERT INTO money_ledger
-	          (business_day, kind, method, amount, status, seller_id, presale_id, slot_id, event_time, type, decision_final)
+	          (business_day, trip_day, kind, method, amount, status, seller_id, presale_id, slot_id, event_time, type, decision_final)
 	        VALUES
-	          (?, ?, ?, ?, 'POSTED', ?, ?, ?, CURRENT_TIMESTAMP, 'SALE_CANCEL_REVERSE', 'CANCELLED')
+	          (?, ?, ?, ?, ?, 'POSTED', ?, ?, ?, CURRENT_TIMESTAMP, 'SALE_CANCEL_REVERSE', 'CANCELLED')
 	      `);
 
+	      const refundBusinessDay = getLocalBusinessDay();
 	      for (const r of nets) {
-	        const bd = r.business_day || db.prepare(`SELECT DATE('now','localtime') AS d`).get().d;
 	        insReverse.run(
-	          bd,
+	          refundBusinessDay,
+	          reverseTripDay,
 	          r.kind,
 	          r.method,
 	          -Number(r.net_amount || 0),
@@ -4192,7 +4314,8 @@ router.patch('/tickets/:ticketId/delete', authenticateToken, canDispatchManageSl
           p.prepayment_amount as presale_prepayment_amount,
           p.total_price as presale_total_price,
           p.slot_uid as presale_slot_uid,
-          p.boat_slot_id as presale_boat_slot_id
+          p.boat_slot_id as presale_boat_slot_id,
+          p.business_day as presale_business_day
         FROM tickets t
         JOIN presales p ON p.id = t.presale_id
         WHERE t.id = ?
@@ -4299,6 +4422,9 @@ router.patch('/tickets/:ticketId/delete', authenticateToken, canDispatchManageSl
             .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='money_ledger'`)
             .get();
           if (ledgerExists) {
+            const reverseTripDay =
+              String(ticket.presale_business_day || '').trim() ||
+              resolveBusinessDayFromSlot(ticket.presale_slot_uid, ticket.presale_boat_slot_id);
             const nets = db.prepare(`
               SELECT business_day, kind, method, seller_id, slot_id, SUM(amount) AS net_amount
               FROM money_ledger
@@ -4309,15 +4435,16 @@ router.patch('/tickets/:ticketId/delete', authenticateToken, canDispatchManageSl
 
             const insReverse = db.prepare(`
               INSERT INTO money_ledger
-                (business_day, kind, method, amount, status, seller_id, presale_id, slot_id, event_time, type, decision_final)
+                (business_day, trip_day, kind, method, amount, status, seller_id, presale_id, slot_id, event_time, type, decision_final)
               VALUES
-                (?, ?, ?, ?, 'POSTED', ?, ?, ?, CURRENT_TIMESTAMP, 'SALE_CANCEL_REVERSE', 'CANCELLED')
+                (?, ?, ?, ?, ?, 'POSTED', ?, ?, ?, CURRENT_TIMESTAMP, 'SALE_CANCEL_REVERSE', 'CANCELLED')
             `);
 
+            const refundBusinessDay = getLocalBusinessDay();
             for (const r of nets) {
-              const bd = r.business_day || db.prepare(`SELECT DATE('now','localtime') AS d`).get().d;
               insReverse.run(
-                bd,
+                refundBusinessDay,
+                reverseTripDay,
                 r.kind,
                 r.method,
                 -Number(r.net_amount || 0),

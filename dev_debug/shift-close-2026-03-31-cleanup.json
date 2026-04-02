@@ -1,0 +1,487 @@
+{
+  "summary": {
+    "business_day": "2026-03-31",
+    "phantom_fund_count": 15,
+    "phantom_sales_count": 37,
+    "phantom_fund_ids": [
+      339,
+      365,
+      387,
+      409,
+      430,
+      451,
+      472,
+      493,
+      508,
+      520,
+      532,
+      544,
+      556,
+      568,
+      660
+    ],
+    "phantom_sales_ids": [
+      634,
+      635,
+      637,
+      638,
+      685,
+      686,
+      688,
+      689,
+      697,
+      698,
+      700,
+      701,
+      703,
+      704,
+      706,
+      707,
+      709,
+      710,
+      712,
+      713,
+      715,
+      717,
+      718,
+      720,
+      721,
+      729,
+      730,
+      732,
+      733,
+      741,
+      742,
+      744,
+      745,
+      753,
+      754,
+      756,
+      757
+    ],
+    "deleted_fund_rows": 15,
+    "deleted_sale_rows": 37,
+    "remaining_fund_rows": 0,
+    "remaining_phantom_sales": 0
+  },
+  "phantom_fund_rows": [
+    {
+      "id": 339,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 255
+    },
+    {
+      "id": 365,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 266
+    },
+    {
+      "id": 387,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 275
+    },
+    {
+      "id": 409,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 284
+    },
+    {
+      "id": 430,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 293
+    },
+    {
+      "id": 451,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 302
+    },
+    {
+      "id": 472,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 311
+    },
+    {
+      "id": 493,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 320
+    },
+    {
+      "id": 508,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 329
+    },
+    {
+      "id": 520,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 338
+    },
+    {
+      "id": 532,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 347
+    },
+    {
+      "id": 544,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 356
+    },
+    {
+      "id": 556,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 365
+    },
+    {
+      "id": 568,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 1000,
+      "seller_id": null,
+      "presale_id": 374
+    },
+    {
+      "id": 660,
+      "type": "SEASON_PREPAY_DELETE",
+      "kind": "FUND",
+      "amount": 500,
+      "seller_id": null,
+      "presale_id": 273
+    }
+  ],
+  "phantom_sales_rows": [
+    {
+      "id": 634,
+      "type": "SALE_PREPAYMENT_CARD",
+      "kind": "SELLER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 426
+    },
+    {
+      "id": 635,
+      "type": "SALE_PREPAYMENT_CASH",
+      "kind": "SELLER_SHIFT",
+      "amount": 500,
+      "seller_id": 13,
+      "presale_id": 427
+    },
+    {
+      "id": 637,
+      "type": "SALE_ACCEPTED_CARD",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 426
+    },
+    {
+      "id": 638,
+      "type": "SALE_ACCEPTED_MIXED",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1500,
+      "seller_id": 13,
+      "presale_id": 427
+    },
+    {
+      "id": 685,
+      "type": "SALE_PREPAYMENT_CARD",
+      "kind": "SELLER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 435
+    },
+    {
+      "id": 686,
+      "type": "SALE_PREPAYMENT_CASH",
+      "kind": "SELLER_SHIFT",
+      "amount": 500,
+      "seller_id": 13,
+      "presale_id": 436
+    },
+    {
+      "id": 688,
+      "type": "SALE_ACCEPTED_CARD",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 435
+    },
+    {
+      "id": 689,
+      "type": "SALE_ACCEPTED_MIXED",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1500,
+      "seller_id": 13,
+      "presale_id": 436
+    },
+    {
+      "id": 697,
+      "type": "SALE_PREPAYMENT_CARD",
+      "kind": "SELLER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 444
+    },
+    {
+      "id": 698,
+      "type": "SALE_PREPAYMENT_CASH",
+      "kind": "SELLER_SHIFT",
+      "amount": 500,
+      "seller_id": 13,
+      "presale_id": 445
+    },
+    {
+      "id": 700,
+      "type": "SALE_ACCEPTED_CARD",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 444
+    },
+    {
+      "id": 701,
+      "type": "SALE_ACCEPTED_MIXED",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1500,
+      "seller_id": 13,
+      "presale_id": 445
+    },
+    {
+      "id": 703,
+      "type": "SALE_PREPAYMENT_CARD",
+      "kind": "SELLER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 447
+    },
+    {
+      "id": 704,
+      "type": "SALE_PREPAYMENT_CASH",
+      "kind": "SELLER_SHIFT",
+      "amount": 500,
+      "seller_id": 13,
+      "presale_id": 448
+    },
+    {
+      "id": 706,
+      "type": "SALE_ACCEPTED_CARD",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 447
+    },
+    {
+      "id": 707,
+      "type": "SALE_ACCEPTED_MIXED",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1500,
+      "seller_id": 13,
+      "presale_id": 448
+    },
+    {
+      "id": 709,
+      "type": "SALE_PREPAYMENT_CARD",
+      "kind": "SELLER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 450
+    },
+    {
+      "id": 710,
+      "type": "SALE_PREPAYMENT_CASH",
+      "kind": "SELLER_SHIFT",
+      "amount": 500,
+      "seller_id": 13,
+      "presale_id": 451
+    },
+    {
+      "id": 712,
+      "type": "SALE_ACCEPTED_CARD",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 450
+    },
+    {
+      "id": 713,
+      "type": "SALE_ACCEPTED_MIXED",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1500,
+      "seller_id": 13,
+      "presale_id": 451
+    },
+    {
+      "id": 715,
+      "type": "SALE_PREPAYMENT_CARD",
+      "kind": "SELLER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 453
+    },
+    {
+      "id": 717,
+      "type": "SALE_PREPAYMENT_CARD",
+      "kind": "SELLER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 455
+    },
+    {
+      "id": 718,
+      "type": "SALE_PREPAYMENT_CASH",
+      "kind": "SELLER_SHIFT",
+      "amount": 500,
+      "seller_id": 13,
+      "presale_id": 456
+    },
+    {
+      "id": 720,
+      "type": "SALE_ACCEPTED_CARD",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 455
+    },
+    {
+      "id": 721,
+      "type": "SALE_ACCEPTED_MIXED",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1500,
+      "seller_id": 13,
+      "presale_id": 456
+    },
+    {
+      "id": 729,
+      "type": "SALE_PREPAYMENT_CARD",
+      "kind": "SELLER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 464
+    },
+    {
+      "id": 730,
+      "type": "SALE_PREPAYMENT_CASH",
+      "kind": "SELLER_SHIFT",
+      "amount": 500,
+      "seller_id": 13,
+      "presale_id": 465
+    },
+    {
+      "id": 732,
+      "type": "SALE_ACCEPTED_CARD",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 464
+    },
+    {
+      "id": 733,
+      "type": "SALE_ACCEPTED_MIXED",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1500,
+      "seller_id": 13,
+      "presale_id": 465
+    },
+    {
+      "id": 741,
+      "type": "SALE_PREPAYMENT_CARD",
+      "kind": "SELLER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 473
+    },
+    {
+      "id": 742,
+      "type": "SALE_PREPAYMENT_CASH",
+      "kind": "SELLER_SHIFT",
+      "amount": 500,
+      "seller_id": 13,
+      "presale_id": 474
+    },
+    {
+      "id": 744,
+      "type": "SALE_ACCEPTED_CARD",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 473
+    },
+    {
+      "id": 745,
+      "type": "SALE_ACCEPTED_MIXED",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1500,
+      "seller_id": 13,
+      "presale_id": 474
+    },
+    {
+      "id": 753,
+      "type": "SALE_PREPAYMENT_CARD",
+      "kind": "SELLER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 482
+    },
+    {
+      "id": 754,
+      "type": "SALE_PREPAYMENT_CASH",
+      "kind": "SELLER_SHIFT",
+      "amount": 500,
+      "seller_id": 13,
+      "presale_id": 483
+    },
+    {
+      "id": 756,
+      "type": "SALE_ACCEPTED_CARD",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1000,
+      "seller_id": 4,
+      "presale_id": 482
+    },
+    {
+      "id": 757,
+      "type": "SALE_ACCEPTED_MIXED",
+      "kind": "DISPATCHER_SHIFT",
+      "amount": 1500,
+      "seller_id": 13,
+      "presale_id": 483
+    }
+  ]
+}

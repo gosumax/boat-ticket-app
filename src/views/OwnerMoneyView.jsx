@@ -21,6 +21,14 @@ import {
   OWNER_MONEY_MAIN_KPI_TITLE,
 } from "../utils/ownerMoneyKpi.js";
 
+const OWNER_MONEY_TOP_LABEL_OVERRIDES = {
+  "owner-money-funds-weekly": "Отложить сегодня в Weekly фонд",
+  "owner-money-funds-season": "Отложить сегодня в Season фонд",
+  "owner-money-obligations-tomorrow-cash": "Обязательства на завтра наличными",
+  "owner-money-obligations-tomorrow-card": "Обязательства на завтра картой",
+  "owner-money-obligations-tomorrow-total": "Обязательства на завтра итого",
+};
+
 function formatRUB(v) {
   const n = Number(v || 0);
   try {
@@ -50,105 +58,45 @@ async function ownerGet(url) {
   return two || { data: {}, meta: {} };
 }
 
-function maxOf(arr, pick) {
-  let m = 0;
-  for (const x of arr || []) {
-    const v = Number(pick(x) || 0);
-    if (v > m) m = v;
-  }
-  return m;
-}
-
 export default function OwnerMoneyView() {
-  // Get pending data from global context (TanStack Query pattern)
-  const { pendingByDay, pendingLoading, refreshPendingByDays, refreshAllMoneyData, registerRefreshCallback } = useOwnerData();
+  const { refreshAllMoneyData, registerRefreshCallback } = useOwnerData();
   
   const [preset, setPreset] = useState("today");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const [pendingDay, setPendingDay] = useState("tomorrow");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const [money, setMoney] = useState({
     preset: "today",
     range: null,
     totals: { revenue: 0, cash: 0, card: 0 },
+    paidByTripDay: { revenue: 0, cash: 0, card: 0 },
+    ownerDecisionMetrics: null,
+    shiftCloseBreakdown: null,
     warnings: [],
   });
-  const [boats, setBoats] = useState({
-    preset: "today",
-    range: null,
-    totals: { revenue: 0, tickets: 0, trips: 0, fillPercent: 0 },
-    warnings: [],
-  });
-  const [days, setDays] = useState({
-    preset: "7d",
-    range: null,
-    rows: [],
-    warnings: [],
-  });
-  const [collectedToday, setCollectedToday] = useState({
-    collected_day: 'today',
-    by_trip_day: {
-      today: { revenue: 0, cash: 0, card: 0 },
-      tomorrow: { revenue: 0, cash: 0, card: 0 },
-      day2: { revenue: 0, cash: 0, card: 0 },
-    },
-  });
-
-  const compareDaysPreset = useMemo(() => {
-    if (preset === "30d") return "30d";
-    if (preset === "90d") return "90d";
-    return "7d";
-  }, [preset]);
 
   const reload = useCallback(async ({ silent } = {}) => {
     if (!silent) setBusy(true);
     setErr("");
     try {
-      const [m, d, c] = await Promise.all([
-        ownerGet(`/owner/money/summary?preset=${encodeURIComponent(preset)}`),
-        ownerGet(`/owner/money/compare-days?preset=${encodeURIComponent(compareDaysPreset)}`),
-        ownerGet('/owner/money/collected-today-by-tripday'),
-      ]);
+      const m = await ownerGet(`/owner/money/summary?preset=${encodeURIComponent(preset)}`);
 
       setMoney({
         preset: m?.data?.preset ?? preset,
         range: m?.data?.range ?? null,
         totals: m?.data?.totals ?? { collected_total: 0, collected_cash: 0, collected_card: 0, tickets: 0, trips: 0, fillPercent: 0 },
+        paidByTripDay: m?.data?.paid_by_trip_day ?? { revenue: 0, cash: 0, card: 0 },
+        ownerDecisionMetrics: m?.data?.owner_decision_metrics ?? null,
+        shiftCloseBreakdown: m?.data?.shift_close_breakdown ?? null,
         warnings: m?.meta?.warnings || [],
-      });
-      setBoats({
-        preset: preset,
-        range: null,
-        totals: {
-          revenue: m?.data?.totals?.collected_total ?? 0,
-          tickets: m?.data?.totals?.tickets ?? 0,
-          trips: m?.data?.totals?.trips ?? 0,
-          fillPercent: m?.data?.totals?.fillPercent ?? 0,
-        },
-        warnings: [],
-      });
-      setDays({
-        preset: d?.data?.preset ?? compareDaysPreset,
-        range: d?.data?.range ?? null,
-        rows: d?.data?.rows ?? [],
-        warnings: d?.meta?.warnings || [],
-      });
-      setCollectedToday({
-        collected_day: c?.data?.collected_day ?? 'today',
-        by_trip_day: c?.data?.by_trip_day ?? {
-          today: { revenue: 0, cash: 0, card: 0 },
-          tomorrow: { revenue: 0, cash: 0, card: 0 },
-          day2: { revenue: 0, cash: 0, card: 0 },
-        },
       });
     } catch (e) {
       setErr(e?.data?.error || e?.message || "Ошибка загрузки");
     } finally {
       if (!silent) setBusy(false);
     }
-  }, [preset, compareDaysPreset]);
+  }, [preset]);
 
   // Manual refresh handler (force refresh all money data)
   const onManualRefresh = useCallback(async () => {
@@ -178,12 +126,11 @@ export default function OwnerMoneyView() {
     const poll = async () => {
       if (isRefreshing) return;
       await reload({ silent: true });
-      await refreshPendingByDays(['today', 'tomorrow', 'day2'], 'poll-20s');
     };
 
     const t = setInterval(poll, 20000);
     return () => clearInterval(t);
-  }, [preset, isRefreshing, reload, refreshPendingByDays]);
+  }, [preset, isRefreshing, reload]);
 
   // Auto refresh on focus/visibility (no polling spam)
   useEffect(() => {
@@ -212,44 +159,27 @@ export default function OwnerMoneyView() {
     }
   }, [registerRefreshCallback, reload]);
 
-  // Load pending for selected day on mount and day change
-  useEffect(() => {
-    refreshPendingByDays([pendingDay], 'pendingDay-change');
-  }, [pendingDay, refreshPendingByDays]);
-
-  // Fallback: listen for CustomEvent (for cases outside context)
-  useEffect(() => {
-    const handleRefreshPending = (event) => {
-      const raw = event?.detail?.days ?? event?.detail?.affectedDays ?? event?.detail?.day;
-      const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
-      const allowedDays = ['today', 'tomorrow', 'day2'];
-      const valid = [...new Set(arr)].filter(d => allowedDays.includes(d));
-      const daysToLoad = valid.length > 0 ? valid : ['today', 'tomorrow'];
-      refreshPendingByDays(daysToLoad, 'CustomEvent:fallback');
-    };
-    window.addEventListener('owner:refresh-pending', handleRefreshPending);
-    return () => window.removeEventListener('owner:refresh-pending', handleRefreshPending);
-  }, [refreshPendingByDays]);
-
-  // Get current pending data from context
-  const pendingData = pendingByDay[pendingDay];
-
   const manualOn = useMemo(() => {
-    const all = [
-      ...(money.warnings || []),
-      ...(boats.warnings || []),
-      ...(days.warnings || []),
-    ].join("\n");
+    const all = [...(money.warnings || [])].join("\n");
     return all.toLowerCase().includes("manual override");
-  }, [money.warnings, boats.warnings, days.warnings]);
+  }, [money.warnings]);
 
   const revenue = Number(money.totals?.collected_total || money.totals?.revenue || 0);
   const cash = Number(money.totals?.collected_cash || money.totals?.cash || 0);
   const card = Number(money.totals?.collected_card || money.totals?.card || 0);
+  const ownerDecisionMetrics = money.ownerDecisionMetrics || null;
+  const shiftCloseBreakdown = money.shiftCloseBreakdown || null;
+  const shiftCloseTotals = shiftCloseBreakdown?.totals || null;
+  const hasSingleBusinessDayRange = Boolean(
+    money.range?.from &&
+    money.range?.to &&
+    money.range.from === money.range.to
+  );
+  const decisionMetricsAvailable = Boolean(ownerDecisionMetrics && hasSingleBusinessDayRange);
 
   // Новые поля: pending_amount и paid_by_trip_day
   const pendingAmount = Number(money.totals?.pending_amount || 0);
-  const paidByTripDay = money.paid_by_trip_day || { revenue: 0, cash: 0, card: 0 };
+  const paidByTripDay = money.paidByTripDay || { revenue: 0, cash: 0, card: 0 };
 
   // Refund and net metrics
   const refundTotal = Number(money.totals?.refund_total || 0);
@@ -258,11 +188,6 @@ export default function OwnerMoneyView() {
   const netTotal = Number(money.totals?.net_total || revenue);
   const netCash = Number(money.totals?.net_cash || cash);
   const netCard = Number(money.totals?.net_card || card);
-  const futureTripsReserveCash = Number(money.totals?.future_trips_reserve_cash || 0);
-  const futureTripsReserveCard = Number(money.totals?.future_trips_reserve_card || 0);
-  const futureTripsReserveTotal = Number(money.totals?.future_trips_reserve_total || (futureTripsReserveCash + futureTripsReserveCard));
-  const ownerAvailableCashBeforeReserve = Number(money.totals?.owner_available_cash_before_future_reserve ?? netCash);
-  const ownerAvailableCashAfterReserve = Number(money.totals?.owner_available_cash_after_future_reserve ?? (ownerAvailableCashBeforeReserve - futureTripsReserveCash));
   const fundsWithholdWeeklyToday = Number(money.totals?.funds_withhold_weekly_today || 0);
   const fundsWithholdSeasonToday = Number(money.totals?.funds_withhold_season_today || 0);
   const fundsWithholdDispatcherBonusToday = Number(money.totals?.funds_withhold_dispatcher_bonus_today || 0);
@@ -277,30 +202,178 @@ export default function OwnerMoneyView() {
     fundsWithholdCardToday,
     fundsWithholdTotalToday,
   });
-  const cashTakeawayAfterReserveAndFunds = Number(
+  const takeawayToday = Number(
+    ownerDecisionMetrics?.can_take_cash_today ??
+    money.totals?.owner_cash_today ??
     money.totals?.cash_takeaway_after_reserve_and_funds ??
-    (ownerAvailableCashAfterReserve - fundsWithholdCashToday)
+    0
+  );
+  const topCollectedCash = Number(ownerDecisionMetrics?.received_cash_today ?? cash);
+  const topCollectedCard = Number(ownerDecisionMetrics?.received_card_today ?? card);
+  const topCollectedTotal = Number(ownerDecisionMetrics?.received_total_today ?? revenue);
+  const topWeeklyWithhold = Number(
+    ownerDecisionMetrics?.withhold_weekly_today ??
+    money.totals?.weekly_fund ??
+    fundsWithholdWeeklyToday
+  );
+  const topSeasonWithhold = Number(
+    ownerDecisionMetrics?.withhold_season_today ??
+    money.totals?.season_fund_total ??
+    fundsWithholdSeasonToday
+  );
+  const topTomorrowObligationsCash = Number(
+    ownerDecisionMetrics?.obligations_tomorrow_cash ??
+    money.totals?.obligations_tomorrow_cash ??
+    0
+  );
+  const topTomorrowObligationsCard = Number(
+    ownerDecisionMetrics?.obligations_tomorrow_card ??
+    money.totals?.obligations_tomorrow_card ??
+    0
+  );
+  const topTomorrowObligationsTotal = Number(
+    ownerDecisionMetrics?.obligations_tomorrow_total ??
+    money.totals?.obligations_tomorrow_total ??
+    (topTomorrowObligationsCash + topTomorrowObligationsCard)
+  );
+  const ownerAvailableCashBeforeReserve = Number(
+    shiftCloseTotals?.owner_cash_before_reserve ??
+    money.totals?.owner_cash_available_without_future_reserve ??
+    money.totals?.owner_available_cash_before_future_reserve ??
+    netCash
+  );
+  const ownerAvailableCashAfterReserve = Number(
+    shiftCloseTotals?.owner_cash_after_reserve ??
+    money.totals?.owner_cash_available_after_future_reserve_cash ??
+    money.totals?.owner_available_cash_after_future_reserve ??
+    0
+  );
+  const sellersCollectTotal = Number(
+    shiftCloseTotals?.collect_from_sellers ??
+    money.totals?.sellers_collect_total ??
+    0
+  );
+  const salaryToPay = Number(
+    shiftCloseTotals?.final_salary_total ??
+    money.totals?.salary_to_pay ??
+    0
   );
 
-  const tickets = Number(money.totals?.tickets || boats.totals?.tickets || 0);
-  const trips = Number(money.totals?.trips || boats.totals?.trips || 0);
-  const fillPercent = Number(money.totals?.fillPercent || boats.totals?.fillPercent || 0);
-  const avgCheck = tickets > 0 ? Math.round(revenue / tickets) : 0;
-
-  const bars = useMemo(() => {
-    const rows = (days.rows || []).slice(-7);
-    const maxRev = maxOf(rows, (r) => r.revenue);
-    return rows.map((r) => {
-      const rev = Number(r.revenue || 0);
-      const v = maxRev > 0 ? Math.round((rev / maxRev) * 100) : 0;
-      const label = String(r.day || "").slice(5); // MM-DD
-      return { day: r.day, v, label, revenue: rev };
-    });
-  }, [days.rows]);
-
-  const hasAnyRevenue = useMemo(() => {
-    return (days.rows || []).some((r) => Number(r?.revenue || 0) >= 1);
-  }, [days.rows]);
+  const tickets = Number(money.totals?.tickets || 0);
+  const trips = Number(money.totals?.trips || 0);
+  const fillPercent = Number(money.totals?.fillPercent || 0);
+  const debugChecks = Object.entries(shiftCloseBreakdown?.checks || {}).filter(([, value]) => Number(value || 0) !== 0);
+  const pendingDay = "tomorrow";
+  const setPendingDay = () => {};
+  const pendingLoading = false;
+  const pendingData = null;
+  const collectedToday = {
+    by_trip_day: {
+      tomorrow: { revenue: 0, cash: 0, card: 0 },
+      day2: { revenue: 0, cash: 0, card: 0 },
+    },
+  };
+  const days = { preset: "7d" };
+  const bars = [];
+  const hasAnyRevenue = false;
+  const topMetrics = useMemo(() => ([
+    {
+      label: OWNER_MONEY_MAIN_KPI_TITLE,
+      value: takeawayToday,
+      testId: "owner-money-main-kpi",
+      featured: true,
+      tone: takeawayToday < 0 ? "neg" : "accent",
+    },
+    {
+      label: "Наличными получено сегодня",
+      value: topCollectedCash,
+      testId: "owner-money-collected-cash",
+    },
+    {
+      label: "Картой получено сегодня",
+      value: topCollectedCard,
+      testId: "owner-money-collected-card",
+    },
+    {
+      label: "Итого получено сегодня",
+      value: topCollectedTotal,
+      testId: "owner-money-collected-total",
+    },
+    {
+      label: "Отложить в Weekly сегодня",
+      value: topWeeklyWithhold,
+      testId: "owner-money-funds-weekly",
+    },
+    {
+      label: "Отложить в Season сегодня",
+      value: topSeasonWithhold,
+      testId: "owner-money-funds-season",
+    },
+    {
+      label: "Резерв будущих рейсов наличными",
+      value: topTomorrowObligationsCash,
+      testId: "owner-money-obligations-tomorrow-cash",
+    },
+    {
+      label: "Резерв будущих рейсов картой",
+      value: topTomorrowObligationsCard,
+      testId: "owner-money-obligations-tomorrow-card",
+    },
+    {
+      label: "Резерв будущих рейсов итого",
+      value: topTomorrowObligationsTotal,
+      testId: "owner-money-obligations-tomorrow-total",
+    },
+  ]), [
+    takeawayToday,
+    topCollectedCash,
+    topCollectedCard,
+    topCollectedTotal,
+    topWeeklyWithhold,
+    topSeasonWithhold,
+    topTomorrowObligationsCash,
+    topTomorrowObligationsCard,
+    topTomorrowObligationsTotal,
+  ]);
+  const secondaryDetailRows = useMemo(() => ([
+    {
+      label: "Ожидает оплаты",
+      value: formatRUB(pendingAmount),
+      testId: "owner-money-pending-total",
+    },
+    {
+      label: "Возвраты",
+      value: formatRUB(refundTotal),
+      testId: "owner-money-refund-total",
+    },
+    {
+      label: "Заработано по дню рейса",
+      value: formatRUB(paidByTripDay.revenue || 0),
+      testId: "owner-money-earned-trip-day",
+    },
+    {
+      label: "Билеты",
+      value: formatInt(tickets),
+      testId: "owner-money-tickets-total",
+    },
+    {
+      label: "Рейсы",
+      value: formatInt(trips),
+      testId: "owner-money-trips-total",
+    },
+    {
+      label: "Загрузка",
+      value: fillPercent ? `${formatInt(fillPercent)}%` : "—",
+      testId: "owner-money-fill-percent",
+    },
+  ]), [
+    pendingAmount,
+    refundTotal,
+    paidByTripDay,
+    tickets,
+    trips,
+    fillPercent,
+  ]);
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 px-3 pt-3 pb-24">
@@ -341,257 +414,321 @@ export default function OwnerMoneyView() {
         </div>
       )}
 
-      {/* Top stats */}
-      <div className="grid grid-cols-2 gap-2">
-        {/* 1️⃣ Чистый результат — ГЛАВНЫЙ БЛОК */}
-        <Card className="col-span-2">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <div className="text-[11px] text-neutral-500">Чистый результат</div>
-              <div className="text-[10px] text-neutral-600">Собрано минус возвраты за выбранный период</div>
-              <div data-testid="owner-money-net-total" className="mt-1 text-4xl font-extrabold tracking-tight text-emerald-400">{formatRUB(netTotal)}</div>
-            </div>
-            <div className="text-[11px] text-neutral-500 text-right">
-              {money.range?.from && money.range?.to ? (
-                <>
-                  <div>{money.range.from}</div>
-                  <div>→ {money.range.to}</div>
-                </>
-              ) : (
-                <div>диапазон</div>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <MiniCard testId="owner-money-net-cash" label="Наличные" value={formatRUB(netCash)} />
-            <MiniCard testId="owner-money-net-card" label="Карта" value={formatRUB(netCard)} />
+      {decisionMetricsAvailable ? (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {topMetrics.map((metric) => (
+            <MetricCard
+              key={metric.testId}
+              testId={metric.testId}
+              label={OWNER_MONEY_TOP_LABEL_OVERRIDES[metric.testId] || metric.label}
+              value={formatRUB(metric.value)}
+              featured={metric.featured}
+              tone={metric.tone}
+            />
+          ))}
+        </div>
+      ) : (
+        <Card>
+          <div className="text-sm font-semibold">Оперативные метрики денег дня доступны только для одного бизнес-дня</div>
+          <div className="mt-1 text-xs text-neutral-500">
+            Выбери `Сегодня` или `Вчера`, чтобы увидеть канонические 9 метрик из Shift Close без промежуточной фронтовой математики.
           </div>
         </Card>
+      )}
 
-        <Card className="col-span-2">
-          <div className="text-[11px] text-neutral-500">Обязательства</div>
-          <div className="mt-2 text-xs text-neutral-400">Резерв будущих рейсов</div>
-          <div className="mt-2 grid grid-cols-3 gap-2">
-            <MiniCard testId="owner-money-future-reserve-cash" label="Наличные" value={formatRUB(futureTripsReserveCash)} />
-            <MiniCard testId="owner-money-future-reserve-card" label="Карта" value={formatRUB(futureTripsReserveCard)} />
-            <MiniCard testId="owner-money-future-reserve-total" label="Итого резерв" value={formatRUB(futureTripsReserveTotal)} />
+      <div className="mt-2">
+        <CollapsibleCard
+          testId="owner-money-secondary-details"
+          summaryTestId="owner-money-secondary-summary"
+          title="Дополнительные метрики"
+          subtitle="Ожидает оплаты, возвраты, заработано по дню рейса, билеты, рейсы, загрузка"
+        >
+          <div className="space-y-2">
+            {secondaryDetailRows.map((row) => (
+              <Row
+                key={row.testId}
+                testId={row.testId}
+                label={row.label}
+                value={row.value}
+              />
+            ))}
           </div>
-          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <MiniCard
-              testId="owner-money-available-before-reserve"
-              label="Нал получено сегодня (до резерва)"
-              value={formatRUB(ownerAvailableCashBeforeReserve)}
-            />
-            <div data-testid="owner-money-available-after-reserve" className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
-              <div className="text-[11px] text-neutral-500">Нал после резерва (справочно)</div>
-              <div className={`mt-1 text-lg font-extrabold tracking-tight ${ownerAvailableCashAfterReserve < 0 ? 'text-red-300' : 'text-neutral-100'}`}>
-                {formatRUB(ownerAvailableCashAfterReserve)}
+        </CollapsibleCard>
+      </div>
+
+      {preset === "__legacy_owner_money__" && (
+      <div className="mt-2 space-y-2">
+        <CollapsibleCard
+          title="Ожидает оплаты"
+          subtitle='Pending по дате рейса и сколько уже собрано сегодня на будущие рейсы'
+          defaultOpen={preset === "today"}
+        >
+          <div data-testid="owner-money-pending-total" className="text-2xl font-extrabold tracking-tight text-amber-300">
+            {formatRUB(pendingAmount)}
+          </div>
+          <div className="mt-1 text-[10px] text-neutral-500">За рейсы в выбранном диапазоне</div>
+
+          {preset === "today" && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between">
+                <div className="text-[11px] text-neutral-500">По дням будущих рейсов</div>
+                <div className="flex gap-1">
+                  {[
+                    { key: "tomorrow", label: "Завтра" },
+                    { key: "day2", label: "Послезавтра" },
+                  ].map((d) => (
+                    <button
+                      key={d.key}
+                      type="button"
+                      onClick={() => setPendingDay(d.key)}
+                      className={[
+                        "px-2 py-1 rounded-xl border text-xs",
+                        pendingDay === d.key
+                          ? "border-amber-500 text-amber-300 bg-amber-900/10"
+                          : "border-neutral-800 text-neutral-300 bg-neutral-950/30 hover:bg-neutral-900/40",
+                      ].join(" ")}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              {pendingLoading ? (
+                <div className="mt-3 text-sm text-neutral-500">Загрузка…</div>
+              ) : pendingData ? (
+                <>
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <MiniCard
+                      label="Ожидает оплаты"
+                      value={formatRUB(pendingData.sum ?? pendingData.sum_pending ?? pendingData.amount ?? pendingData.total ?? 0)}
+                    />
+                    <MiniCard label="Билетов" value={formatInt(pendingData.tickets ?? pendingData.tickets_count ?? 0)} />
+                    <MiniCard label="Рейсов" value={formatInt(pendingData.trips ?? pendingData.trips_count ?? 0)} />
+                  </div>
+
+                  <div className="mt-3 rounded-2xl border border-emerald-900/50 bg-emerald-950/20 p-3">
+                    <div className="text-[11px] text-neutral-500 mb-2">Заработано по дню рейса</div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      <MiniCard label="Итого" value={formatRUB(paidByTripDay.revenue || 0)} />
+                      <MiniCard label="Наличными" value={formatRUB(paidByTripDay.cash || 0)} />
+                      <MiniCard label="Картой" value={formatRUB(paidByTripDay.card || 0)} />
+                    </div>
+                  </div>
+
+                  {pendingDay === "tomorrow" && (
+                    <div className="mt-3 rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3">
+                      <div className="text-[11px] text-neutral-500 mb-2">Собрано сегодня на завтра</div>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                        <MiniCard label="Итого" value={formatRUB(collectedToday.by_trip_day.tomorrow.revenue)} />
+                        <MiniCard label="Наличными" value={formatRUB(collectedToday.by_trip_day.tomorrow.cash)} />
+                        <MiniCard label="Картой" value={formatRUB(collectedToday.by_trip_day.tomorrow.card)} />
+                      </div>
+                    </div>
+                  )}
+
+                  {pendingDay === "day2" && (
+                    <div className="mt-3 rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3">
+                      <div className="text-[11px] text-neutral-500 mb-2">Собрано сегодня на послезавтра</div>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                        <MiniCard label="Итого" value={formatRUB(collectedToday.by_trip_day.day2.revenue)} />
+                        <MiniCard label="Наличными" value={formatRUB(collectedToday.by_trip_day.day2.cash)} />
+                        <MiniCard label="Картой" value={formatRUB(collectedToday.by_trip_day.day2.card)} />
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="mt-3 text-sm text-red-200">Ошибка загрузки pending</div>
+              )}
             </div>
+          )}
+        </CollapsibleCard>
+
+        <CollapsibleCard
+          title="Возвраты И Выручка По Дню Рейса"
+          subtitle="Вторичные cashflow и earned-метрики вне первого экрана"
+        >
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <Card>
+              <div className="text-[11px] text-neutral-500">Возвраты за период</div>
+              <div data-testid="owner-money-refund-total" className="mt-1 text-2xl font-extrabold tracking-tight text-red-400">
+                {formatRUB(refundTotal)}
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <MiniCard label="Наличными" value={formatRUB(refundCash)} />
+                <MiniCard label="Картой" value={formatRUB(refundCard)} />
+              </div>
+            </Card>
+
+            <Card>
+              <div className="text-[11px] text-neutral-500">Заработано по дню рейса</div>
+              <div className="mt-1 text-2xl font-extrabold tracking-tight text-emerald-300">
+                {formatRUB(paidByTripDay.revenue || 0)}
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <MiniCard label="Наличными" value={formatRUB(paidByTripDay.cash || 0)} />
+                <MiniCard label="Картой" value={formatRUB(paidByTripDay.card || 0)} />
+              </div>
+            </Card>
+          </div>
+        </CollapsibleCard>
+
+        <CollapsibleCard
+          title="Билеты, Рейсы И Загрузка"
+          subtitle="Операционные показатели вынесены из верхнего money-day блока"
+        >
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <MiniCard testId="owner-money-tickets-total" label="Билеты" value={formatInt(tickets)} />
+            <Pill testId="owner-money-trips-total" label="Рейсы" value={formatInt(trips)} />
+            <Pill
+              testId="owner-money-fill-percent"
+              label="Загрузка"
+              value={fillPercent ? `${formatInt(fillPercent)}%` : "—"}
+              accent="amber"
+            />
+          </div>
+        </CollapsibleCard>
+
+        <CollapsibleCard title="Тренд По Дням" subtitle={`Собрано по дням: ${days.preset}`}>
+          {bars.length === 0 || !hasAnyRevenue ? (
+            <div className="text-sm text-neutral-500">Данные отсутствуют</div>
+          ) : (
+            <div className="flex items-end justify-center gap-2 h-[110px]">
+              {bars.map((b) => (
+                <div
+                  key={b.day}
+                  className={
+                    bars.length === 1
+                      ? "w-[56px] flex flex-col items-center gap-2"
+                      : "flex-1 flex flex-col items-center gap-2"
+                  }
+                >
+                  <div
+                    className={[
+                      "w-full rounded-md",
+                      b.v < 35 ? "bg-red-900/70" : b.v < 60 ? "bg-amber-900/70" : "bg-emerald-900/70",
+                    ].join(" ")}
+                    style={{ height: `${Math.max(12, Math.round((b.v / 100) * 110))}px` }}
+                    title={`${b.day}: ${formatRUB(b.revenue)}`}
+                  />
+                  <div className="text-[10px] text-neutral-500">{b.label}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CollapsibleCard>
+
+        <CollapsibleCard title="Внутренние Расчёты" subtitle="Канонический breakdown Shift Close и второстепенные money KPI">
+          <div data-testid="owner-money-main-kpi-title" className="text-[13px] font-semibold text-neutral-100">
+            {OWNER_MONEY_MAIN_KPI_TITLE}
+          </div>
+          <div data-testid="owner-money-main-kpi-formula" className="mt-1 text-[11px] text-neutral-300/90">
+            {OWNER_MONEY_MAIN_KPI_FORMULA}
+          </div>
+          <div data-testid="owner-money-dispatcher-kpi-link" className="mt-1 text-[10px] text-neutral-400">
+            Это = "сдать owner" у диспетчера.
           </div>
 
-          <div className="mt-3 text-xs text-neutral-400">Обязательства фондов сегодня</div>
-          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-            <MiniCard testId="owner-money-funds-weekly" label="Weekly фонд" value={formatRUB(fundsWithholdWeeklyToday)} />
-            <MiniCard testId="owner-money-funds-season" label="Season фонд" value={formatRUB(fundsWithholdSeasonToday)} />
+          <div className="mt-3 space-y-2">
+            <Row label="Источник" value={ownerDecisionMetrics?.source || (manualOn ? "manual > online" : "online")} tone={manualOn ? "warn" : "neutral"} />
+            <Row label="Диапазон" value={money.range?.from && money.range?.to ? `${money.range.from} → ${money.range.to}` : "—"} />
+            <Row label="Чистый результат" value={formatRUB(netTotal)} tone={netTotal < 0 ? "neg" : "pos"} />
+            <Row label="Чистыми наличными" value={formatRUB(netCash)} tone={netCash < 0 ? "neg" : "neutral"} />
+            <Row label="Чистыми картой" value={formatRUB(netCard)} tone={netCard < 0 ? "neg" : "neutral"} />
+            <Row label="Нал до резерва" value={formatRUB(ownerAvailableCashBeforeReserve)} />
+            <Row label="Нал после резерва" value={formatRUB(ownerAvailableCashAfterReserve)} />
+            <Row label="К выдаче зарплат" value={formatRUB(salaryToPay)} />
+            <Row label="Забрать с продавцов" value={formatRUB(sellersCollectTotal)} />
+            <Row label="Бонусы диспетчерам" value={formatRUB(fundsWithholdDispatcherBonusToday)} />
+            <Row label="Округления в Season" value={formatRUB(fundsWithholdRoundingToSeasonToday)} />
+            <Row label="Итого удержаний фондов" value={formatRUB(fundsWithholdTotalToday)} />
+            <Row
+              label="Комментарий"
+              value={manualOn ? "Есть дни с ручным вводом" : ""}
+              tone={manualOn ? "warn" : "neutral"}
+              hideIfEmpty
+            />
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <MiniCard testId="owner-money-available-before-reserve" label="Канонически до резерва" value={formatRUB(ownerAvailableCashBeforeReserve)} />
+            <MiniCard testId="owner-money-available-after-reserve" label="Канонически после резерва" value={formatRUB(ownerAvailableCashAfterReserve)} />
             <MiniCard testId="owner-money-funds-dispatcher-bonus" label="Бонусы диспетчерам" value={formatRUB(fundsWithholdDispatcherBonusToday)} />
-            <MiniCard testId="owner-money-funds-rounding" label="Округления (в составе season)" value={formatRUB(fundsWithholdRoundingToSeasonToday)} />
-            <MiniCard testId="owner-money-funds-total" label="Итого обязательств фондов" value={formatRUB(fundsWithholdTotalToday)} />
+            <MiniCard testId="owner-money-funds-rounding" label="Округления в Season" value={formatRUB(fundsWithholdRoundingToSeasonToday)} />
+            <MiniCard testId="owner-money-funds-total" label="Итого удержаний фондов" value={formatRUB(fundsWithholdTotalToday)} />
+            <MiniCard testId="owner-money-funds-cash" label="Cash-часть удержаний" value={formatRUB(fundsWithholdCashToday)} />
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <MiniCard testId="owner-money-funds-cash" label="Cash-часть обязательств" value={formatRUB(fundsWithholdCashToday)} />
-            <MiniCard testId="owner-money-funds-card" label="Card-часть обязательств" value={formatRUB(fundsWithholdCardToday)} />
+
+          <div className="mt-3">
+            <MiniCard testId="owner-money-funds-card" label="Card-часть удержаний" value={formatRUB(fundsWithholdCardToday)} />
           </div>
-          <div className="mt-2 text-[10px] text-neutral-500">Split cash/card: метрики удержаний показаны по способу оплаты.</div>
+
           {showFundsCashOnlyHint && (
-            <div data-testid="owner-money-funds-cash-only-hint" className="mt-1 text-[10px] text-neutral-400">
+            <div data-testid="owner-money-funds-cash-only-hint" className="mt-2 text-[10px] text-neutral-400">
               {OWNER_MONEY_FUNDS_CASH_ONLY_HINT_TEXT}
             </div>
           )}
-        </Card>
 
-        <Card className="col-span-2">
-          <div data-testid="owner-money-main-kpi-title" className="text-[13px] font-semibold text-neutral-100">{OWNER_MONEY_MAIN_KPI_TITLE}</div>
-          <div data-testid="owner-money-main-kpi" className={`mt-1 text-5xl font-extrabold tracking-tight ${cashTakeawayAfterReserveAndFunds < 0 ? 'text-red-200' : 'text-cyan-200'}`}>
-            {formatRUB(cashTakeawayAfterReserveAndFunds)}
-          </div>
-          <div data-testid="owner-money-main-kpi-formula" className="mt-1 text-[11px] text-neutral-300/90">{OWNER_MONEY_MAIN_KPI_FORMULA}</div>
-          <div data-testid="owner-money-dispatcher-kpi-link" className="mt-1 text-[10px] text-neutral-400">Это = "сдать owner" у диспетчера.</div>
-        </Card>
-
-        {/* 2️⃣ Оборот (до возвратов) */}
-        <Card>
-          <div className="text-[11px] text-neutral-500">Оборот</div>
-          <div className="text-[10px] text-neutral-600">Все деньги до возвратов</div>
-          <div data-testid="owner-money-collected-total" className="mt-1 text-2xl font-extrabold tracking-tight">{formatRUB(revenue)}</div>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <MiniCard testId="owner-money-collected-cash" label="Наличные" value={formatRUB(cash)} />
-            <MiniCard testId="owner-money-collected-card" label="Карта" value={formatRUB(card)} />
-          </div>
-        </Card>
-
-        {/* 3️⃣ Возвраты */}
-        <Card>
-          <div className="text-[11px] text-neutral-500">Возвраты за период</div>
-          <div data-testid="owner-money-refund-total" className="mt-1 text-2xl font-extrabold tracking-tight text-red-400">{formatRUB(refundTotal)}</div>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <MiniCard label="Наличные" value={formatRUB(refundCash)} />
-            <MiniCard label="Карта" value={formatRUB(refundCard)} />
-          </div>
-        </Card>
-
-        {/* 4️⃣ Trip-метрики */}
-        <Card>
-          <div className="text-[11px] text-neutral-500">Билеты и рейсы</div>
-          <div data-testid="owner-money-tickets-total" className="mt-1 text-2xl font-extrabold tracking-tight">{formatInt(tickets)} билетов</div>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <Pill testId="owner-money-trips-total" label="Рейсов" value={formatInt(trips)} />
-            <Pill testId="owner-money-fill-percent" label="Загрузка" value={fillPercent ? `${formatInt(fillPercent)}%` : "—"} accent="amber" />
-          </div>
-        </Card>
-
-        {/* Ожидает оплаты по дате рейса */}
-        <Card>
-          <div className="text-[11px] text-neutral-500">Ожидает оплаты</div>
-          <div className="text-[10px] text-neutral-600">По дате рейса</div>
-          <div data-testid="owner-money-pending-total" className="mt-1 text-2xl font-extrabold tracking-tight text-amber-300">{formatRUB(pendingAmount)}</div>
-          <div className="mt-1 text-[10px] text-neutral-500">За рейсы в "{preset}"</div>
-        </Card>
-
+          {debugChecks.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {debugChecks.map(([key, value]) => (
+                <Row key={key} label={`check: ${key}`} value={formatRUB(value)} tone={Number(value) === 0 ? "neutral" : "warn"} />
+              ))}
+            </div>
+          )}
+        </CollapsibleCard>
       </div>
-
-      {/* Pending (today / tomorrow / day2) — показываем только для "Сегодня" */}
-      {preset === "today" && (
-      <Card className="mt-2">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-sm font-semibold">Ожидает оплаты (по дате рейса)</div>
-            <div className="text-[10px] text-neutral-500">По дате рейса (business_day), не по дате оплаты</div>
-          </div>
-          <div className="flex gap-1">
-            {[
-              
-              { key: "tomorrow", label: "Завтра" },
-              { key: "day2", label: "Послезавтра" },
-            ].map((d) => (
-              <button
-                key={d.key}
-                type="button"
-                onClick={() => setPendingDay(d.key)}
-                className={[
-                  "px-2 py-1 rounded-xl border text-xs",
-                  pendingDay === d.key
-                    ? "border-amber-500 text-amber-300 bg-amber-900/10"
-                    : "border-neutral-800 text-neutral-300 bg-neutral-950/30 hover:bg-neutral-900/40",
-                ].join(" ")}
-              >
-                {d.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {pendingLoading ? (
-          <div className="mt-3 text-sm text-neutral-500">Загрузка…</div>
-        ) : pendingData ? (
-          <>
-            <div className="mt-3 grid grid-cols-3 gap-2">
-              <MiniCard
-                label="Сумма"
-                value={formatRUB(pendingData.sum ?? pendingData.sum_pending ?? pendingData.amount ?? pendingData.total ?? 0)}
-              />
-              <MiniCard label="Билетов" value={formatInt(pendingData.tickets ?? pendingData.tickets_count ?? 0)} />
-              <MiniCard label="Рейсов" value={formatInt(pendingData.trips ?? pendingData.trips_count ?? 0)} />
-            </div>
-            {/* Оплачено за рейсы (по дате рейса, для выбранного preset) */}
-            <div className="mt-3 rounded-2xl border border-emerald-900/50 bg-emerald-950/20 p-3">
-              <div className="text-[11px] text-neutral-500 mb-2">Оплачено за рейсы (по дате рейса)</div>
-              <div className="grid grid-cols-3 gap-2">
-                <MiniCard label="Итого" value={formatRUB(paidByTripDay.revenue || 0)} />
-                <MiniCard label="Наличные" value={formatRUB(paidByTripDay.cash || 0)} />
-                <MiniCard label="Карта" value={formatRUB(paidByTripDay.card || 0)} />
-              </div>
-            </div>
-            {/* Оплачено на завтра (собрано сегодня) */}
-            {pendingDay === 'tomorrow' && (
-              <div className="mt-3 rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3">
-                <div className="text-[11px] text-neutral-500 mb-2">Оплачено на завтра (собрано сегодня)</div>
-                <div className="grid grid-cols-3 gap-2">
-                  <MiniCard label="Итого" value={formatRUB(collectedToday.by_trip_day.tomorrow.revenue)} />
-                  <MiniCard label="Наличные" value={formatRUB(collectedToday.by_trip_day.tomorrow.cash)} />
-                  <MiniCard label="Карта" value={formatRUB(collectedToday.by_trip_day.tomorrow.card)} />
-                </div>
-              </div>
-            )}
-            {/* Оплачено на послезавтра (собрано сегодня) */}
-            {pendingDay === 'day2' && (
-              <div className="mt-3 rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3">
-                <div className="text-[11px] text-neutral-500 mb-2">Оплачено на послезавтра (собрано сегодня)</div>
-                <div className="grid grid-cols-3 gap-2">
-                  <MiniCard label="Итого" value={formatRUB(collectedToday.by_trip_day.day2.revenue)} />
-                  <MiniCard label="Наличные" value={formatRUB(collectedToday.by_trip_day.day2.cash)} />
-                  <MiniCard label="Карта" value={formatRUB(collectedToday.by_trip_day.day2.card)} />
-                </div>
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="mt-3 text-sm text-red-200">Ошибка загрузки pending</div>
-        )}
-      </Card>
       )}
-
-      {/* Week bars */}
-      <Card className="mt-2">
-        <div className="flex items-center justify-between">
-          <div className="text-sm font-semibold">Собрано по дням</div>
-          <div className="text-[11px] text-neutral-500">{days.preset}</div>
-        </div>
-
-        {bars.length === 0 || !hasAnyRevenue ? (
-          <div className="mt-3 text-sm text-neutral-500">Данные отсутствуют</div>
-        ) : (
-          <div className="mt-3 flex items-end justify-center gap-2 h-[110px]">
-            {bars.map((b) => (
-              <div
-                key={b.day}
-                className={
-                  bars.length === 1
-                    ? "w-[56px] flex flex-col items-center gap-2"
-                    : "flex-1 flex flex-col items-center gap-2"
-                }
-              >
-                <div
-                  className={[
-                    "w-full rounded-md",
-                    b.v < 35 ? "bg-red-900/70" : b.v < 60 ? "bg-amber-900/70" : "bg-emerald-900/70",
-                  ].join(" ")}
-                  style={{ height: `${Math.max(12, Math.round((b.v / 100) * 110))}px` }}
-                  title={`${b.day}: ${formatRUB(b.revenue)}`}
-                />
-                <div className="text-[10px] text-neutral-500">{b.label}</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      {/* Notes */}
-      <div className="mt-2 space-y-2">
-        <Row label="Источник" value={manualOn ? "manual > online" : "online"} tone={manualOn ? "warn" : "neutral"} />
-        <Row
-          label="Комментарий"
-          value={manualOn ? "Есть дни с ручным вводом" : ""}
-          tone={manualOn ? "warn" : "neutral"}
-          hideIfEmpty
-        />
-      </div>
     </div>
   );
 }
 
 /* ---------- UI atoms ---------- */
+
+function MetricCard({ label, value, testId, featured = false, tone = "neutral" }) {
+  const valueCls =
+    tone === "neg"
+      ? "text-red-200"
+      : tone === "accent"
+      ? "text-cyan-200"
+      : "text-neutral-100";
+
+  return (
+    <div
+      data-testid={testId}
+      className={[
+        "rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3",
+        "shadow-[0_10px_30px_rgba(0,0,0,0.35)]",
+        featured ? "sm:col-span-2 xl:col-span-3" : "",
+      ].join(" ")}
+    >
+      <div className="text-[11px] text-neutral-500">{label}</div>
+      <div className={["mt-1 font-extrabold tracking-tight", featured ? "text-4xl" : "text-2xl", valueCls].join(" ")}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function CollapsibleCard({ title, subtitle, defaultOpen = false, children, testId, summaryTestId }) {
+  return (
+    <details
+      data-testid={testId}
+      open={defaultOpen}
+      className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
+    >
+      <summary data-testid={summaryTestId} className="flex cursor-pointer list-none items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold">{title}</div>
+          {subtitle ? <div className="text-[11px] text-neutral-500">{subtitle}</div> : null}
+        </div>
+        <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500">details</div>
+      </summary>
+      <div className="mt-3">{children}</div>
+    </details>
+  );
+}
 
 function Card({ children, className = "" }) {
   return (
@@ -627,7 +764,7 @@ function Pill({ label, value, accent, testId }) {
   );
 }
 
-function Row({ label, value, tone, hideIfEmpty }) {
+function Row({ label, value, tone, hideIfEmpty, testId }) {
   if (hideIfEmpty && !String(value || "").trim()) return null;
   const vCls =
     tone === "warn"
@@ -638,7 +775,7 @@ function Row({ label, value, tone, hideIfEmpty }) {
       ? "text-red-300"
       : "text-neutral-200";
   return (
-    <div className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.25)] flex items-center justify-between gap-3">
+    <div data-testid={testId} className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3 shadow-[0_10px_30px_rgba(0,0,0,0.25)] flex items-center justify-between gap-3">
       <div className="text-sm text-neutral-400">{label}</div>
       <div className={["text-sm font-semibold whitespace-nowrap", vCls].join(" ")}>{value}</div>
     </div>

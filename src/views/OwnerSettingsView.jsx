@@ -341,12 +341,17 @@ export default function OwnerSettingsView({ onSettingsSaved }) {
   // Validation: can save?
   const motivationPercentValid = typeof motivationPercent === 'number' && !isNaN(motivationPercent) && motivationPercent >= 0 && motivationPercent <= 100;
   const sharesValid = !isAdaptive || (individualShare + teamShare === 100);
-  const coefficientsValid = !isAdaptive || [
+  const adaptivePointCoefficientsValid = [
     coefSpeed, coefWalk, coefFishing,
     kBananaHedgehog, kBananaCenter, kBananaSanatorium, kBananaStationary,
-    kZoneHedgehog, kZoneCenter, kZoneSanatorium, kZoneStationary,
-    kDispatchers
+    kZoneHedgehog, kZoneCenter, kZoneSanatorium, kZoneStationary
   ].every(c => typeof c === 'number' && !isNaN(c) && c > 0);
+  const dispatcherWeightValid =
+    typeof kDispatchers === 'number' &&
+    !isNaN(kDispatchers) &&
+    kDispatchers >= 1 &&
+    kDispatchers <= 1.5;
+  const coefficientsValid = !isAdaptive || (adaptivePointCoefficientsValid && dispatcherWeightValid);
   const canSave = motivationPercentValid && sharesValid && coefficientsValid;
 
   return (
@@ -551,7 +556,7 @@ export default function OwnerSettingsView({ onSettingsSaved }) {
             {/* D) Вес диспетчера */}
             <Card>
               <div className="text-sm text-neutral-400 mb-3">Вес диспетчера</div>
-              <DecimalRow label="Множитель" value={kDispatchers} onChange={setKDispatchers} min={0.1} max={10} />
+              <DecimalRow label="Множитель" value={kDispatchers} onChange={setKDispatchers} min={1} max={1.5} />
               <div className="mt-2 text-xs text-neutral-500">
                 Используется для взвешенной выручки диспетчера в adaptive-режиме.
               </div>

@@ -212,6 +212,170 @@ describe('Dispatcher Sales API (Real Backend)', () => {
       expect(res.body.code).toBe('PREPAYMENT_EXCEEDS_TOTAL');
     });
   });
+
+  describe('3.1️⃣ Ledger regression: presale + tickets + legacy payment flow', () => {
+    it('must write SALE_* row to money_ledger for CASH/CARD/MIXED when using /payment', async () => {
+      const scenarios = [
+        {
+          label: 'CASH',
+          createPrepay: 0,
+          createPayloadExtra: {},
+          additionalPayment: 1500,
+          expectedLedgerType: 'SALE_ACCEPTED_CASH',
+          expectedMethod: 'CASH'
+        },
+        {
+          label: 'CARD',
+          createPrepay: 500,
+          createPayloadExtra: { payment_method: 'CARD' },
+          additionalPayment: 1000,
+          expectedLedgerType: 'SALE_ACCEPTED_CARD',
+          expectedMethod: 'CARD'
+        },
+        {
+          label: 'MIXED',
+          createPrepay: 500,
+          createPayloadExtra: { payment_method: 'MIXED', cash_amount: 250, card_amount: 250 },
+          additionalPayment: 1000,
+          expectedLedgerType: 'SALE_ACCEPTED_MIXED',
+          expectedMethod: 'MIXED'
+        }
+      ];
+
+      for (const scenario of scenarios) {
+        const createRes = await request(app)
+          .post('/api/selling/presales')
+          .set('Authorization', `Bearer ${dispatcherToken}`)
+          .send({
+            slotUid: `generated:${testData.genSlotId1}`,
+            customerName: `Ledger ${scenario.label}`,
+            customerPhone: `7999000${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`,
+            numberOfSeats: 1,
+            prepaymentAmount: scenario.createPrepay,
+            tripDate: testData.today,
+            ...scenario.createPayloadExtra
+          });
+
+        expect(createRes.status).toBe(201);
+        const presaleId = Number(createRes.body?.presale?.id);
+        expect(Number.isFinite(presaleId)).toBe(true);
+
+        // Regression invariant: presale + tickets are created.
+        const tickets = db.prepare('SELECT id FROM tickets WHERE presale_id = ? AND status = ?').all(presaleId, 'ACTIVE');
+        expect(tickets.length).toBe(1);
+
+        const paymentRes = await request(app)
+          .patch(`/api/selling/presales/${presaleId}/payment`)
+          .set('Authorization', `Bearer ${dispatcherToken}`)
+          .send({ additionalPayment: scenario.additionalPayment });
+
+        expect(paymentRes.status).toBe(200);
+
+        // Regression invariant: sale ledger row MUST exist after /payment.
+        const ledgerRows = db.prepare(`
+          SELECT type, method, amount
+          FROM money_ledger
+          WHERE presale_id = ?
+            AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+          ORDER BY id ASC
+        `).all(presaleId);
+
+        expect(ledgerRows.length).toBeGreaterThan(0);
+
+        const addedByPayment = ledgerRows.find(
+          (row) => row.type === scenario.expectedLedgerType && Number(row.amount) === scenario.additionalPayment
+        );
+        expect(addedByPayment).toBeDefined();
+        expect(String(addedByPayment.method || '').toUpperCase()).toBe(scenario.expectedMethod);
+
+        if (scenario.label === 'MIXED') {
+          const updated = db.prepare(`
+            SELECT payment_method, payment_cash_amount, payment_card_amount, prepayment_amount, total_price
+            FROM presales
+            WHERE id = ?
+          `).get(presaleId);
+          expect(String(updated.payment_method || '').toUpperCase()).toBe('MIXED');
+          expect(Number(updated.payment_cash_amount)).toBeGreaterThan(0);
+          expect(Number(updated.payment_card_amount)).toBeGreaterThan(0);
+          expect(Number(updated.payment_cash_amount) + Number(updated.payment_card_amount)).toBe(Number(updated.prepayment_amount));
+          expect(Number(updated.prepayment_amount)).toBe(Number(updated.total_price));
+        }
+      }
+    });
+
+    it('keeps legacy /payment attribution aligned with the sale owner for dispatcher self-sale vs seller sale', async () => {
+      const createSelfRes = await request(app)
+        .post('/api/selling/presales')
+        .set('Authorization', `Bearer ${dispatcherToken}`)
+        .send({
+          slotUid: `generated:${testData.genSlotId1}`,
+          customerName: 'Legacy Self Attribution',
+          customerPhone: '79991110001',
+          numberOfSeats: 1,
+          tripDate: testData.today
+        });
+
+      expect(createSelfRes.status).toBe(201);
+      const selfPresaleId = Number(createSelfRes.body?.presale?.id);
+      const selfTotalPrice = Number(createSelfRes.body?.presale?.total_price || 0);
+
+      const selfPaymentRes = await request(app)
+        .patch(`/api/selling/presales/${selfPresaleId}/payment`)
+        .set('Authorization', `Bearer ${dispatcherToken}`)
+        .send({ additionalPayment: selfTotalPrice });
+
+      expect(selfPaymentRes.status).toBe(200);
+
+      const selfLedgerRow = db.prepare(`
+        SELECT seller_id, kind, type, amount
+        FROM money_ledger
+        WHERE presale_id = ?
+          AND type LIKE 'SALE_ACCEPTED%'
+        ORDER BY id DESC
+        LIMIT 1
+      `).get(selfPresaleId);
+
+      expect(Number(selfLedgerRow?.seller_id || 0)).toBe(testData.dispatcherId);
+      expect(String(selfLedgerRow?.kind || '')).toBe('DISPATCHER_SHIFT');
+      expect(Number(selfLedgerRow?.amount || 0)).toBe(selfTotalPrice);
+
+      const createSellerRes = await request(app)
+        .post('/api/selling/presales')
+        .set('Authorization', `Bearer ${dispatcherToken}`)
+        .send({
+          slotUid: `generated:${testData.genSlotId1}`,
+          customerName: 'Legacy Seller Attribution',
+          customerPhone: '79991110002',
+          numberOfSeats: 1,
+          sellerId: testData.sellerId,
+          tripDate: testData.today
+        });
+
+      expect(createSellerRes.status).toBe(201);
+      const sellerPresaleId = Number(createSellerRes.body?.presale?.id);
+      const sellerTotalPrice = Number(createSellerRes.body?.presale?.total_price || 0);
+
+      const sellerPaymentRes = await request(app)
+        .patch(`/api/selling/presales/${sellerPresaleId}/payment`)
+        .set('Authorization', `Bearer ${dispatcherToken}`)
+        .send({ additionalPayment: sellerTotalPrice });
+
+      expect(sellerPaymentRes.status).toBe(200);
+
+      const sellerLedgerRow = db.prepare(`
+        SELECT seller_id, kind, type, amount
+        FROM money_ledger
+        WHERE presale_id = ?
+          AND type LIKE 'SALE_ACCEPTED%'
+        ORDER BY id DESC
+        LIMIT 1
+      `).get(sellerPresaleId);
+
+      expect(Number(sellerLedgerRow?.seller_id || 0)).toBe(testData.sellerId);
+      expect(String(sellerLedgerRow?.kind || '')).toBe('SELLER_SHIFT');
+      expect(Number(sellerLedgerRow?.amount || 0)).toBe(sellerTotalPrice);
+    });
+  });
   
   describe('4️⃣ Продажа без предоплаты', () => {
     it('should create presale with zero prepayment', async () => {

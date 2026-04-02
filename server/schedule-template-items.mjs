@@ -469,6 +469,7 @@ router.patch('/schedule-template-items/:id', authenticateToken, canDispatchManag
 router.delete('/schedule-template-items/:id', authenticateToken, canDispatchManageSlots, (req, res) => {
   try {
     const itemId = parseInt(req.params.id);
+    let deleteResult = { changes: 0 };
     
     if (isNaN(itemId)) {
       return res.status(400).json({ ok: false, code: 'VALIDATION_ERROR', message: 'Invalid item ID' });
@@ -480,8 +481,11 @@ router.delete('/schedule-template-items/:id', authenticateToken, canDispatchMana
       return res.status(404).json({ ok: false, code: 'NOT_FOUND', message: 'Template item not found' });
     }
     
-    // Check if deleteFutureTrips parameter is true
-    const deleteFutureTrips = req.query.deleteFutureTrips === 'true';
+    // Accept both current and legacy query flags.
+    const deleteFutureTrips =
+      req.query.deleteFutureTrips === 'true' ||
+      req.query.delete_future_trips === '1' ||
+      req.query.delete_future_trips === 'true';
     
     // Check for any bad trips (with invalid prices/capacity) that depend on this template
     const badTrips = db.prepare(
@@ -501,7 +505,7 @@ router.delete('/schedule-template-items/:id', authenticateToken, canDispatchMana
       // Only delete trips with dates from today onwards
       const today = new Date().toISOString().split('T')[0];
       const deleteStmt = db.prepare('DELETE FROM generated_slots WHERE schedule_template_id = ? AND trip_date >= ?');
-      const deleteResult = deleteStmt.run(itemId, today);
+      deleteResult = deleteStmt.run(itemId, today);
       
       console.log(`[SCHEDULE_TEMPLATE_DELETE] Deleted ${deleteResult.changes} future trips for template ${itemId}`);
     } else {

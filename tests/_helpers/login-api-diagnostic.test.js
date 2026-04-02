@@ -1,24 +1,29 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { resetTestDb, getTestDb } from './dbReset.js';
+import { seedBasicData } from './seedBasic.js';
+import { makeApp } from './makeApp.js';
 
-// This test runs with the real database
-process.env.DB_FILE = 'd:\\Проэкты\\МОре\\boat-ticket-app\\database.sqlite';
+let app;
+let db;
 
-import { app } from '../../server/index.js';
+describe('LOGIN DIAGNOSTIC: isolated test database', () => {
+  beforeAll(async () => {
+    resetTestDb();
+    app = await makeApp();
+    db = getTestDb();
+    await seedBasicData(db);
+  });
 
-describe('LOGIN DIAGNOSTIC: Maria API', () => {
-  it('should login Maria via API and show detailed logs', async () => {
-    console.log('\n=== LOGIN API DIAGNOSTIC ===');
-    console.log('DB_FILE:', process.env.DB_FILE);
-    
+  it('logs in against the dedicated test DB instead of database.sqlite', async () => {
+    expect(String(process.env.DB_FILE || '')).toContain('_testdata');
+    expect(String(process.env.DB_FILE || '')).not.toMatch(/database\.sqlite$/);
+
     const res = await request(app)
       .post('/api/auth/login')
-      .send({ username: 'Maria', password: '1234' });
-    
-    console.log('Status:', res.status);
-    console.log('Body:', JSON.stringify(res.body, null, 2));
-    
-    // This test documents the result
-    expect(true).toBe(true);
+      .send({ username: 'sellerA', password: 'password123' });
+
+    expect(res.status).toBe(200);
+    expect(res.body?.token).toBeTruthy();
   });
 });

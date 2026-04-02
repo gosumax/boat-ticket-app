@@ -1,0 +1,97 @@
+{
+  "tests/dispatcher": [
+    "tests/dispatcher/10-shift-summary-motivation-withhold.test.js",
+    "tests/dispatcher/11-shift-close-withhold-ledger.test.js",
+    "tests/dispatcher/12-shift-close-race-guard.test.js",
+    "tests/dispatcher/dispatcher.delete.test.js",
+    "tests/dispatcher/dispatcher.logic.test.js",
+    "tests/dispatcher/dispatcher.sales.test.js",
+    "tests/dispatcher/dispatcher.transfer.test.js",
+    "tests/dispatcher/full-funnel-financial-regression.test.js",
+    "tests/dispatcher/seat-sync-seller-vs-dispatcher.test.js",
+    "tests/dispatcher/shift-close-cash-attribution.test.js",
+    "tests/dispatcher/shift-close-cashbox-sanity.test.js",
+    "tests/dispatcher/shift-close-contract-regression.test.js",
+    "tests/dispatcher/shift-close-hard-lock.test.js",
+    "tests/dispatcher/shift-close-locks-deposits.test.js",
+    "tests/dispatcher/shift-close-sellers-visibility.test.js",
+    "tests/dispatcher/shift-close-trips-gate.test.js",
+    "tests/dispatcher/shift-close.test.js",
+    "tests/dispatcher/shift-diagnose.test.js",
+    "tests/dispatcher/shift-ledger-summary-contract.test.js",
+    "tests/dispatcher/shift-salary-payout.test.js"
+  ],
+  "tests/finance-stress": [
+    "tests/finance-stress/cash-discipline.test.js",
+    "tests/finance-stress/dispatcher-owner-money-sync.e2e.test.js",
+    "tests/finance-stress/load.test.js",
+    "tests/finance-stress/money-ledger.test.js",
+    "tests/finance-stress/race.test.js"
+  ],
+  "tests/integration": [
+    "tests/integration/seller-dispatcher-sync.test.js"
+  ],
+  "tests/orchestrator": [
+    "tests/orchestrator/orchestrator-autonomous.test.js"
+  ],
+  "tests/owner": [
+    "tests/owner/00-date-consistency.test.js",
+    "tests/owner/01-owner-money-invariants.test.js",
+    "tests/owner/02-owner-money-refunds-net.test.js",
+    "tests/owner/03-owner-money-period-refunds-net.test.js",
+    "tests/owner/20-owner-settings-contract.test.js",
+    "tests/owner/21-motivation-day-snapshot.test.js",
+    "tests/owner/22-motivation-mode-points-gating.test.js",
+    "tests/owner/23-adaptive-recalc-parameters.test.js",
+    "tests/owner/24-streak-calibration.test.js",
+    "tests/owner/25-motivation-withhold.test.js",
+    "tests/owner/26-weekly-season-ledger-aggregate.test.js",
+    "tests/owner/27-weekly-season-consistency.test.js",
+    "tests/owner/28-invariants-endpoint.test.js",
+    "tests/owner/29-immutability-soft-lock.test.js",
+    "tests/owner/30-season-boundaries-ui.test.js",
+    "tests/owner/31-owner-money-funds-hint-ui-logic.test.js",
+    "tests/owner/32-owner-money-funds-ledger-internal.test.js",
+    "tests/owner/33-owner-money-main-kpi-ui-logic.test.js",
+    "tests/owner/99-mojibake-guard.test.js",
+    "tests/owner/owner-compare-sync.test.js",
+    "tests/owner/owner-edgecases.test.js",
+    "tests/owner/owner-entities-invariant.test.js",
+    "tests/owner/owner-invariant.test.js",
+    "tests/owner/owner-weekly.test.js"
+  ],
+  "tests/seller": [
+    "tests/seller/01-auth-and-me.test.js",
+    "tests/seller/02-slots-and-boats.test.js",
+    "tests/seller/03-presale-create.test.js",
+    "tests/seller/04-presale-payment-update.test.js",
+    "tests/seller/05-presale-cancel.test.js",
+    "tests/seller/06-presale-transfer.test.js",
+    "tests/seller/07-presale-tickets.test.js",
+    "tests/seller/08-ownership-security.test.js",
+    "tests/seller/09-idempotency-and-negative.test.js",
+    "tests/seller/10-seller-ui-scenarios-pricing.test.js"
+  ],
+  "tests/seller-dispatcher-sync": [
+    "tests/seller-dispatcher-sync/sync.delete.test.js",
+    "tests/seller-dispatcher-sync/sync.presale.test.js",
+    "tests/seller-dispatcher-sync/sync.sales.test.js",
+    "tests/seller-dispatcher-sync/sync.transfer.test.js"
+  ],
+  "tests/server": [
+    "tests/server/selling-delete-guard.test.js",
+    "tests/server/shift-guard.test.js"
+  ],
+  "tests/ui": [
+    "tests/ui/dispatcher-shift-close-normalize.test.js"
+  ],
+  "tests/_helpers": [
+    "tests/_helpers/bug-investigation.test.js",
+    "tests/_helpers/login-api-diagnostic.test.js"
+  ],
+  "e2e": [
+    "e2e/dispatcher-presale-creation.spec.js",
+    "e2e/dispatcher-shift-close-smoke.spec.js",
+    "e2e/full-funnel-day.spec.js"
+  ]
+}

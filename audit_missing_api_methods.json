@@ -1,0 +1,154 @@
+{
+  "generatedAt": "2026-03-30T02:33:44.409Z",
+  "missingMethods": [
+    {
+      "name": "cancelPreorder",
+      "consumers": [
+        "src/components/seller/ConfirmationScreen.jsx:86"
+      ]
+    },
+    {
+      "name": "cancelPresaleById",
+      "consumers": [
+        "src/components/seller/ConfirmationScreen.jsx:84"
+      ]
+    },
+    {
+      "name": "clearAllTrips",
+      "consumers": [
+        "src/components/admin/ClearTripsButton.jsx:21"
+      ]
+    },
+    {
+      "name": "createBoat",
+      "consumers": [
+        "src/components/admin/BoatManagement.jsx:93"
+      ]
+    },
+    {
+      "name": "createBoatSlot",
+      "consumers": [
+        "src/components/admin/BoatManagement.jsx:225"
+      ]
+    },
+    {
+      "name": "createTripTemplate",
+      "consumers": [
+        "src/components/dispatcher/SlotManagementWithSchedule.jsx:520",
+        "src/components/dispatcher/TripTemplates.jsx:124"
+      ]
+    },
+    {
+      "name": "createUser",
+      "consumers": [
+        "src/views/AdminView.jsx:112"
+      ]
+    },
+    {
+      "name": "deleteBoat",
+      "consumers": [
+        "src/components/admin/BoatManagement.jsx:162"
+      ]
+    },
+    {
+      "name": "deleteTripTemplate",
+      "consumers": [
+        "src/components/dispatcher/SlotManagementWithSchedule.jsx:570",
+        "src/components/dispatcher/TripTemplates.jsx:160"
+      ]
+    },
+    {
+      "name": "deleteUser",
+      "consumers": [
+        "src/views/AdminView.jsx:154"
+      ]
+    },
+    {
+      "name": "get",
+      "consumers": [
+        "src/views/AdminView.jsx:54",
+        "src/views/AdminView.jsx:90",
+        "src/views/SellerView.jsx:189"
+      ]
+    },
+    {
+      "name": "getBoatSlots",
+      "consumers": [
+        "src/components/admin/BoatManagement.jsx:68"
+      ]
+    },
+    {
+      "name": "getSellers",
+      "consumers": [
+        "src/views/AdminView.jsx:62"
+      ]
+    },
+    {
+      "name": "getSellerSales",
+      "consumers": [
+        "src/views/SellerEarnings.jsx:19"
+      ]
+    },
+    {
+      "name": "getTripTemplates",
+      "consumers": [
+        "src/components/dispatcher/TripTemplates.jsx:32"
+      ]
+    },
+    {
+      "name": "getWorkingZone",
+      "consumers": [
+        "src/components/admin/WorkingZoneMap.jsx:26"
+      ]
+    },
+    {
+      "name": "resetPassword",
+      "consumers": [
+        "src/views/AdminView.jsx:142"
+      ]
+    },
+    {
+      "name": "saveWorkingZone",
+      "consumers": [
+        "src/components/admin/WorkingZoneMap.jsx:39"
+      ]
+    },
+    {
+      "name": "toggleBoatActive",
+      "consumers": [
+        "src/components/admin/BoatManagement.jsx:135"
+      ]
+    },
+    {
+      "name": "toggleBoatSlotActive",
+      "consumers": [
+        "src/components/admin/BoatManagement.jsx:255"
+      ]
+    },
+    {
+      "name": "updateBoat",
+      "consumers": [
+        "src/components/admin/BoatManagement.jsx:116"
+      ]
+    },
+    {
+      "name": "updatePresalePayment",
+      "consumers": [
+        "src/components/dispatcher/PresaleListView.jsx:104"
+      ]
+    },
+    {
+      "name": "updateTripTemplate",
+      "consumers": [
+        "src/components/dispatcher/SlotManagementWithSchedule.jsx:515",
+        "src/components/dispatcher/TripTemplates.jsx:119"
+      ]
+    },
+    {
+      "name": "updateUser",
+      "consumers": [
+        "src/views/AdminView.jsx:126"
+      ]
+    }
+  ]
+}

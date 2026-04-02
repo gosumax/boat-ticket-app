@@ -14,6 +14,8 @@ import express from 'express';
 import db from './db.js';
 import * as auth from './auth.js';
 import { calcMotivationDay } from './motivation/engine.mjs';
+import { buildShiftCloseBreakdown, parseShiftCloseBreakdown } from './shift-close-breakdown.mjs';
+import { findCanonicalShiftClosureRow } from './shift-closure-schema.mjs';
 
 const authenticateToken = auth.authenticateToken || auth.default || auth;
 const canDispatchManageSlots = auth.canDispatchManageSlots;
@@ -79,10 +81,161 @@ function safeAll(sql, params = []) {
 
 function sumPositiveSellerLiabilities(rows = []) {
   return (rows || []).reduce((sum, r) => {
+    const totalDue = Number(r.net_total ?? r.balance ?? NaN);
+    if (Number.isFinite(totalDue)) {
+      return sum + Math.max(0, totalDue);
+    }
     const cashDue = Number(r.cash_due_to_owner ?? r.cash_balance ?? r.balance ?? 0);
     const terminalDue = Number(r.terminal_due_to_owner ?? r.terminal_debt ?? 0);
     return sum + Math.max(0, cashDue) + Math.max(0, terminalDue);
   }, 0);
+}
+
+function roundMoney(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function sumPositiveSellerCashDue(rows = []) {
+  return (rows || []).reduce((sum, row) => {
+    const due = Number(row?.cash_due_to_owner ?? row?.cash_balance ?? row?.cashRemaining ?? 0);
+    return sum + Math.max(0, due);
+  }, 0);
+}
+
+function sumPositiveSellerCardDue(rows = []) {
+  return (rows || []).reduce((sum, row) => {
+    const due = Number(row?.terminal_due_to_owner ?? row?.terminal_debt ?? row?.terminalDebt ?? 0);
+    return sum + Math.max(0, due);
+  }, 0);
+}
+
+function extractShiftMotivationWithhold(motivationResult) {
+  const data = motivationResult?.data;
+  if (!data) return null;
+
+  const withhold = data.withhold || {};
+  const settingsEffective = data.settings_effective || {};
+  const seasonFromRevenue = Number(withhold.season_from_revenue ?? withhold.season_amount ?? 0);
+  const seasonFromPrepaymentTransfer = Number(
+    withhold.season_from_prepayment_transfer ??
+    withhold.season_amount_from_cancelled_prepayment ??
+    0
+  );
+  const seasonTotal = Number(
+    withhold.season_total ??
+    withhold.season_fund_total ??
+    (seasonFromRevenue + seasonFromPrepaymentTransfer)
+  );
+
+  return {
+    viklif_percent: Number(withhold.viklif_percent ?? 0),
+    viklif_amount_raw: Number(withhold.viklif_amount_raw ?? 0),
+    viklif_amount: Number(withhold.viklif_amount ?? 0),
+    weekly_percent: Number(withhold.weekly_percent ?? 0),
+    weekly_percent_configured: Number(withhold.weekly_percent_configured ?? 0),
+    season_percent: Number(withhold.season_percent ?? 0),
+    weekly_amount_raw: Number(withhold.weekly_amount_raw ?? 0),
+    weekly_amount: Number(withhold.weekly_amount ?? 0),
+    season_amount: seasonFromRevenue,
+    season_from_revenue: seasonFromRevenue,
+    season_amount_base: Number(withhold.season_amount_base ?? 0),
+    season_amount_from_rounding: Number(withhold.season_amount_from_rounding ?? 0),
+    season_fund_total: seasonTotal,
+    season_total: seasonTotal,
+    season_amount_from_cancelled_prepayment: seasonFromPrepaymentTransfer,
+    season_from_prepayment_transfer: seasonFromPrepaymentTransfer,
+    viklif_rounding_to_season_amount: Number(withhold.viklif_rounding_to_season_amount ?? 0),
+    weekly_rounding_to_season_amount: Number(withhold.weekly_rounding_to_season_amount ?? 0),
+    dispatcher_rounding_to_season_amount: Number(withhold.dispatcher_rounding_to_season_amount ?? 0),
+    payouts_rounding_to_season_amount: Number(withhold.payouts_rounding_to_season_amount ?? 0),
+    rounding_to_season_amount_total: Number(withhold.rounding_to_season_amount_total ?? 0),
+    dispatcher_amount_total: Number(withhold.dispatcher_amount_total ?? 0),
+    fund_total_original: Number(withhold.fund_total_original ?? 0),
+    fund_total_after_withhold: Number(withhold.fund_total_after_withhold ?? data.salary_fund_total ?? 0),
+    salary_fund_total: Number(data.salary_fund_total ?? withhold.fund_total_after_withhold ?? 0),
+    dispatcher_percent_total: Number(
+      withhold.dispatcher_percent_total ??
+      settingsEffective.dispatcher_withhold_percent_total ??
+      0
+    ),
+    dispatcher_percent_total_configured: Number(
+      withhold.dispatcher_percent_total_configured ??
+      settingsEffective.dispatcher_withhold_percent_total_configured ??
+      settingsEffective.dispatcher_withhold_percent_total ??
+      0
+    ),
+    dispatcher_percent_per_person: Number(
+      withhold.dispatcher_percent_per_person ??
+      settingsEffective.dispatcher_withhold_percent_per_person ??
+      0
+    ),
+    active_dispatchers_count: Number(
+      withhold.active_dispatchers_count ??
+      data.dispatchers_today?.active_count ??
+      0
+    ),
+  };
+}
+
+function getFundsWithholdCashToday(motivationWithhold) {
+  if (!motivationWithhold) return 0;
+  const seasonFromRevenue = Number(
+    motivationWithhold.season_from_revenue ??
+    motivationWithhold.season_amount ??
+    0
+  );
+  const dispatcherAmount = Number(motivationWithhold.dispatcher_amount_total || 0);
+  return roundMoney(
+    Number(motivationWithhold.weekly_amount || 0) +
+    seasonFromRevenue +
+    dispatcherAmount
+  );
+}
+
+function getShiftCloseMotivationOptions(user) {
+  const role = String(user?.role || '').toLowerCase();
+  return {
+    profile: 'dispatcher_shift_close',
+    dispatcherUserId: role === 'dispatcher' ? Number(user?.id || 0) : null,
+  };
+}
+
+export function calcShiftOwnerCashMetrics({
+  netCash = 0,
+  salaryDueTotal = 0,
+  salaryPaidCash = 0,
+  salaryPaidTotal = 0,
+  sellers = [],
+  futureTripsReserveCash = 0,
+  fundsWithholdCashToday = 0,
+} = {}) {
+  const sellerCashDebtTotal = roundMoney(sumPositiveSellerCashDue(sellers));
+  const sellerCardDebtTotal = roundMoney(sumPositiveSellerCardDue(sellers));
+  const sellerDebtTotal = roundMoney(sellerCashDebtTotal + sellerCardDebtTotal);
+  const salaryRemainingTotal = roundMoney(Math.max(0, Number(salaryDueTotal || 0) - Number(salaryPaidTotal || 0)));
+  const ownerCashAvailableWithoutFutureReserve = roundMoney(
+    Number(netCash || 0) -
+    Number(salaryPaidCash || 0) -
+    sellerCashDebtTotal -
+    salaryRemainingTotal
+  );
+  const ownerCashAvailableAfterFutureReserveCash = roundMoney(
+    ownerCashAvailableWithoutFutureReserve - Number(futureTripsReserveCash || 0)
+  );
+  const ownerCashAvailableAfterReserveAndFundsCash = roundMoney(
+    ownerCashAvailableAfterFutureReserveCash - Number(fundsWithholdCashToday || 0)
+  );
+
+  return {
+    seller_cash_debt_total: sellerCashDebtTotal,
+    seller_card_debt_total: sellerCardDebtTotal,
+    seller_debt_total: sellerDebtTotal,
+    salary_remaining_total: salaryRemainingTotal,
+    owner_cash_available_without_future_reserve: ownerCashAvailableWithoutFutureReserve,
+    owner_cash_available_after_future_reserve_cash: ownerCashAvailableAfterFutureReserveCash,
+    owner_cash_available_after_reserve_and_funds_cash: ownerCashAvailableAfterReserveAndFundsCash,
+    owner_handover_cash_final: ownerCashAvailableAfterReserveAndFundsCash,
+  };
 }
 
 function isSellerRole(role) {
@@ -100,6 +253,128 @@ function isSellerUserId(userId) {
   }
 }
 
+function getParticipantCollectedTotal(row) {
+  return Number(
+    row?.collected_total ??
+    row?.accepted ??
+    row?.total_collected ??
+    row?.personal_revenue_day ??
+    0
+  );
+}
+
+function getParticipantSalaryTotal(row) {
+  return Number(
+    row?.salary_due_total ??
+    row?.salary_due ??
+    row?.salary_accrued ??
+    row?.total ??
+    0
+  );
+}
+
+function shouldKeepParticipantRow(row) {
+  const sellerId = Number(row?.seller_id ?? row?.sellerId ?? row?.id ?? 0);
+  if (!Number.isFinite(sellerId) || sellerId <= 0) return false;
+
+  const role = String(row?.role || '').toLowerCase();
+  if (role === 'dispatcher') {
+    return getParticipantCollectedTotal(row) > 0 || getParticipantSalaryTotal(row) > 0;
+  }
+  if (isSellerRole(role)) return true;
+  return isSellerUserId(sellerId);
+}
+
+function applyPayoutFields(row, payout) {
+  const base = { ...row };
+  if (!payout) {
+    return {
+      ...base,
+      salary_due: Number(base.salary_due || 0),
+      salary_due_total: Number(base.salary_due_total || base.salary_due || 0),
+      salary_accrued: Number(base.salary_accrued || base.salary_due_total || base.salary_due || 0),
+      team_part: Number(base.team_part || 0),
+      individual_part: Number(base.individual_part || 0),
+      dispatcher_daily_bonus: Number(base.dispatcher_daily_bonus || 0),
+      total_raw: Number(base.total_raw || 0),
+      salary_rounding_to_season: Number(base.salary_rounding_to_season || 0),
+      personal_revenue_day: Number(base.personal_revenue_day || base.collected_total || 0),
+    };
+  }
+
+  return {
+    ...base,
+    salary_due: Number(payout.total || 0),
+    salary_due_total: Number(payout.total || 0),
+    salary_accrued: Number(payout.total || 0),
+    team_part: Number(payout.team_part || 0),
+    individual_part: Number(payout.individual_part || 0),
+    dispatcher_daily_bonus: Number(payout.dispatcher_daily_bonus || 0),
+    total_raw: Number(payout.total_raw || payout.total || 0),
+    salary_rounding_to_season: Number(payout.salary_rounding_to_season || 0),
+    personal_revenue_day: Number(payout.personal_revenue_day || payout.revenue || base.personal_revenue_day || base.collected_total || 0),
+  };
+}
+
+function createSyntheticParticipantRowFromPayout(payout) {
+  const userId = Number(payout?.user_id || 0);
+  const role = String(payout?.role || '').toLowerCase() === 'dispatcher' ? 'dispatcher' : 'seller';
+  const personalRevenueDay = Number(payout?.personal_revenue_day || payout?.revenue || 0);
+  const participantName = String(
+    payout?.name ||
+    (role === 'dispatcher' ? `Dispatcher #${userId}` : `Seller #${userId}`)
+  );
+
+  return applyPayoutFields({
+    seller_id: userId,
+    seller_name: participantName,
+    name: participantName,
+    role,
+    accepted: personalRevenueDay,
+    deposited: 0,
+    balance: 0,
+    cash_balance: 0,
+    terminal_debt: 0,
+    terminal_due_to_owner: 0,
+    status: 'CLOSED',
+    collected_total: personalRevenueDay,
+    collected_cash: 0,
+    collected_card: 0,
+    refund_total: 0,
+    net_total: 0,
+    deposit_cash: 0,
+    deposit_card: 0,
+    cash_due_to_owner: 0,
+    personal_revenue_day: personalRevenueDay,
+  }, payout);
+}
+
+function mergeParticipantRowsWithPayouts(rows = [], payoutsByUserId = new Map()) {
+  const mergedRows = (rows || []).map((row) => ({ ...row }));
+  const rowIndexByUserId = new Map(
+    mergedRows.map((row, index) => [Number(row?.seller_id ?? row?.sellerId ?? row?.id ?? 0), index])
+  );
+
+  for (const [userId, payout] of payoutsByUserId.entries()) {
+    const index = rowIndexByUserId.get(Number(userId));
+    if (index === undefined) {
+      mergedRows.push(createSyntheticParticipantRowFromPayout(payout));
+      rowIndexByUserId.set(Number(userId), mergedRows.length - 1);
+      continue;
+    }
+    mergedRows[index] = applyPayoutFields(mergedRows[index], payout);
+  }
+
+  return mergedRows
+    .map((row) => {
+      const userId = Number(row?.seller_id ?? row?.sellerId ?? row?.id ?? 0);
+      return payoutsByUserId.has(userId)
+        ? applyPayoutFields(row, payoutsByUserId.get(userId))
+        : applyPayoutFields(row, null);
+    })
+    .filter(shouldKeepParticipantRow);
+}
+
 function getReserveTripDayExpr() {
   const presaleCols = safeGetColumns('presales');
   const ledgerCols = safeGetColumns('money_ledger');
@@ -114,7 +389,307 @@ function getReserveTripDayExpr() {
   return presaleTripDayExpr;
 }
 
-function calcFutureTripsReserveByPaymentDay({ businessDay, ledgerCols, hasLedger, ledgerHasBDay }) {
+function getLegacyMixedSplitCorrections({
+  businessDay,
+  ledgerHasCashAmount = false,
+  ledgerHasCardAmount = false,
+  hasPresales = false,
+} = {}) {
+  const empty = {
+    rootCashDelta: 0,
+    rootCardDelta: 0,
+    bySeller: new Map(),
+  };
+
+  if (ledgerHasCashAmount || ledgerHasCardAmount) return empty;
+  if (!safeTableExists('money_ledger')) return empty;
+  const hasCanonical = safeTableExists('sales_transactions_canonical');
+  if (!hasPresales && !hasCanonical) return empty;
+
+  const mixedRowsToday = safeAll(
+    `SELECT
+       ml.id,
+       ml.presale_id,
+       ml.seller_id,
+       ml.type,
+       ABS(ml.amount) AS amount,
+       p.payment_cash_amount,
+       p.payment_card_amount
+     FROM money_ledger ml
+     LEFT JOIN presales p ON p.id = ml.presale_id
+     WHERE ml.business_day = ?
+       AND ml.status = 'POSTED'
+       AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+       AND ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED')
+     ORDER BY ml.id ASC`,
+    [businessDay]
+  );
+
+  if (!Array.isArray(mixedRowsToday) || mixedRowsToday.length === 0) {
+    return empty;
+  }
+
+  const mixedRowsById = new Map(
+    mixedRowsToday.map((row) => [Number(row.id || 0), row])
+  );
+  const presaleIds = Array.from(new Set(
+    mixedRowsToday
+      .map((row) => Number(row?.presale_id || 0))
+      .filter((presaleId) => Number.isFinite(presaleId) && presaleId > 0)
+  ));
+
+  if (presaleIds.length === 0) {
+    return empty;
+  }
+
+  const placeholders = presaleIds.map(() => '?').join(', ');
+  const canonicalSplitByPresale = new Map();
+  if (hasCanonical) {
+    const rows = safeAll(
+      `SELECT
+         presale_id,
+         COALESCE(SUM(cash_amount), 0) AS cash_total,
+         COALESCE(SUM(card_amount), 0) AS card_total
+       FROM sales_transactions_canonical
+       WHERE presale_id IN (${placeholders})
+         AND status = 'VALID'
+       GROUP BY presale_id`,
+      presaleIds
+    );
+
+    for (const row of rows || []) {
+      canonicalSplitByPresale.set(Number(row.presale_id), {
+        cash: Number(row.cash_total || 0),
+        card: Number(row.card_total || 0),
+      });
+    }
+  }
+
+  const presaleSplitByPresale = new Map();
+  if (hasPresales) {
+    const rows = safeAll(
+      `SELECT
+         id,
+         payment_cash_amount,
+         payment_card_amount
+       FROM presales
+       WHERE id IN (${placeholders})`,
+      presaleIds
+    );
+
+    for (const row of rows || []) {
+      presaleSplitByPresale.set(Number(row.id), {
+        cash: Number(row.payment_cash_amount || 0),
+        card: Number(row.payment_card_amount || 0),
+      });
+    }
+  }
+
+  const historyRows = safeAll(
+    `SELECT
+       id,
+       presale_id,
+       type,
+       method,
+       ABS(amount) AS amount
+     FROM money_ledger
+     WHERE presale_id IN (${placeholders})
+       AND status = 'POSTED'
+       AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+       AND type IN (
+         'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+         'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
+         'SALE_CANCEL_REVERSE'
+       )
+     ORDER BY presale_id ASC, id ASC`,
+    presaleIds
+  );
+
+  const historyByPresale = new Map();
+  for (const row of historyRows || []) {
+    const presaleId = Number(row?.presale_id || 0);
+    if (!historyByPresale.has(presaleId)) {
+      historyByPresale.set(presaleId, []);
+    }
+    historyByPresale.get(presaleId).push(row);
+  }
+
+  const actualMixedSplitByRowId = new Map();
+  const resolveTargetSplit = (presaleId) => {
+    const canonical = canonicalSplitByPresale.get(presaleId);
+    const canonicalTotal = Number(canonical?.cash || 0) + Number(canonical?.card || 0);
+    if (canonicalTotal > 0) {
+      return canonical;
+    }
+
+    const presale = presaleSplitByPresale.get(presaleId);
+    const presaleTotal = Number(presale?.cash || 0) + Number(presale?.card || 0);
+    if (presaleTotal > 0) {
+      return presale;
+    }
+
+    return null;
+  };
+
+  const resolveMixedSaleSplit = ({ amount, targetCash, targetCard, usedCash, usedCard }) => {
+    const normalizedAmount = Math.max(0, Number(amount || 0));
+    const normalizedTargetCash = Math.max(0, Number(targetCash || 0));
+    const normalizedTargetCard = Math.max(0, Number(targetCard || 0));
+    if (!(normalizedAmount > 0) || (normalizedTargetCash + normalizedTargetCard) <= 0) {
+      return null;
+    }
+
+    let cash = Math.max(0, Math.min(normalizedAmount, normalizedTargetCash - Number(usedCash || 0)));
+    let card = Math.max(0, Math.min(normalizedAmount - cash, normalizedTargetCard - Number(usedCard || 0)));
+    let residual = roundMoney(normalizedAmount - cash - card);
+
+    if (residual > 0) {
+      const cardHeadroom = Math.max(0, normalizedTargetCard - Number(usedCard || 0) - card);
+      const addToCard = Math.min(residual, cardHeadroom);
+      card += addToCard;
+      residual = roundMoney(residual - addToCard);
+    }
+
+    if (residual > 0) {
+      const cashHeadroom = Math.max(0, normalizedTargetCash - Number(usedCash || 0) - cash);
+      const addToCash = Math.min(residual, cashHeadroom);
+      cash += addToCash;
+      residual = roundMoney(residual - addToCash);
+    }
+
+    if (residual > 0) {
+      const preferCard = normalizedTargetCard >= normalizedTargetCash;
+      if (preferCard) card += residual;
+      else cash += residual;
+    }
+
+    return {
+      cash: roundMoney(cash),
+      card: roundMoney(normalizedAmount - cash),
+    };
+  };
+
+  for (const presaleId of presaleIds) {
+    const targetSplit = resolveTargetSplit(presaleId);
+    const history = historyByPresale.get(presaleId) || [];
+    let runningCash = 0;
+    let runningCard = 0;
+
+    for (const row of history) {
+      const rowType = String(row?.type || '').toUpperCase();
+      const rowMethod = String(row?.method || '').toUpperCase();
+      const amount = Math.max(0, Number(row?.amount || 0));
+
+      if (!(amount > 0)) continue;
+
+      if (rowType === 'SALE_PREPAYMENT_CASH' || rowType === 'SALE_ACCEPTED_CASH') {
+        runningCash = roundMoney(runningCash + amount);
+        continue;
+      }
+
+      if (rowType === 'SALE_PREPAYMENT_CARD' || rowType === 'SALE_ACCEPTED_CARD') {
+        runningCard = roundMoney(runningCard + amount);
+        continue;
+      }
+
+      if (rowType === 'SALE_PREPAYMENT_MIXED' || rowType === 'SALE_ACCEPTED_MIXED') {
+        const resolved = resolveMixedSaleSplit({
+          amount,
+          targetCash: targetSplit?.cash,
+          targetCard: targetSplit?.card,
+          usedCash: runningCash,
+          usedCard: runningCard,
+        }) || { cash: amount, card: 0 };
+
+        runningCash = roundMoney(runningCash + Number(resolved.cash || 0));
+        runningCard = roundMoney(runningCard + Number(resolved.card || 0));
+
+        if (mixedRowsById.has(Number(row.id || 0))) {
+          actualMixedSplitByRowId.set(Number(row.id || 0), resolved);
+        }
+        continue;
+      }
+
+      if (rowType === 'SALE_CANCEL_REVERSE') {
+        if (rowMethod === 'CARD') {
+          runningCard = roundMoney(Math.max(0, runningCard - amount));
+          continue;
+        }
+
+        if (rowMethod === 'MIXED') {
+          const totalRunning = roundMoney(runningCash + runningCard);
+          if (totalRunning > 0) {
+            const refundCash = Math.min(runningCash, Math.round((amount * runningCash) / totalRunning));
+            const refundCard = Math.min(runningCard, amount - refundCash);
+            runningCash = roundMoney(Math.max(0, runningCash - refundCash));
+            runningCard = roundMoney(Math.max(0, runningCard - refundCard));
+          } else {
+            runningCash = roundMoney(Math.max(0, runningCash - amount));
+          }
+          continue;
+        }
+
+        runningCash = roundMoney(Math.max(0, runningCash - amount));
+      }
+    }
+  }
+
+  const bySeller = new Map();
+  let rootCashDelta = 0;
+  let rootCardDelta = 0;
+
+  for (const row of mixedRowsToday) {
+    const rowId = Number(row?.id || 0);
+    if (!Number.isFinite(rowId) || rowId <= 0) continue;
+
+    const fallbackCash = hasPresales
+      ? Number(row?.payment_cash_amount ?? row?.amount ?? 0)
+      : Number(row?.amount || 0);
+    const fallbackCard = hasPresales
+      ? Number(row?.payment_card_amount ?? 0)
+      : 0;
+
+    const actual = actualMixedSplitByRowId.get(rowId);
+    if (!actual) continue;
+
+    const cashDelta = roundMoney(Number(actual.cash || 0) - fallbackCash);
+    const cardDelta = roundMoney(Number(actual.card || 0) - fallbackCard);
+
+    if (cashDelta === 0 && cardDelta === 0) continue;
+
+    rootCashDelta = roundMoney(rootCashDelta + cashDelta);
+    rootCardDelta = roundMoney(rootCardDelta + cardDelta);
+
+    const sellerId = Number(row?.seller_id || 0);
+    if (!Number.isFinite(sellerId) || sellerId <= 0) continue;
+
+    if (!bySeller.has(sellerId)) {
+      bySeller.set(sellerId, {
+        collectedCashDelta: 0,
+        collectedCardDelta: 0,
+        prepaymentCashDelta: 0,
+        prepaymentCardDelta: 0,
+      });
+    }
+
+    const sellerDelta = bySeller.get(sellerId);
+    sellerDelta.collectedCashDelta = roundMoney(sellerDelta.collectedCashDelta + cashDelta);
+    sellerDelta.collectedCardDelta = roundMoney(sellerDelta.collectedCardDelta + cardDelta);
+
+    if (String(row?.type || '').toUpperCase() === 'SALE_PREPAYMENT_MIXED') {
+      sellerDelta.prepaymentCashDelta = roundMoney(sellerDelta.prepaymentCashDelta + cashDelta);
+      sellerDelta.prepaymentCardDelta = roundMoney(sellerDelta.prepaymentCardDelta + cardDelta);
+    }
+  }
+
+  return {
+    rootCashDelta,
+    rootCardDelta,
+    bySeller,
+  };
+}
+
+export function calcFutureTripsReserveByPaymentDay({ businessDay, ledgerCols, hasLedger, ledgerHasBDay }) {
   if (!hasLedger || !ledgerHasBDay || !safeTableExists('presales')) {
     return { cash: 0, card: 0, total: 0, unresolvedTripDayCount: 0 };
   }
@@ -208,11 +783,22 @@ function calcFutureTripsReserveByPaymentDay({ businessDay, ledgerCols, hasLedger
   };
 }
 
-function calcLiveUiLedgerTotals(businessDay) {
+export function calcLiveUiLedgerTotals(businessDay) {
   const defaults = {
+    live_source: 'ledger',
     owner_cash_today: 0,
     sellers_collect_total: 0,
     sellers: [],
+    collected_total: 0,
+    collected_cash: 0,
+    collected_card: 0,
+    collected_split_unallocated: 0,
+    refund_total: 0,
+    refund_cash: 0,
+    refund_card: 0,
+    net_total: 0,
+    net_cash: 0,
+    net_card: 0,
   };
 
   const hasLedger = safeTableExists('money_ledger');
@@ -228,45 +814,9 @@ function calcLiveUiLedgerTotals(businessDay) {
 
   if (!ledgerHasBDay || !ledgerHasType) return defaults;
 
-  const baseWhere = ['ml.business_day = ?'];
-  const baseParams = [businessDay];
-  if (ledgerHasStatus) baseWhere.push("ml.status = 'POSTED'");
-  if (ledgerHasKind) baseWhere.push("ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')");
-  const baseWhereSql = baseWhere.join(' AND ');
-
-  const ownerCashToday = safeSum(
-    `SELECT COALESCE(SUM(
-      CASE
-        WHEN ml.type IN (
-          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
-          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
-        ) THEN ml.amount
-        WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN -ABS(ml.amount)
-        ELSE 0
-      END
-    ), 0) AS v
-    FROM money_ledger ml
-    WHERE ${baseWhereSql}
-      AND ml.type IN (
-        'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
-        'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
-        'SALE_CANCEL_REVERSE'
-      )`,
-    baseParams
-  );
-
-  if (!ledgerHasSeller) {
-    return {
-      owner_cash_today: Number(ownerCashToday || 0),
-      sellers_collect_total: 0,
-      sellers: [],
-    };
-  }
-
   const hasPresales = safeTableExists('presales');
   const ledgerHasCashAmount = hasCol(ledgerCols, 'cash_amount');
   const ledgerHasCardAmount = hasCol(ledgerCols, 'card_amount');
-  const methodExpr = ledgerHasMethod ? 'ml.method' : "''";
   const mixedCashExpr = ledgerHasCashAmount
     ? 'COALESCE(ml.cash_amount, 0)'
     : hasPresales
@@ -295,50 +845,169 @@ function calcLiveUiLedgerTotals(businessDay) {
     : hasPresales
     ? 'ABS(COALESCE(p.payment_card_amount, 0))'
     : '0';
-  const presalesJoinSql = hasPresales ? 'LEFT JOIN presales p ON p.id = ml.presale_id' : '';
+  const refundCashSql = ledgerHasMethod
+    ? `CASE
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ml.method = 'CASH' THEN ABS(ml.amount)
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ml.method = 'MIXED' THEN ${mixedRefundCashExpr}
+         ELSE 0
+       END`
+    : `CASE
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ${mixedRefundCashExpr}
+         ELSE 0
+       END`;
+  const refundCardSql = ledgerHasMethod
+    ? `CASE
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ml.method = 'CARD' THEN ABS(ml.amount)
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ml.method = 'MIXED' THEN ${mixedRefundCardExpr}
+         ELSE 0
+       END`
+    : `CASE
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ${mixedRefundCardExpr}
+         ELSE 0
+       END`;
+  const sellerRefundCashExpr = ledgerHasMethod
+    ? `CASE
+         WHEN ml.method = 'CASH' THEN ABS(ml.amount)
+         WHEN ml.method = 'MIXED' THEN ${mixedRefundCashExpr}
+         ELSE 0
+       END`
+    : mixedRefundCashExpr;
+  const sellerRefundCardExpr = ledgerHasMethod
+    ? `CASE
+         WHEN ml.method = 'CARD' THEN ABS(ml.amount)
+         WHEN ml.method = 'MIXED' THEN ${mixedRefundCardExpr}
+         ELSE 0
+       END`
+    : mixedRefundCardExpr;
+  const legacyMixedCorrections = getLegacyMixedSplitCorrections({
+    businessDay,
+    ledgerHasCashAmount,
+    ledgerHasCardAmount,
+    hasPresales,
+  });
 
-  const sellerRows = safeAll(
+  const baseWhere = ['ml.business_day = ?'];
+  const baseParams = [businessDay];
+  if (ledgerHasStatus) baseWhere.push("ml.status = 'POSTED'");
+  if (ledgerHasKind) baseWhere.push("ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')");
+  const baseWhereSql = baseWhere.join(' AND ');
+  const collectedRow = safeAll(
     `SELECT
-       ml.seller_id AS seller_id,
-       su.username AS seller_name,
-       COALESCE(SUM(CASE
-         WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH') THEN ml.amount
-         WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') THEN ${mixedCashExpr}
-         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ${methodExpr} = 'CASH' THEN -ABS(ml.amount)
-         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ${methodExpr} = 'MIXED' THEN -(${mixedRefundCashExpr})
-         ELSE 0
-       END), 0) AS collected_cash,
-       COALESCE(SUM(CASE
-         WHEN ml.type IN ('SALE_PREPAYMENT_CARD','SALE_ACCEPTED_CARD') THEN ml.amount
-         WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') THEN ${mixedCardExpr}
-         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ${methodExpr} = 'CARD' THEN -ABS(ml.amount)
-         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ${methodExpr} = 'MIXED' THEN -(${mixedRefundCardExpr})
-         ELSE 0
-       END), 0) AS collected_card,
-       COALESCE(SUM(CASE
-         WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') THEN ml.amount
-         WHEN ml.type = 'SALE_CANCEL_REVERSE' AND ${methodExpr} = 'MIXED' THEN -ABS(ml.amount)
-         ELSE 0
-       END), 0) AS collected_mixed,
        COALESCE(SUM(CASE
          WHEN ml.type IN (
            'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
            'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
-         ) THEN ml.amount
+         ) THEN ABS(ml.amount)
+         ELSE 0
+       END), 0) AS collected_total,
+       COALESCE(SUM(CASE
+         WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH') THEN ABS(ml.amount)
+         WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') THEN ${mixedCashExpr}
+         ELSE 0
+       END), 0) AS collected_cash,
+       COALESCE(SUM(CASE
+         WHEN ml.type IN ('SALE_PREPAYMENT_CARD','SALE_ACCEPTED_CARD') THEN ABS(ml.amount)
+         WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') THEN ${mixedCardExpr}
+         ELSE 0
+       END), 0) AS collected_card
+     FROM money_ledger ml
+     LEFT JOIN presales p ON p.id = ml.presale_id
+     WHERE ${baseWhereSql}
+       AND ml.type IN (
+         'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+         'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+       )`,
+    baseParams
+  )?.[0] || {};
+  const refundRow = safeAll(
+    `SELECT
+       COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refund_total,
+       COALESCE(SUM(${refundCashSql}), 0) AS refund_cash,
+       COALESCE(SUM(${refundCardSql}), 0) AS refund_card
+     FROM money_ledger ml
+     LEFT JOIN presales p ON p.id = ml.presale_id
+     WHERE ${baseWhereSql}
+       AND ml.type = 'SALE_CANCEL_REVERSE'`,
+    baseParams
+  )?.[0] || {};
+
+  const collectedTotal = Number(collectedRow.collected_total || 0);
+  const collectedCash = Number(collectedRow.collected_cash || 0) + Number(legacyMixedCorrections.rootCashDelta || 0);
+  const collectedCard = Number(collectedRow.collected_card || 0) + Number(legacyMixedCorrections.rootCardDelta || 0);
+  const refundTotal = Number(refundRow.refund_total || 0);
+  const refundCash = Number(refundRow.refund_cash || 0);
+  const refundCard = Number(refundRow.refund_card || 0);
+  const netTotal = roundMoney(collectedTotal - refundTotal);
+  const netCash = roundMoney(collectedCash - refundCash);
+  const netCard = roundMoney(collectedCard - refundCard);
+  const ownerCashToday = roundMoney(collectedTotal - refundTotal);
+
+  if (!ledgerHasSeller) {
+    return {
+      live_source: 'ledger',
+      owner_cash_today: Number(ownerCashToday || 0),
+      sellers_collect_total: 0,
+      sellers: [],
+      collected_total: collectedTotal,
+      collected_cash: collectedCash,
+      collected_card: collectedCard,
+      collected_split_unallocated: 0,
+      refund_total: refundTotal,
+      refund_cash: refundCash,
+      refund_card: refundCard,
+      net_total: netTotal,
+      net_cash: netCash,
+      net_card: netCard,
+    };
+  }
+  const sellerRows = safeAll(
+    `SELECT
+       ml.seller_id AS seller_id,
+       u.username AS seller_name,
+       COALESCE(SUM(CASE
+         WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_ACCEPTED_CASH') THEN ABS(ml.amount)
+         WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') THEN ${mixedCashExpr}
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN -(${sellerRefundCashExpr})
+         ELSE 0
+       END), 0) AS collected_cash,
+       COALESCE(SUM(CASE
+         WHEN ml.type IN ('SALE_PREPAYMENT_CARD','SALE_ACCEPTED_CARD') THEN ABS(ml.amount)
+         WHEN ml.type IN ('SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_MIXED') THEN ${mixedCardExpr}
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN -(${sellerRefundCardExpr})
+         ELSE 0
+       END), 0) AS collected_card,
+       COALESCE(SUM(CASE
+         WHEN ml.type = 'SALE_PREPAYMENT_CASH' THEN ABS(ml.amount)
+         WHEN ml.type = 'SALE_PREPAYMENT_MIXED' THEN ${mixedCashExpr}
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN -(${sellerRefundCashExpr})
+         ELSE 0
+       END), 0) AS prepayment_cash,
+       COALESCE(SUM(CASE
+         WHEN ml.type = 'SALE_PREPAYMENT_CARD' THEN ABS(ml.amount)
+         WHEN ml.type = 'SALE_PREPAYMENT_MIXED' THEN ${mixedCardExpr}
+         WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN -(${sellerRefundCardExpr})
+         ELSE 0
+       END), 0) AS prepayment_card,
+       COALESCE(SUM(CASE
+         WHEN ml.type IN (
+           'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+           'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+         ) THEN ABS(ml.amount)
          WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN -ABS(ml.amount)
          ELSE 0
        END), 0) AS collected_total
      FROM money_ledger ml
-     JOIN users su ON su.id = ml.seller_id AND su.role = 'seller'
-     ${presalesJoinSql}
+     LEFT JOIN presales p ON p.id = ml.presale_id
+     JOIN users u ON u.id = ml.seller_id AND u.role = 'seller'
      WHERE ${baseWhereSql}
        AND ml.seller_id IS NOT NULL
+       ${ledgerHasKind ? "AND ml.kind = 'SELLER_SHIFT'" : ''}
        AND ml.type IN (
          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
          'SALE_CANCEL_REVERSE'
        )
-     GROUP BY ml.seller_id, su.username
+     GROUP BY ml.seller_id, u.username
      ORDER BY collected_total DESC, ml.seller_id ASC`,
     baseParams
   );
@@ -358,12 +1027,14 @@ function calcLiveUiLedgerTotals(businessDay) {
        END), 0) AS deposit_card,
        COALESCE(SUM(ml.amount), 0) AS deposit_total
      FROM money_ledger ml
-     JOIN users su ON su.id = ml.seller_id AND su.role = 'seller'
-     WHERE ${baseWhereSql}
+     JOIN users u ON u.id = ml.seller_id AND u.role = 'seller'
+     WHERE ml.business_day = ?
+       ${ledgerHasStatus ? "AND ml.status = 'POSTED'" : ''}
+       ${ledgerHasKind ? "AND ml.kind = 'DISPATCHER_SHIFT'" : ''}
        AND ml.seller_id IS NOT NULL
        AND ml.type LIKE 'DEPOSIT_TO_OWNER%'
      GROUP BY ml.seller_id`,
-    baseParams
+    [businessDay]
   );
 
   const salesBySeller = new Map((sellerRows || []).map((r) => [Number(r.seller_id), r]));
@@ -384,15 +1055,16 @@ function calcLiveUiLedgerTotals(businessDay) {
 
     const collectedCash = Number(sale.collected_cash || 0);
     const collectedCard = Number(sale.collected_card || 0);
-    const collectedMixed = Number(sale.collected_mixed || 0);
-    const collectedTotal = Number(sale.collected_total || 0);
+    const collectedTotal = Number(sale.collected_total || (collectedCash + collectedCard));
+    const prepaymentCash = Number(sale.prepayment_cash || 0);
+    const prepaymentCard = Number(sale.prepayment_card || 0);
     const depositCash = Number(dep.deposit_cash || 0);
     const depositCard = Number(dep.deposit_card || 0);
     const depositTotal = Number(dep.deposit_total || 0);
 
-    const cashDueToOwner = collectedCash - depositCash;
-    const terminalDueToOwner = collectedCard - depositCard;
-    const totalDue = cashDueToOwner + terminalDueToOwner;
+    const cashDueToOwner = roundMoney(Math.max(0, prepaymentCash - depositCash));
+    const terminalDueToOwner = roundMoney(Math.max(0, prepaymentCard - depositCard));
+    const totalDue = roundMoney(cashDueToOwner + terminalDueToOwner);
 
     return {
       seller_id: sellerId,
@@ -409,7 +1081,7 @@ function calcLiveUiLedgerTotals(businessDay) {
       collected_total: collectedTotal,
       collected_cash: collectedCash,
       collected_card: collectedCard,
-      collected_mixed: collectedMixed,
+      collected_mixed: 0,
       refund_total: 0,
       net_total: totalDue,
       deposit_cash: depositCash,
@@ -419,9 +1091,20 @@ function calcLiveUiLedgerTotals(businessDay) {
   });
 
   return {
+    live_source: 'ledger',
     owner_cash_today: Number(ownerCashToday || 0),
     sellers_collect_total: Number(sumPositiveSellerLiabilities(sellers)),
     sellers,
+    collected_total: collectedTotal,
+    collected_cash: collectedCash,
+    collected_card: collectedCard,
+    collected_split_unallocated: 0,
+    refund_total: refundTotal,
+    refund_cash: refundCash,
+    refund_card: refundCard,
+    net_total: netTotal,
+    net_cash: netCash,
+    net_card: netCard,
   };
 }
 
@@ -490,20 +1173,33 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
   const hasClosures = safeTableExists('shift_closures');
   if (hasClosures) {
     try {
-      const row = db.prepare(`
-        SELECT
-          id, business_day, closed_at, closed_by,
-          total_revenue, collected_total, collected_cash, collected_card,
-          refund_total, refund_cash, refund_card,
-          net_total, net_cash, net_card,
-          deposit_cash, deposit_card,
-          salary_due, salary_paid_cash, salary_paid_card, salary_paid_total,
-          sellers_json,
-          cashbox_json
-        FROM shift_closures
-        WHERE business_day = ?
-        LIMIT 1
-      `).get(businessDay);
+      const row = findCanonicalShiftClosureRow(db, businessDay, {
+        columns: [
+          'id',
+          'business_day',
+          'closed_at',
+          'closed_by',
+          'total_revenue',
+          'collected_total',
+          'collected_cash',
+          'collected_card',
+          'refund_total',
+          'refund_cash',
+          'refund_card',
+          'net_total',
+          'net_cash',
+          'net_card',
+          'deposit_cash',
+          'deposit_card',
+          'salary_due',
+          'salary_paid_cash',
+          'salary_paid_card',
+          'salary_paid_total',
+          'sellers_json',
+          'cashbox_json',
+          'calculation_json',
+        ],
+      });
 
       if (row) {
         closureSnapshot = row;
@@ -531,28 +1227,44 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
         cashboxData = JSON.parse(snap.cashbox_json);
       }
     } catch {}
+    const storedShiftCloseBreakdown = parseShiftCloseBreakdown(snap.calculation_json);
 
     // Enhance sellers with extended contract fields (same as live branch)
     // and keep only actual sellers in seller money movement tables.
     const sellers = sellersFromSnapshot.map((r) => {
-      const accepted = Number(r.accepted || 0);
-      const deposited = Number(r.deposited || 0);
-      const balance = Number(r.balance ?? (accepted - deposited));
-      // Use stored terminal_due_to_owner if available, else fallback to terminal_debt or 0
-      const terminal_due_to_owner = Number(r.terminal_due_to_owner ?? r.terminal_debt ?? 0);
-      const cash_due_to_owner = Number(r.cash_due_to_owner ?? balance);
-      
-      // Reconstruct collected_cash/collected_card from due + deposit
-      // collected_cash = prepay_cash = cash_due_to_owner + deposit_cash
-      // collected_card = prepay_card = terminal_due_to_owner + deposit_card
+      const role = String(r.role || '').toLowerCase();
       const deposit_cash = Number(r.deposit_cash || r.deposited_cash || 0);
       const deposit_card = Number(r.deposit_card || r.deposited_card || 0);
-      const collected_cash = Number(r.collected_cash ?? (cash_due_to_owner + deposit_cash));
-      const collected_card = Number(r.collected_card ?? (terminal_due_to_owner + deposit_card));
+      const terminal_due_to_owner = Number(r.terminal_due_to_owner ?? r.terminal_debt ?? 0);
+      const snapshotBalance = Number(r.balance ?? 0);
+      const cash_due_to_owner = role === 'dispatcher'
+        ? Number(r.cash_due_to_owner ?? 0)
+        : Number(r.cash_due_to_owner ?? snapshotBalance);
+      const accepted = Number(r.accepted ?? r.collected_total ?? 0);
+      const deposited = Number(r.deposited ?? (deposit_cash + deposit_card));
+      const balance = role === 'dispatcher'
+        ? Number(r.balance ?? 0)
+        : Number(r.balance ?? (accepted - deposited));
+      const collected_cash = role === 'dispatcher'
+        ? Number(r.collected_cash || 0)
+        : Number(r.collected_cash ?? (cash_due_to_owner + deposit_cash));
+      const collected_card = role === 'dispatcher'
+        ? Number(r.collected_card || 0)
+        : Number(r.collected_card ?? (terminal_due_to_owner + deposit_card));
+      const collected_total = Number(
+        r.collected_total ??
+        (role === 'dispatcher'
+          ? (r.personal_revenue_day ?? (collected_cash + collected_card))
+          : (collected_cash + collected_card))
+      );
+      const participantName =
+        r.seller_name ||
+        r.name ||
+        (role === 'dispatcher' ? `Dispatcher #${r.seller_id}` : `РџСЂРѕРґР°РІРµС† #${r.seller_id}`);
       
       return {
         ...r,
-        seller_id: r.seller_id,
+        seller_id: Number(r.seller_id || 0),
         seller_name: r.name || `Продавец #${r.seller_id}`,
         name: r.name || `Продавец #${r.seller_id}`,
         collected_total: collected_cash + collected_card,
@@ -571,39 +1283,56 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
         salary_due: Number(r.salary_due || 0),
         salary_due_total: Number(r.salary_due_total || r.salary_due || 0),
         salary_accrued: Number(r.salary_accrued || r.salary_due_total || 0),
+        seller_name: participantName,
+        name: participantName,
+        role: role || r.role || null,
+        accepted: Number(r.accepted ?? collected_total),
+        deposited,
+        balance,
+        collected_total,
+        refund_total: Number(r.refund_total || 0),
+        net_total: Number(r.net_total ?? balance),
+        status: role === 'dispatcher'
+          ? String(r.status || 'CLOSED')
+          : (balance === 0 ? 'CLOSED' : balance > 0 ? 'DEBT' : 'OVERPAID'),
+        salary_accrued: Number(r.salary_accrued || r.salary_due_total || r.salary_due || 0),
+        team_part: Number(r.team_part || 0),
+        individual_part: Number(r.individual_part || 0),
+        total_raw: Number(r.total_raw || 0),
+        salary_rounding_to_season: Number(r.salary_rounding_to_season || 0),
+        personal_revenue_day: Number(r.personal_revenue_day || collected_total || 0),
       };
-    }).filter((row) => {
-      if (isSellerRole(row?.role)) return true;
-      return isSellerUserId(row?.seller_id);
-    });
+    }).filter(shouldKeepParticipantRow);
 
-    const salary_total = Math.round(Number(snap.total_revenue || 0) * 0.13);
+    const salary_total = Number(snap.salary_due || 0);
 
     // --- Motivation withhold from engine (snapshot branch) ---
-    let motivationWithhold = null;
-    try {
-      const motivationResult = calcMotivationDay(db, businessDay);
-      if (motivationResult?.data) {
-        motivationWithhold = {
-          weekly_amount_raw: motivationResult.data.withhold?.weekly_amount_raw ?? 0,
-          weekly_amount: motivationResult.data.withhold?.weekly_amount ?? 0,
-          season_amount: motivationResult.data.withhold?.season_amount ?? 0,
-          season_amount_base: motivationResult.data.withhold?.season_amount_base ?? 0,
-          season_amount_from_rounding: motivationResult.data.withhold?.season_amount_from_rounding ?? 0,
-          weekly_rounding_to_season_amount: motivationResult.data.withhold?.weekly_rounding_to_season_amount ?? 0,
-          dispatcher_rounding_to_season_amount: motivationResult.data.withhold?.dispatcher_rounding_to_season_amount ?? 0,
-          payouts_rounding_to_season_amount: motivationResult.data.withhold?.payouts_rounding_to_season_amount ?? 0,
-          rounding_to_season_amount_total: motivationResult.data.withhold?.rounding_to_season_amount_total ?? 0,
-          dispatcher_amount_total: motivationResult.data.withhold?.dispatcher_amount_total ?? 0,
-          fund_total_original: motivationResult.data.withhold?.fund_total_original ?? 0,
-          fund_total_after_withhold: motivationResult.data.withhold?.fund_total_after_withhold ?? 0,
-          dispatcher_percent_total: motivationResult.data.settings_effective?.dispatcher_withhold_percent_total ?? 0.002,
-          dispatcher_percent_per_person: motivationResult.data.settings_effective?.dispatcher_withhold_percent_per_person ?? 0.001,
-          active_dispatchers_count: motivationResult.data.dispatchers_today?.active_count ?? 0
-        };
+    let motivationWithhold = storedShiftCloseBreakdown?.withhold || null;
+    let snapshotPayoutsByUserId = new Map();
+    let salaryBase = Number(
+      storedShiftCloseBreakdown?.totals?.salary_base ??
+      cashboxData?.salary_base ??
+      Math.max(0, roundMoney(Number(snap.net_total || 0)))
+    );
+    if (!storedShiftCloseBreakdown) {
+      try {
+        const motivationResult = calcMotivationDay(
+          db,
+          businessDay,
+          getShiftCloseMotivationOptions(req.user)
+        );
+        if (motivationResult?.data) {
+          salaryBase = Number(motivationResult.data.salary_base ?? salaryBase);
+          motivationWithhold = extractShiftMotivationWithhold(motivationResult);
+          if (Array.isArray(motivationResult.data.payouts)) {
+            for (const payout of motivationResult.data.payouts) {
+              snapshotPayoutsByUserId.set(Number(payout.user_id), payout);
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[MOTIVATION_WITHHOLD_SNAPSHOT] Error:', e?.message || e);
       }
-    } catch (e) {
-      console.error('[MOTIVATION_WITHHOLD_SNAPSHOT] Error:', e?.message || e);
     }
 
     // Dispatcher totals (from snapshot)
@@ -620,7 +1349,7 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
       salary_paid_total: Number(snap.salary_paid_total || 0),
     };
 
-    const sellersForResponse = [...sellers];
+    const sellersForResponse = mergeParticipantRowsWithPayouts(sellers, snapshotPayoutsByUserId);
     const sellersAcceptedTotalResponse = sellersForResponse.reduce((sum, r) => sum + Number(r.accepted || 0), 0);
     const sellersDepositedTotalResponse = sellersForResponse.reduce((sum, r) => sum + Number(r.deposited || 0), 0);
     const sellersBalanceTotalResponse = sellersForResponse.reduce((sum, r) => sum + Number(r.balance || 0), 0);
@@ -629,12 +1358,49 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
     const futureTripsReserveCash = Number(cashboxData?.future_trips_reserve_cash || 0);
     const futureTripsReserveCard = Number(cashboxData?.future_trips_reserve_card || cashboxData?.future_trips_reserve_terminal || 0);
     const futureTripsReserveTotal = Number(cashboxData?.future_trips_reserve_total || (futureTripsReserveCash + futureTripsReserveCard));
+    const fundsWithholdCashToday = cashboxData?.funds_withhold_cash_today != null
+      ? Number(cashboxData.funds_withhold_cash_today)
+      : getFundsWithholdCashToday(motivationWithhold);
+    const ownerCashMetrics = calcShiftOwnerCashMetrics({
+      netCash: Number(snap.net_cash || 0),
+      salaryDueTotal: Number(snap.salary_due || 0),
+      salaryPaidCash: Number(snap.salary_paid_cash || 0),
+      salaryPaidTotal: Number(snap.salary_paid_total || 0),
+      sellers: sellersForResponse,
+      futureTripsReserveCash,
+      fundsWithholdCashToday,
+    });
     const ownerCashAvailableAfterFutureReserveCash = cashboxData?.owner_cash_available_after_future_reserve_cash != null
       ? Number(cashboxData.owner_cash_available_after_future_reserve_cash)
-      : ownerCashAvailable - futureTripsReserveCash;
+      : ownerCashMetrics.owner_cash_available_after_future_reserve_cash;
+    const ownerCashAvailableAfterReserveAndFundsCash = cashboxData?.owner_cash_available_after_reserve_and_funds_cash != null
+      ? Number(cashboxData.owner_cash_available_after_reserve_and_funds_cash)
+      : ownerCashMetrics.owner_cash_available_after_reserve_and_funds_cash;
+    const ownerHandoverCashFinal = cashboxData?.owner_handover_cash_final != null
+      ? Number(cashboxData.owner_handover_cash_final)
+      : ownerCashMetrics.owner_handover_cash_final;
     const unresolvedTripDayCount = Number(cashboxData?.future_trips_reserve_unresolved_trip_day_count || 0);
     const liveUiTotals = getLiveUiTotals();
     const liveSellersForUi = Array.isArray(liveUiTotals?.sellers) ? liveUiTotals.sellers : [];
+    const shiftCloseBreakdown = storedShiftCloseBreakdown || buildShiftCloseBreakdown({
+      businessDay,
+      source: 'snapshot_fallback',
+      sellers: sellersForResponse,
+      collectedCash: Number(snap.collected_cash || 0),
+      collectedCard: Number(snap.collected_card || 0),
+      collectedTotal: Number(snap.collected_total || 0),
+      reserveCash: futureTripsReserveCash,
+      reserveCard: futureTripsReserveCard,
+      reserveTotal: futureTripsReserveTotal,
+      salaryBase,
+      salaryDueTotal: Number(snap.salary_due || 0),
+      salaryPaidCash: Number(snap.salary_paid_cash || 0),
+      salaryPaidCard: Number(snap.salary_paid_card || 0),
+      salaryPaidTotal: Number(snap.salary_paid_total || 0),
+      ownerCashMetrics,
+      fundsWithholdCashToday,
+      motivationWithhold,
+    });
 
     return res.json({
       ok: true,
@@ -661,8 +1427,12 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
       sellers_accepted_total: sellersAcceptedTotalResponse,
       sellers_deposited_total: sellersDepositedTotalResponse,
       sellers_balance_total: sellersBalanceTotalResponse,
-      sellers_collect_total: Number(liveUiTotals?.sellers_collect_total || 0),
-      owner_cash_today: Number(liveUiTotals?.owner_cash_today || 0),
+      sellers_collect_total: Number(shiftCloseBreakdown.totals.collect_from_sellers ?? sellersDebtTotalResponse),
+      owner_cash_today: Number(shiftCloseBreakdown.totals.owner_cash_today ?? ownerHandoverCashFinal),
+      weekly_fund: Number(shiftCloseBreakdown.totals.weekly_fund ?? 0),
+      season_fund_total: Number(shiftCloseBreakdown.totals.season_fund_total ?? 0),
+      final_salary_total: Number(shiftCloseBreakdown.totals.final_salary_total ?? snap.salary_due ?? 0),
+      salary_to_pay: Number(shiftCloseBreakdown.totals.final_salary_total ?? snap.salary_due ?? 0),
 
       // Dispatcher totals (DISPATCHER_SHIFT kind aggregated)
       dispatcher,
@@ -727,13 +1497,21 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
       // Salary payouts (from snapshot)
       salary_due: Number(snap.salary_due || 0),
       salary_due_total: Number(snap.salary_due || 0),  // alias for backward compat
+      salary_base: Number(shiftCloseBreakdown.totals.salary_base ?? cashboxData?.salary_base ?? salaryBase),
       salary_paid_cash: Number(snap.salary_paid_cash || 0),
       salary_paid_card: Number(snap.salary_paid_card || 0),
       salary_paid_total: Number(snap.salary_paid_total || 0),
       sellers_debt_total: sellersDebtTotalResponse,
       owner_cash_available: ownerCashAvailable,
-      owner_cash_available_without_future_reserve: ownerCashAvailable,
-      owner_cash_available_after_future_reserve_cash: ownerCashAvailableAfterFutureReserveCash,
+      owner_cash_available_without_future_reserve: Number(
+        shiftCloseBreakdown.totals.owner_cash_before_reserve ?? ownerCashMetrics.owner_cash_available_without_future_reserve
+      ),
+      owner_cash_available_after_future_reserve_cash: Number(
+        shiftCloseBreakdown.totals.owner_cash_after_reserve ?? ownerCashAvailableAfterFutureReserveCash
+      ),
+      owner_cash_available_after_reserve_and_funds_cash: ownerCashAvailableAfterReserveAndFundsCash,
+      owner_handover_cash_final: Number(shiftCloseBreakdown.totals.owner_cash_today ?? ownerHandoverCashFinal),
+      funds_withhold_cash_today: Number(shiftCloseBreakdown.totals.funds_withhold_cash_today ?? fundsWithholdCashToday),
       future_trips_reserve_cash: futureTripsReserveCash,
       future_trips_reserve_card: futureTripsReserveCard,
       future_trips_reserve_total: futureTripsReserveTotal,
@@ -760,7 +1538,8 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
       cashbox: cashboxData ?? null,
       
       // Motivation withhold breakdown
-      motivation_withhold: motivationWithhold
+      motivation_withhold: motivationWithhold,
+      shift_close_breakdown: shiftCloseBreakdown
     });
   }
 
@@ -874,7 +1653,7 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
       WHERE ml.business_day = ?
         AND ml.status = 'POSTED'
         AND ml.seller_id IS NOT NULL
-        AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+        AND ml.kind = 'SELLER_SHIFT'
         AND ml.type IN (
           'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
           'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
@@ -911,7 +1690,7 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
        JOIN users su ON su.id = ml.seller_id AND su.role = 'seller'
        WHERE business_day = ?
          AND status = 'POSTED'
-         AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+         AND kind = 'DISPATCHER_SHIFT'
          AND type LIKE 'DEPOSIT_TO_OWNER%'
          AND ml.seller_id IS NOT NULL
        GROUP BY ml.seller_id`,
@@ -995,7 +1774,7 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
        WHERE ml.business_day = ?
          AND ml.status = 'POSTED'
          AND ml.seller_id IS NOT NULL
-         AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+         AND ml.kind = 'SELLER_SHIFT'
          AND ml.type IN (
            'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
            'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
@@ -1010,7 +1789,7 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
        WHERE ml.business_day = ?
          AND ml.status = 'POSTED'
          AND ml.seller_id IS NOT NULL
-         AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+         AND ml.kind = 'SELLER_SHIFT'
          AND ml.type IN (
            'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
            'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
@@ -1113,18 +1892,28 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
         cash_due_to_owner: 0,
       };
     }
-  }).filter((row) => {
-    if (isSellerRole(row?.role)) return true;
-    return isSellerUserId(row?.seller_id);
-  });
+  }).filter(shouldKeepParticipantRow);
+  const liveUiTotals = getLiveUiTotals();
+  const baseRowsForResponse = (
+    Array.isArray(liveUiTotals?.sellers) && liveUiTotals.sellers.length > 0
+      ? liveUiTotals.sellers
+      : sellers
+  ).map((seller) => ({ ...seller }));
+
   // --- SALARY_DUE from motivation engine ---
   // Call motivation engine to get payouts for this business day
   let salary_due_total = 0;
   let payoutsByUserId = new Map();
   let motivationWithhold = null;
+  let motivationData = null;
+  let salary_base = 0;
   
   try {
-    const motivationResult = calcMotivationDay(db, businessDay);
+    const motivationResult = calcMotivationDay(
+      db,
+      businessDay,
+      getShiftCloseMotivationOptions(req.user)
+    );
     if (motivationResult?.data?.payouts) {
       for (const payout of motivationResult.data.payouts) {
         payoutsByUserId.set(payout.user_id, payout);
@@ -1134,47 +1923,14 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
     
     // Extract withhold info for UI
     if (motivationResult?.data) {
-      motivationWithhold = {
-        weekly_amount_raw: motivationResult.data.withhold?.weekly_amount_raw ?? 0,
-        weekly_amount: motivationResult.data.withhold?.weekly_amount ?? 0,
-        season_amount: motivationResult.data.withhold?.season_amount ?? 0,
-        season_amount_base: motivationResult.data.withhold?.season_amount_base ?? 0,
-        season_amount_from_rounding: motivationResult.data.withhold?.season_amount_from_rounding ?? 0,
-        weekly_rounding_to_season_amount: motivationResult.data.withhold?.weekly_rounding_to_season_amount ?? 0,
-        dispatcher_rounding_to_season_amount: motivationResult.data.withhold?.dispatcher_rounding_to_season_amount ?? 0,
-        payouts_rounding_to_season_amount: motivationResult.data.withhold?.payouts_rounding_to_season_amount ?? 0,
-        rounding_to_season_amount_total: motivationResult.data.withhold?.rounding_to_season_amount_total ?? 0,
-        dispatcher_amount_total: motivationResult.data.withhold?.dispatcher_amount_total ?? 0,
-        fund_total_original: motivationResult.data.withhold?.fund_total_original ?? 0,
-        fund_total_after_withhold: motivationResult.data.withhold?.fund_total_after_withhold ?? 0,
-        dispatcher_percent_total: motivationResult.data.settings_effective?.dispatcher_withhold_percent_total ?? 0.002,
-        dispatcher_percent_per_person: motivationResult.data.settings_effective?.dispatcher_withhold_percent_per_person ?? 0.001,
-        active_dispatchers_count: motivationResult.data.dispatchers_today?.active_count ?? 0
-      };
-    }
-    
-    // Enrich sellers with salary_due fields
-    for (const seller of sellers) {
-      const payout = payoutsByUserId.get(seller.seller_id);
-      if (payout) {
-        seller.salary_due = payout.total;
-        seller.salary_due_total = payout.total;
-        seller.salary_accrued = payout.total;
-      } else {
-        seller.salary_due = 0;
-        seller.salary_due_total = 0;
-        seller.salary_accrued = 0;
-      }
+      motivationData = motivationResult.data;
+      salary_base = Number(motivationResult.data.salary_base ?? salary_base);
+      motivationWithhold = extractShiftMotivationWithhold(motivationResult);
     }
   } catch (e) {
     console.error('[SALARY_DUE_CALC] Error:', e?.message || e);
-    // On error, all sellers get 0 salary_due
-    for (const seller of sellers) {
-      seller.salary_due = 0;
-      seller.salary_due_total = 0;
-      seller.salary_accrued = 0;
-    }
   }
+  const sellersForResponse = mergeParticipantRowsWithPayouts(baseRowsForResponse, payoutsByUserId);
 
   // --- Refunds from money_ledger (SALE_CANCEL_REVERSE) ---
   let refundTotal = 0;
@@ -1226,6 +1982,10 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
       }
     }
   }
+
+  refundTotal = Number(liveUiTotals?.refund_total ?? refundTotal ?? 0);
+  refundCash = Number(liveUiTotals?.refund_cash ?? refundCash ?? 0);
+  refundCard = Number(liveUiTotals?.refund_card ?? refundCard ?? 0);
 
   // --- COLLECTED CASH/CARD from money_ledger (SAME LOGIC AS OWNER) ---
   // This is the authoritative source for collected money, NOT sales_transactions_canonical
@@ -1306,6 +2066,10 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
     }
   }
 
+  collectedTotal = Number(liveUiTotals?.collected_total ?? collectedTotal ?? 0);
+  collectedCash = Number(liveUiTotals?.collected_cash ?? collectedCash ?? 0);
+  collectedCard = Number(liveUiTotals?.collected_card ?? collectedCard ?? 0);
+
   // Net metrics: collected - refunds (SAME LOGIC AS OWNER)
   const netCash = collectedCash - refundCash;
   const netCard = collectedCard - refundCard;
@@ -1314,7 +2078,7 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
   const netRevenue = netTotal;
 
   // Salary placeholder (13%) like UI note; can be replaced later by motivation engine
-  const salary_total = Math.round(Number(salesRevenue || 0) * 0.13);
+  const salary_total = Number(salary_due_total || 0);
 
   // --- Salary payouts from money_ledger (DISPATCHER_SHIFT) ---
   let salaryPaidCash = 0;
@@ -1351,6 +2115,7 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
   const futureTripsReserveCard = Number(futureTripsReserve.card || 0);
   const futureTripsReserveTotal = Number(futureTripsReserve.total || 0);
   const unresolvedTripDayCount = Number(futureTripsReserve.unresolvedTripDayCount || 0);
+  salary_base = salary_base || Math.max(0, roundMoney(netTotal - futureTripsReserveTotal));
 
   // --- Dispatcher aggregated totals (DISPATCHER_SHIFT kind) ---
   // Dispatcher operations: deposits to owner, salary payouts
@@ -1435,19 +2200,8 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
     explain.unresolved_trip_day_count = unresolvedTripDayCount;
 
     // 3) REFUNDS (SALE_CANCEL_REVERSE)
-    const refundRows = safeAll(`
-      SELECT 
-        COALESCE(SUM(CASE WHEN method = 'CASH' THEN ABS(amount) ELSE 0 END), 0) AS refund_cash,
-        COALESCE(SUM(CASE WHEN method = 'CARD' THEN ABS(amount) ELSE 0 END), 0) AS refund_card
-      FROM money_ledger
-      WHERE business_day = ?
-        AND status = 'POSTED'
-        AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-        AND type = 'SALE_CANCEL_REVERSE'
-    `, [businessDay]);
-    const refundRow = refundRows?.[0] || {};
-    explain.cashflow_today.refund_cash = Number(refundRow.refund_cash || 0);
-    explain.cashflow_today.refund_terminal = Number(refundRow.refund_card || 0);
+    explain.cashflow_today.refund_cash = Number(refundCash || 0);
+    explain.cashflow_today.refund_terminal = Number(refundCard || 0);
 
     // 4) OWNER DEPOSITS (already computed above)
     explain.cashflow_today.owner_deposit_cash = depositToOwnerCash;
@@ -1466,19 +2220,56 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
     explain.revenue_hint.note = 'prepayment_today = все предоплаты за сегодня; future_liabilities = оплаты/предоплаты, полученные сегодня за будущие рейсы (обязательства до поездки/возврата)';
   }
 
-  const sellersForResponse = [...sellers];
+  const liveSource = String(liveUiTotals?.live_source || 'ledger');
   const sellersAcceptedTotalResponse = sellersForResponse.reduce((sum, r) => sum + Number(r.accepted || 0), 0);
   const sellersDepositedTotalResponse = sellersForResponse.reduce((sum, r) => sum + Number(r.deposited || 0), 0);
   const sellersBalanceTotalResponse = sellersForResponse.reduce((sum, r) => sum + Number(r.balance || 0), 0);
   const sellersDebtTotalResponse = sumPositiveSellerLiabilities(sellersForResponse);
-  const ownerCashAvailable = Number(netTotal || 0) - Number(salary_due_total || 0) - sellersDebtTotalResponse;
-  const ownerCashAvailableAfterFutureReserveCash = ownerCashAvailable - futureTripsReserveCash;
-  const liveUiTotals = getLiveUiTotals();
-  const liveSellersForUi = Array.isArray(liveUiTotals?.sellers) && liveUiTotals.sellers.length > 0
-    ? liveUiTotals.sellers
-    : sellersForResponse;
-  const sellersCollectTotal = Number(liveUiTotals?.sellers_collect_total ?? sellersDebtTotalResponse ?? 0);
-  const ownerCashToday = Number(liveUiTotals?.owner_cash_today ?? netTotal ?? 0);
+  const responseCollectedTotal = Number(liveUiTotals?.collected_total ?? collectedTotal ?? 0);
+  const responseCollectedCash = Number(liveUiTotals?.collected_cash ?? collectedCash ?? 0);
+  const responseCollectedCard = Number(liveUiTotals?.collected_card ?? collectedCard ?? 0);
+  const responseCollectedSplitUnallocated = 0;
+  const responseRefundTotal = Number(liveUiTotals?.refund_total ?? refundTotal ?? 0);
+  const responseRefundCash = Number(liveUiTotals?.refund_cash ?? refundCash ?? 0);
+  const responseRefundCard = Number(liveUiTotals?.refund_card ?? refundCard ?? 0);
+  const responseNetTotal = responseCollectedTotal - responseRefundTotal;
+  const responseNetCash = responseCollectedCash - responseRefundCash;
+  const responseNetCard = responseCollectedCard - responseRefundCard;
+  const responseNetRevenue = responseNetTotal;
+  const ownerCashAvailable = responseNetTotal - Number(salary_due_total || 0) - sellersDebtTotalResponse;
+  const liveSellersForUi = sellersForResponse;
+  const sellersCollectTotal = sellersDebtTotalResponse;
+  const fundsWithholdCashToday = getFundsWithholdCashToday(motivationWithhold);
+  const ownerCashMetrics = calcShiftOwnerCashMetrics({
+    netCash: responseNetCash,
+    salaryDueTotal: salary_due_total,
+    salaryPaidCash,
+    salaryPaidTotal,
+    sellers: sellersForResponse,
+    futureTripsReserveCash,
+    fundsWithholdCashToday,
+  });
+  const ownerCashToday = ownerCashMetrics.owner_handover_cash_final;
+  const shiftCloseBreakdown = buildShiftCloseBreakdown({
+    businessDay,
+    source,
+    sellers: sellersForResponse,
+    collectedCash: responseCollectedCash,
+    collectedCard: responseCollectedCard,
+    collectedTotal: responseCollectedTotal,
+    reserveCash: futureTripsReserveCash,
+    reserveCard: futureTripsReserveCard,
+    reserveTotal: futureTripsReserveTotal,
+    salaryBase: salary_base,
+    salaryDueTotal: salary_due_total,
+    salaryPaidCash,
+    salaryPaidCard,
+    salaryPaidTotal,
+    ownerCashMetrics,
+    fundsWithholdCashToday,
+    motivationData,
+    motivationWithhold,
+  });
 
   // --- Response: keep both nested and flat keys for backward compatibility ---
   res.json({
@@ -1493,11 +2284,12 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
     card_total: salesCard,
     salary_total,
 
-    // COLLECTED MONEY (from money_ledger - SAME LOGIC AS OWNER)
-    // These are the authoritative fields for "how much money was collected"
-    collected_total: collectedTotal,
-    collected_cash: collectedCash,
-    collected_card: collectedCard,
+    // COLLECTED MONEY (live prefers ACTIVE presales + ACTIVE tickets)
+    collected_total: responseCollectedTotal,
+    collected_cash: responseCollectedCash,
+    collected_card: responseCollectedCard,
+    collected_split_unallocated: responseCollectedSplitUnallocated,
+    live_source: liveSource,
 
     // UI-friendly sellers
     sellers: sellersForResponse,
@@ -1505,8 +2297,12 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
     sellers_accepted_total: sellersAcceptedTotalResponse,
     sellers_deposited_total: sellersDepositedTotalResponse,
     sellers_balance_total: sellersBalanceTotalResponse,
-    sellers_collect_total: sellersCollectTotal,
-    owner_cash_today: ownerCashToday,
+    sellers_collect_total: Number(shiftCloseBreakdown.totals.collect_from_sellers ?? sellersCollectTotal),
+    owner_cash_today: Number(shiftCloseBreakdown.totals.owner_cash_today ?? ownerCashToday),
+    weekly_fund: Number(shiftCloseBreakdown.totals.weekly_fund ?? 0),
+    season_fund_total: Number(shiftCloseBreakdown.totals.season_fund_total ?? 0),
+    final_salary_total: Number(shiftCloseBreakdown.totals.final_salary_total ?? salary_due_total ?? 0),
+    salary_to_pay: Number(shiftCloseBreakdown.totals.final_salary_total ?? salary_due_total ?? 0),
 
     // Dispatcher totals (DISPATCHER_SHIFT kind aggregated)
     dispatcher,
@@ -1518,15 +2314,15 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
     card: salesCard,
 
     // Refunds (SALE_CANCEL_REVERSE)
-    refund_total: refundTotal,
-    refund_cash: refundCash,
-    refund_card: refundCard,
+    refund_total: responseRefundTotal,
+    refund_cash: responseRefundCash,
+    refund_card: responseRefundCard,
 
     // Net metrics (net_total is primary; net_revenue is deprecated alias)
-    net_total: netTotal,
-    net_revenue: netRevenue,  // deprecated alias for backward compat
-    net_cash: netCash,
-    net_card: netCard,
+    net_total: responseNetTotal,
+    net_revenue: responseNetRevenue,  // deprecated alias for backward compat
+    net_cash: responseNetCash,
+    net_card: responseNetCard,
 
     deposit_cash: depositToOwnerCash,
     deposit_card: depositToOwnerCard,
@@ -1548,20 +2344,21 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
       card: salesCard,
     },
     refunds: {
-      total: refundTotal,
-      cash: refundCash,
-      card: refundCard,
+      total: responseRefundTotal,
+      cash: responseRefundCash,
+      card: responseRefundCard,
     },
     net: {
-      total: netTotal,
-      revenue: netRevenue,  // deprecated alias
-      cash: netCash,
-      card: netCard,
+      total: responseNetTotal,
+      revenue: responseNetRevenue,  // deprecated alias
+      cash: responseNetCash,
+      card: responseNetCard,
     },
     collected: {
-      total: collectedTotal,
-      cash: collectedCash,
-      card: collectedCard,
+      total: responseCollectedTotal,
+      cash: responseCollectedCash,
+      card: responseCollectedCard,
+      split_unallocated: responseCollectedSplitUnallocated,
     },
     ledger: {
       deposit_to_owner: {
@@ -1600,16 +2397,25 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
     // Salary payouts (from motivation engine + money_ledger)
     salary_due: salary_due_total,
     salary_due_total: salary_due_total,  // alias for backward compat
+    salary_base: Number(shiftCloseBreakdown.totals.salary_base ?? salary_base),
     salary_paid_cash: salaryPaidCash,
     salary_paid_card: salaryPaidCard,
     salary_paid_total: salaryPaidTotal,
     sellers_debt_total: sellersDebtTotalResponse,
     owner_cash_available: ownerCashAvailable,
-    owner_cash_available_without_future_reserve: ownerCashAvailable,
-    owner_cash_available_after_future_reserve_cash: ownerCashAvailableAfterFutureReserveCash,
+    owner_cash_available_without_future_reserve: Number(
+      shiftCloseBreakdown.totals.owner_cash_before_reserve ?? ownerCashMetrics.owner_cash_available_without_future_reserve
+    ),
+    owner_cash_available_after_future_reserve_cash: Number(
+      shiftCloseBreakdown.totals.owner_cash_after_reserve ?? ownerCashMetrics.owner_cash_available_after_future_reserve_cash
+    ),
+    owner_cash_available_after_reserve_and_funds_cash: ownerCashMetrics.owner_cash_available_after_reserve_and_funds_cash,
+    owner_handover_cash_final: Number(shiftCloseBreakdown.totals.owner_cash_today ?? ownerCashMetrics.owner_handover_cash_final),
+    funds_withhold_cash_today: Number(shiftCloseBreakdown.totals.funds_withhold_cash_today ?? fundsWithholdCashToday),
     
     // Motivation withhold breakdown
-    motivation_withhold: motivationWithhold
+    motivation_withhold: motivationWithhold,
+    shift_close_breakdown: shiftCloseBreakdown
   });
 });
 

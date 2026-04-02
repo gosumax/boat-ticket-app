@@ -55,13 +55,17 @@ describe('DISPATCHER SHIFT SUMMARY - motivation_withhold', () => {
       expect(res.body.motivation_withhold).toBeDefined();
       expect(res.body.motivation_withhold).not.toBeNull();
       
-      // Default values
-      expect(res.body.motivation_withhold.dispatcher_percent_total).toBe(0.002);
+      // Applied percent is 0 with no active dispatcher; configured cap stays 0.002.
+      expect(res.body.motivation_withhold.dispatcher_percent_total).toBe(0);
+      expect(res.body.motivation_withhold.dispatcher_percent_total_configured).toBe(0.002);
       expect(res.body.motivation_withhold.dispatcher_percent_per_person).toBe(0.001);
       
       // All other fields should be numbers
       expect(typeof res.body.motivation_withhold.weekly_amount).toBe('number');
       expect(typeof res.body.motivation_withhold.season_amount).toBe('number');
+      expect(typeof res.body.motivation_withhold.season_from_revenue).toBe('number');
+      expect(typeof res.body.motivation_withhold.season_from_prepayment_transfer).toBe('number');
+      expect(typeof res.body.motivation_withhold.season_total).toBe('number');
       expect(typeof res.body.motivation_withhold.dispatcher_amount_total).toBe('number');
       expect(typeof res.body.motivation_withhold.fund_total_original).toBe('number');
       expect(typeof res.body.motivation_withhold.fund_total_after_withhold).toBe('number');
@@ -82,8 +86,9 @@ describe('DISPATCHER SHIFT SUMMARY - motivation_withhold', () => {
       expect(res.body.motivation_withhold).toBeDefined();
       expect(res.body.motivation_withhold).not.toBeNull();
       
-      // Should fallback to default 0.002
-      expect(res.body.motivation_withhold.dispatcher_percent_total).toBe(0.002);
+      // Should fallback to configured default 0.002, but applied percent is still 0 without active dispatchers.
+      expect(res.body.motivation_withhold.dispatcher_percent_total).toBe(0);
+      expect(res.body.motivation_withhold.dispatcher_percent_total_configured).toBe(0.002);
       expect(res.body.motivation_withhold.dispatcher_percent_per_person).toBe(0.001);
     });
   });
@@ -108,8 +113,9 @@ describe('DISPATCHER SHIFT SUMMARY - motivation_withhold', () => {
       expect(res.body.motivation_withhold).toBeDefined();
       expect(res.body.motivation_withhold).not.toBeNull();
       
-      // Custom values
-      expect(res.body.motivation_withhold.dispatcher_percent_total).toBe(0.004);
+      // Custom configured values
+      expect(res.body.motivation_withhold.dispatcher_percent_total).toBe(0);
+      expect(res.body.motivation_withhold.dispatcher_percent_total_configured).toBe(0.004);
       expect(res.body.motivation_withhold.dispatcher_percent_per_person).toBe(0.002);
     });
     
@@ -142,8 +148,9 @@ describe('DISPATCHER SHIFT SUMMARY - motivation_withhold', () => {
       expect(res.body.motivation_withhold).toBeDefined();
       expect(res.body.motivation_withhold).not.toBeNull();
       
-      // Custom values from snapshot
-      expect(res.body.motivation_withhold.dispatcher_percent_total).toBe(0.004);
+      // Custom configured values from snapshot
+      expect(res.body.motivation_withhold.dispatcher_percent_total).toBe(0);
+      expect(res.body.motivation_withhold.dispatcher_percent_total_configured).toBe(0.004);
       expect(res.body.motivation_withhold.dispatcher_percent_per_person).toBe(0.002);
     });
   });
@@ -197,7 +204,8 @@ describe('DISPATCHER SHIFT SUMMARY - motivation_withhold', () => {
       expect(res.body.motivation_withhold).not.toBeNull();
       
       // Custom percent
-      expect(res.body.motivation_withhold.dispatcher_percent_total).toBe(0.004);
+      expect(res.body.motivation_withhold.dispatcher_percent_total).toBe(0.002);
+      expect(res.body.motivation_withhold.dispatcher_percent_total_configured).toBe(0.004);
       expect(res.body.motivation_withhold.dispatcher_percent_per_person).toBe(0.002);
       
       // Active dispatchers should be 1 (the test dispatcher)
@@ -206,16 +214,16 @@ describe('DISPATCHER SHIFT SUMMARY - motivation_withhold', () => {
       // fund_total_original = 200000 * 0.15 = 30000
       expect(res.body.motivation_withhold.fund_total_original).toBe(30000);
       
-      // dispatcher_amount_total should be calculated
-      // per_person = roundDownTo50(30000 * 0.002) = roundDownTo50(60) = 50
-      // For 1 active dispatcher: total = 50
-      expect(res.body.motivation_withhold.dispatcher_amount_total).toBe(50);
+      // dispatcher_amount_total should be calculated from gross day revenue
+      // per_person = roundDownTo50(200000 * 0.002) = 400
+      // For 1 active dispatcher: total = 400
+      expect(res.body.motivation_withhold.dispatcher_amount_total).toBe(400);
     });
   });
   
   describe('CASE 4: Sequential calls - settings do not stick', () => {
     
-    it('custom 0.004 then empty => 0.004 then fallback 0.002', async () => {
+    it('custom 0.004 then empty => applied percent stays 0 without active dispatchers', async () => {
       // CALL A: custom 0.004
       db.prepare(`UPDATE owner_settings SET settings_json = ? WHERE id = 1`).run(JSON.stringify({
         motivationType: 'team',
@@ -229,7 +237,8 @@ describe('DISPATCHER SHIFT SUMMARY - motivation_withhold', () => {
         .set('Authorization', `Bearer ${dispatcherToken}`);
       
       expect(resA.status).toBe(200);
-      expect(resA.body.motivation_withhold.dispatcher_percent_total).toBe(0.004);
+      expect(resA.body.motivation_withhold.dispatcher_percent_total).toBe(0);
+      expect(resA.body.motivation_withhold.dispatcher_percent_total_configured).toBe(0.004);
       
       // CALL B: reset to empty => fallback to 0.002
       db.prepare(`UPDATE owner_settings SET settings_json = '{}' WHERE id = 1`).run();
@@ -241,7 +250,8 @@ describe('DISPATCHER SHIFT SUMMARY - motivation_withhold', () => {
         .set('Authorization', `Bearer ${dispatcherToken}`);
       
       expect(resB.status).toBe(200);
-      expect(resB.body.motivation_withhold.dispatcher_percent_total).toBe(0.002);
+      expect(resB.body.motivation_withhold.dispatcher_percent_total).toBe(0);
+      expect(resB.body.motivation_withhold.dispatcher_percent_total_configured).toBe(0.002);
     });
   });
 });
