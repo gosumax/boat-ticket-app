@@ -158,6 +158,28 @@ CREATE TABLE seller_motivation_state (
         week_revenue_sum INTEGER NOT NULL DEFAULT 0
       );
 
+CREATE TABLE seller_calibration_state (
+        seller_id INTEGER PRIMARY KEY,
+        calibration_status TEXT NOT NULL DEFAULT 'uncalibrated' CHECK (calibration_status IN ('uncalibrated', 'calibrated', 'insufficient_data')),
+        effective_level TEXT NULL,
+        pending_next_week_level TEXT NULL,
+        streak_days INTEGER NOT NULL DEFAULT 0 CHECK (streak_days >= 0),
+        streak_multiplier REAL NOT NULL DEFAULT 1.0 CHECK (streak_multiplier >= 1),
+        last_completed_workday TEXT NULL,
+        worked_days_in_week INTEGER NOT NULL DEFAULT 0 CHECK (worked_days_in_week >= 0),
+        completed_revenue_sum_week INTEGER NOT NULL DEFAULT 0 CHECK (completed_revenue_sum_week >= 0),
+        effective_week_id TEXT NOT NULL,
+        pending_week_id TEXT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+CREATE INDEX idx_seller_calibration_state_effective_week
+      ON seller_calibration_state(effective_week_id);
+
+CREATE INDEX idx_seller_calibration_state_pending_week
+      ON seller_calibration_state(pending_week_id);
+
 CREATE TABLE seller_season_stats (
         seller_id INTEGER NOT NULL,
         season_id TEXT NOT NULL,

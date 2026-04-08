@@ -1,6 +1,6 @@
 /**
  * src/views/OwnerSellersView.jsx
- * OWNER — Продавцы (backend wired)
+ * OWNER - sellers (backend wired)
  *
  * API:
  *  - GET /api/owner/sellers?preset=
@@ -9,9 +9,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import apiClient from "../utils/apiClient.js";
+import {
+  extractSellerCalibrationState,
+  formatSellerCalibrationStatusLabel,
+} from "../utils/ownerSellerCalibration.js";
 
 function formatRUB(v) {
-  if (v === null || v === undefined) return "—";
+  if (v === null || v === undefined) return "-";
   const n = Number(v || 0);
   try {
     return new Intl.NumberFormat("ru-RU", {
@@ -25,7 +29,7 @@ function formatRUB(v) {
 }
 
 function formatInt(v) {
-  if (v === null || v === undefined) return "—";
+  if (v === null || v === undefined) return "-";
   const n = Number(v || 0);
   try {
     return new Intl.NumberFormat("ru-RU").format(Math.round(n));
@@ -35,8 +39,18 @@ function formatInt(v) {
 }
 
 function formatShare(v) {
-  if (v === null || v === undefined) return "—";
+  if (v === null || v === undefined) return "-";
   return `${Math.round(v * 100)}%`;
+}
+
+function getCalibrationBadgeClass(status) {
+  if (status === "calibrated") {
+    return "border-emerald-500/40 bg-emerald-900/20 text-emerald-300";
+  }
+  if (status === "insufficient_data") {
+    return "border-amber-500/40 bg-amber-900/20 text-amber-300";
+  }
+  return "border-neutral-600 bg-neutral-900/40 text-neutral-300";
 }
 
 async function ownerGet(url) {
@@ -114,6 +128,8 @@ export default function OwnerSellersView() {
     return Math.round(rev / activeSellers);
   }, [payload.totals.revenue_forecast, activeSellers]);
 
+  void avgPerSeller;
+
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 px-3 pt-3 pb-24 space-y-3">
       <div className="flex items-center justify-between">
@@ -150,7 +166,6 @@ export default function OwnerSellersView() {
         </div>
       )}
 
-      {/* Итоговая статистика */}
       <div className="grid grid-cols-2 gap-2">
         <StatCard
           title="Прогноз (все)"
@@ -163,7 +178,6 @@ export default function OwnerSellersView() {
         <StatCard testId="owner-sellers-active-count" title="Активных продавцов" value={formatInt(activeSellers)} />
       </div>
 
-      {/* Список продавцов */}
       <div className="mt-4">
         <div className="text-sm font-semibold px-1 mb-3">Рейтинг по прогнозу</div>
 
@@ -181,11 +195,11 @@ export default function OwnerSellersView() {
 
         {!loading && !error && payload.items.length > 0 && (
           <div className="space-y-2" data-testid="owner-sellers-list">
-            {payload.items.map((s, idx) => (
+            {payload.items.map((seller, idx) => (
               <SellerCard
-                key={s.seller_id}
+                key={seller.seller_id}
                 rank={idx + 1}
-                seller={s}
+                seller={seller}
                 isTop3={idx < 3}
               />
             ))}
@@ -197,7 +211,7 @@ export default function OwnerSellersView() {
 }
 
 function StatCard({ title, value, accent, testId }) {
-  const vCls =
+  const valueClass =
     accent === "amber"
       ? "text-amber-300"
       : accent === "emerald"
@@ -207,14 +221,17 @@ function StatCard({ title, value, accent, testId }) {
   return (
     <div data-testid={testId} className="rounded-xl border border-white/10 bg-white/5 p-3">
       <div className="text-[11px] text-neutral-500">{title}</div>
-      <div className={["mt-1 text-lg font-extrabold tracking-tight", vCls].join(" ")}>{value}</div>
+      <div className={["mt-1 text-lg font-extrabold tracking-tight", valueClass].join(" ")}>{value}</div>
     </div>
   );
 }
 
-function SellerCard({ rank, seller, isTop3 }) {
-  const [expanded, setExpanded] = useState(false);
+export function SellerCard({ rank, seller, isTop3, defaultExpanded = false }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const sellerId = seller.seller_id;
+  const calibration = extractSellerCalibrationState(seller);
+  const statusLabel = formatSellerCalibrationStatusLabel(calibration.calibration_status);
+  const levelLabel = calibration.effective_level || "-";
 
   return (
     <div
@@ -227,10 +244,8 @@ function SellerCard({ rank, seller, isTop3 }) {
       ].join(" ")}
       onClick={() => setExpanded(!expanded)}
     >
-      {/* Header: Rank + Name + Forecast */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
-          {/* Rank badge */}
           <div
             className={[
               "w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0",
@@ -255,7 +270,6 @@ function SellerCard({ rank, seller, isTop3 }) {
           </div>
         </div>
 
-        {/* Forecast - main metric */}
         <div className="text-right shrink-0">
           <div className="text-[10px] text-neutral-500">Прогноз</div>
           <div data-testid={`owner-seller-forecast-${sellerId}`} className="text-lg font-extrabold tracking-tight text-emerald-300">
@@ -264,19 +278,34 @@ function SellerCard({ rank, seller, isTop3 }) {
         </div>
       </div>
 
-      {/* Quick stats row */}
       <div className="mt-2 flex items-center gap-4 text-xs text-neutral-400">
         <span>Оплачено: <span data-testid={`owner-seller-paid-${sellerId}`} className="text-neutral-200 font-semibold">{formatRUB(seller.revenue_paid)}</span></span>
         <span>Ожидает оплаты: <span data-testid={`owner-seller-pending-${sellerId}`} className="text-neutral-200">{formatRUB(seller.revenue_pending)}</span></span>
       </div>
 
-      {/* Secondary stats: per-shift and share */}
       <div className="mt-1 flex items-center gap-4 text-xs text-neutral-500">
         <span>На смену: <span className="text-neutral-300">{formatRUB(seller.revenue_per_shift)}</span></span>
         <span>Доля: <span className="text-neutral-300">{formatShare(seller.share_percent)}</span></span>
       </div>
 
-      {/* Expanded details */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+        <span
+          data-testid={`owner-seller-calibration-status-${sellerId}`}
+          className={[
+            "inline-flex rounded-full border px-2 py-0.5 font-medium",
+            getCalibrationBadgeClass(calibration.calibration_status),
+          ].join(" ")}
+        >
+          {statusLabel}
+        </span>
+        <span
+          data-testid={`owner-seller-calibration-level-${sellerId}`}
+          className="text-neutral-300"
+        >
+          Уровень: {levelLabel}
+        </span>
+      </div>
+
       {expanded && (
         <div className="mt-3 pt-3 border-t border-white/10" data-testid={`owner-seller-details-${sellerId}`}>
           <div className="grid grid-cols-2 gap-2">
@@ -289,7 +318,6 @@ function SellerCard({ rank, seller, isTop3 }) {
         </div>
       )}
 
-      {/* Expand hint */}
       <div className="mt-2 text-[10px] text-neutral-600 text-right">
         {expanded ? "Свернуть" : "Подробнее"}
       </div>
@@ -310,19 +338,19 @@ function SegmentedChips({ options, value, onChange }) {
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-1">
       <div className="flex flex-wrap gap-1">
-        {options.map((o) => (
+        {options.map((option) => (
           <button
-            key={o.k}
+            key={option.k}
             type="button"
-            onClick={() => onChange(o.k)}
+            onClick={() => onChange(option.k)}
             className={[
               "rounded-lg px-3 py-2 text-xs font-semibold transition-colors",
-              value === o.k
+              value === option.k
                 ? "bg-white/10 text-neutral-100 border border-white/10"
                 : "bg-transparent text-neutral-400 hover:text-neutral-200",
             ].join(" ")}
           >
-            {o.t}
+            {option.t}
           </button>
         ))}
       </div>

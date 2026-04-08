@@ -7,6 +7,10 @@ import {
   resolveOwnerSettings,
 } from './owner-settings.mjs';
 import { getStreakMultiplier, getSellerState } from './seller-motivation-state.mjs';
+import {
+  buildInitialSellerCalibrationState,
+  listSellerCalibrationStates,
+} from './motivation/seller-calibration-state.mjs';
 import { roundDownTo50 } from './utils/money-rounding.mjs';
 import { calcMotivationDay } from './motivation/engine.mjs';
 import {
@@ -47,6 +51,124 @@ function pickFirstExisting(table, candidates, fallback) {
 
 function roundToKopecks(amount) {
   return Math.round(Number(amount || 0) * 100) / 100;
+}
+
+function toPositiveInteger(value) {
+  const normalized = Number(value);
+  return Number.isInteger(normalized) && normalized > 0 ? normalized : null;
+}
+
+function normalizeBusinessDayValue(value) {
+  const businessDay = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(businessDay) ? businessDay : null;
+}
+
+function resolveSqlDateExprValue(dateExpr) {
+  if (!dateExpr) return null;
+  try {
+    const row = db.prepare(`SELECT ${dateExpr} AS business_day`).get();
+    return normalizeBusinessDayValue(row?.business_day);
+  } catch {
+    return null;
+  }
+}
+
+function getOwnerCalibrationReferenceBusinessDay({ businessDay = null, dateExpr = null } = {}) {
+  return (
+    normalizeBusinessDayValue(businessDay)
+    || resolveSqlDateExprValue(dateExpr)
+    || resolveSqlDateExprValue("DATE('now','localtime')")
+    || '1970-01-01'
+  );
+}
+
+function buildOwnerCalibrationFields(state) {
+  return {
+    calibration_status: String(state?.calibration_status || 'uncalibrated'),
+    effective_level: state?.effective_level == null ? null : String(state.effective_level),
+    pending_next_week_level: state?.pending_next_week_level == null ? null : String(state.pending_next_week_level),
+    streak_days: Math.max(0, Number(state?.streak_days || 0)),
+    streak_multiplier: Number.isFinite(Number(state?.streak_multiplier))
+      ? Number(state.streak_multiplier)
+      : 1,
+    effective_week_id: state?.effective_week_id == null ? null : String(state.effective_week_id),
+    pending_week_id: state?.pending_week_id == null ? null : String(state.pending_week_id),
+  };
+}
+
+function buildOwnerCalibrationStateMap(sellerIds, { businessDay = null, dateExpr = null } = {}) {
+  const normalizedSellerIds = [...new Set(
+    (Array.isArray(sellerIds) ? sellerIds : [])
+      .map((sellerId) => toPositiveInteger(sellerId))
+      .filter(Boolean)
+  )];
+
+  if (normalizedSellerIds.length === 0) {
+    return new Map();
+  }
+
+  const referenceBusinessDay = getOwnerCalibrationReferenceBusinessDay({ businessDay, dateExpr });
+  const stateRows = listSellerCalibrationStates(db, { sellerIds: normalizedSellerIds });
+  const stateMap = new Map((stateRows || []).map((state) => [Number(state.seller_id), state]));
+
+  for (const sellerId of normalizedSellerIds) {
+    if (!stateMap.has(sellerId)) {
+      stateMap.set(sellerId, buildInitialSellerCalibrationState({
+        sellerId,
+        businessDay: referenceBusinessDay,
+      }));
+    }
+  }
+
+  return stateMap;
+}
+
+function enrichOwnerRowsWithCalibration(
+  rows,
+  {
+    sellerIdKey = 'user_id',
+    roleKey = null,
+    roleValue = 'seller',
+    businessDay = null,
+    dateExpr = null,
+  } = {}
+) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  const sellerIds = rows
+    .filter((row) => !roleKey || String(row?.[roleKey] || '') === roleValue)
+    .map((row) => toPositiveInteger(row?.[sellerIdKey]))
+    .filter(Boolean);
+
+  if (sellerIds.length === 0) {
+    return rows;
+  }
+
+  const calibrationStateMap = buildOwnerCalibrationStateMap(sellerIds, { businessDay, dateExpr });
+
+  return rows.map((row) => {
+    if (roleKey && String(row?.[roleKey] || '') !== roleValue) {
+      return row;
+    }
+
+    const sellerId = toPositiveInteger(row?.[sellerIdKey]);
+    if (!sellerId) return row;
+
+    const calibrationFields = buildOwnerCalibrationFields(calibrationStateMap.get(sellerId));
+
+    return {
+      ...row,
+      seller_calibration_state: calibrationFields,
+      calibration_status: calibrationFields.calibration_status,
+      effective_level: calibrationFields.effective_level,
+      pending_next_week_level: calibrationFields.pending_next_week_level,
+      streak_multiplier: calibrationFields.streak_multiplier,
+      effective_week_id: calibrationFields.effective_week_id,
+      pending_week_id: calibrationFields.pending_week_id,
+    };
+  });
 }
 
 function isMoneyEqual(a, b, epsilon = 0.009) {
@@ -3033,10 +3155,31 @@ router.get('/motivation/day', (req, res) => {
     }
     
     // Return in same format as before
+    const responseData = result.data && typeof result.data === 'object'
+      ? {
+          ...result.data,
+          points_by_user: enrichOwnerRowsWithCalibration(result.data.points_by_user, {
+            sellerIdKey: 'user_id',
+            roleKey: 'role',
+            roleValue: 'seller',
+            businessDay: day,
+          }),
+          payouts: enrichOwnerRowsWithCalibration(result.data.payouts, {
+            sellerIdKey: 'user_id',
+            roleKey: 'role',
+            roleValue: 'seller',
+            businessDay: day,
+          }),
+        }
+      : result.data;
+
     return res.json({
       ok: true,
-      data: result.data,
-      meta: { warnings: result.warnings }
+      data: responseData,
+      meta: {
+        warnings: result.warnings,
+        owner_calibration_visibility_source: 'seller_calibration_state_sidecar',
+      }
     });
   } catch (e) {
     console.error('[owner/motivation/day] Error:', e);
@@ -3298,6 +3441,11 @@ router.get('/motivation/weekly', (req, res) => {
       }
       s.weekly_payout_current = weeklyPayoutCurrent;
     });
+
+    const sellersWithCalibration = enrichOwnerRowsWithCalibration(sellers, {
+      sellerIdKey: 'user_id',
+      businessDay: dateTo,
+    });
     
     return res.json({
       ok: true,
@@ -3315,9 +3463,9 @@ router.get('/motivation/weekly', (req, res) => {
         weekly_pool_total_current,
         weekly_distribution,
         weekly_distribution_current,
-        sellers,
+        sellers: sellersWithCalibration,
         top3,
-        top3_current: sellers.slice(0, 3).map(s => ({
+        top3_current: sellersWithCalibration.slice(0, 3).map(s => ({
           user_id: s.user_id,
           name: s.name,
           rank: s.rank,
@@ -3338,6 +3486,7 @@ router.get('/motivation/weekly', (req, res) => {
           ? 'canonical_weekly_revenue_x_weekly_percent'
           : 'seller_only_ledger_revenue_x_weekly_percent',
         payout_schedule: 'sunday_top3_by_points',
+        owner_calibration_visibility_source: 'seller_calibration_state_sidecar',
         consistency_diagnostics: {
           warnings: weeklyConsistencyWarnings,
           duplicate_withhold_days: weeklyPoolDuplicateDays,
@@ -4816,15 +4965,23 @@ router.get('/sellers', (req, res) => {
       item.share_percent = totalRevenueForecast > 0 ? Math.round((item.revenue_forecast / totalRevenueForecast) * 1000) / 1000 : null;
     });
     
+    const itemsWithCalibration = enrichOwnerRowsWithCalibration(items, {
+      sellerIdKey: 'seller_id',
+      dateExpr: preset === 'all' ? "DATE('now','localtime')" : toExpr,
+    });
+
     return res.json({
       ok: true,
       data: {
         preset,
         range: preset === 'all' ? null : { from: null, to: null },
-        items,
+        items: itemsWithCalibration,
         totals
       },
-      meta: { warnings }
+      meta: {
+        warnings,
+        owner_calibration_visibility_source: 'seller_calibration_state_sidecar',
+      }
     });
   } catch (e) {
     console.error('[owner/sellers] Error:', e);

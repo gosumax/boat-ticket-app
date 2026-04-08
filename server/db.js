@@ -5,6 +5,7 @@ import bcrypt from "bcrypt";
 import fs from "fs";
 import { ensureOwnerRoleAndUser } from "./ownerSetup.mjs";
 import { ensureCanonicalShiftClosureColumns } from "./shift-closure-schema.mjs";
+import { ensureSellerCalibrationStateSchema } from "./motivation/seller-calibration-state.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -570,6 +571,15 @@ if (presalesSlotUidCheck.count === 0) {
     }
   } catch (e) {
     console.log('[SELLER_MOTIVATION_STATE] Table creation skipped:', e?.message || e);
+  }
+
+  // Hidden next-stage calibration/streak state.
+  // Separate from seller_motivation_state to avoid changing current runtime semantics.
+  try {
+    ensureSellerCalibrationStateSchema(db);
+    console.log('[SELLER_CALIBRATION_STATE] Schema ensured');
+  } catch (e) {
+    console.log('[SELLER_CALIBRATION_STATE] Schema ensure skipped:', e?.message || e);
   }
 
   // ONE-TIME SELLER SEASON STATS TABLE - for seasonal points accumulation

@@ -1,3 +1,5 @@
+import { extractSellerCalibrationState } from './ownerSellerCalibration.js';
+
 function safeNum(value) {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
@@ -71,6 +73,10 @@ export function buildOwnerMotivationDayViewModel(data, fallbackDay, moneySummary
     .filter((row) => row?.role === 'seller')
     .map((row) => {
       const pointsEntry = pointsByUser.get(safeNum(row?.user_id));
+      const calibrationState = extractSellerCalibrationState({
+        ...(row || {}),
+        ...(pointsEntry || {}),
+      });
       const kStreak = safeNum(
         pointsEntry?.k_streak ??
           pointsEntry?.streak_multiplier ??
@@ -86,6 +92,13 @@ export function buildOwnerMotivationDayViewModel(data, fallbackDay, moneySummary
         points_base: safeNum(pointsEntry?.points_base ?? row?.points_base),
         k_streak: kStreak > 0 ? kStreak : 1,
         points_total: safeNum(pointsEntry?.points_total ?? row?.points_total),
+        seller_calibration_state: calibrationState,
+        calibration_status: calibrationState.calibration_status,
+        effective_level: calibrationState.effective_level,
+        pending_next_week_level: calibrationState.pending_next_week_level,
+        streak_multiplier: calibrationState.streak_multiplier,
+        effective_week_id: calibrationState.effective_week_id,
+        pending_week_id: calibrationState.pending_week_id,
       };
     });
 

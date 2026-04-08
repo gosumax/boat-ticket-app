@@ -6,6 +6,7 @@ import {
 } from './dispatcher-shift-ledger.mjs';
 import { resolveOwnerSettings } from './owner-settings.mjs';
 import { updateSellerMotivationState, getStreakMultiplier, getSellerState } from './seller-motivation-state.mjs';
+import { runSellerCalibrationEngineForDay } from './motivation/seller-calibration-engine.mjs';
 import { saveDayStats, updateSeasonStatsFromDay } from './season-stats.mjs';
 import {
   buildUnifiedShiftClosureSnapshot,
@@ -479,6 +480,12 @@ router.post('/close', (req, res) => {
       updateSellerMotivationState(businessDay);
     } catch (motivationError) {
       console.error('[SHIFT_CLOSE_MOTIVATION_STATE_ERROR]', motivationError);
+    }
+
+    try {
+      runSellerCalibrationEngineForDay(db, businessDay);
+    } catch (calibrationError) {
+      console.error('[SHIFT_CLOSE_SELLER_CALIBRATION_ENGINE_ERROR]', calibrationError);
     }
 
     try {

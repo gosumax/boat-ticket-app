@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+﻿import { test, expect } from '@playwright/test';
 import { login } from './helpers/auth.js';
 import { openFirstTrip, createPresaleUI } from './helpers/dispatcher.js';
 
@@ -276,8 +276,8 @@ test.describe('E2E Full Funnel Day', () => {
           await expect(firstCard.locator('[data-testid^="seller-trip-sold-"]')).toBeVisible();
           await expect(firstCard.locator('[data-testid^="seller-trip-capacity-"]')).toBeVisible();
         } else {
-          await expect(firstCard).toContainText('Свободно');
-          await expect(firstCard).toContainText('Занято');
+          await expect(firstCard).toContainText('РЎРІРѕР±РѕРґРЅРѕ');
+          await expect(firstCard).toContainText('Р—Р°РЅСЏС‚Рѕ');
         }
       }
       await page.getByTestId('seller-trip-back').click();
@@ -507,8 +507,14 @@ test.describe('E2E Full Funnel Day', () => {
       await expect(topCard).toBeVisible({ timeout: 10000 });
       expect(await readMoneyByTestId(page, `owner-seller-paid-${topSellerId}`)).toBe(Math.round(toNum(topSeller.revenue_paid)));
       expect(await readMoneyByTestId(page, `owner-seller-pending-${topSellerId}`)).toBe(Math.round(toNum(topSeller.revenue_pending)));
+      await expect(page.getByTestId(`owner-seller-calibration-status-${topSellerId}`)).toBeVisible({ timeout: 5000 });
+      await expect(page.getByTestId(`owner-seller-calibration-level-${topSellerId}`)).toBeVisible({ timeout: 5000 });
+      await expect(topCard).not.toContainText('k:');
+      await expect(page.locator(`[data-testid="owner-seller-calibration-pending-${topSellerId}"]`)).toHaveCount(0);
       await topCard.click();
       await expect(page.getByTestId(`owner-seller-details-${topSellerId}`)).toBeVisible({ timeout: 5000 });
+      await expect(page.locator(`[data-testid="owner-seller-calibration-week-${topSellerId}"]`)).toHaveCount(0);
+      await expect(page.locator(`[data-testid="owner-seller-calibration-next-week-${topSellerId}"]`)).toHaveCount(0);
     }
 
     await page.locator('[data-testid="owner-tab-motivation"]:visible').first().click();
@@ -524,6 +530,7 @@ test.describe('E2E Full Funnel Day', () => {
           toNum(totals.funds_withhold_season_today)
         )
       );
+    await expect(page.getByTestId('owner-screen-motivation')).not.toContainText('Калибровка');
     expect(ownerMoneySeasonTodayUi).toBe(
       Math.round(
         toNum(
@@ -544,6 +551,8 @@ test.describe('E2E Full Funnel Day', () => {
     expect(await readMoneyByTestId(page, 'owner-weekly-top3-split-first')).toBe(Math.round(toNum(ownerWeeklyData.weekly_pool_total_current) * 0.5));
     expect(await readMoneyByTestId(page, 'owner-weekly-top3-split-second')).toBe(Math.round(toNum(ownerWeeklyData.weekly_pool_total_current) * 0.3));
     expect(await readMoneyByTestId(page, 'owner-weekly-top3-split-third')).toBe(Math.round(toNum(ownerWeeklyData.weekly_pool_total_current) * 0.2));
+    await expect(page.getByTestId('owner-screen-motivation')).not.toContainText('Калибровка');
+    await expect(page.getByTestId('owner-screen-motivation')).not.toContainText('Зона');
 
     await page.getByTestId('owner-motivation-tab-season').click();
     const seasonId = String(new Date().getFullYear());
@@ -562,7 +571,8 @@ test.describe('E2E Full Funnel Day', () => {
       toNum(ownerSeasonData.season_pool_dispatcher_decision_total ?? ownerSeasonData.season_pool_manual_transfer_total ?? 0),
       2
     );
-    await expect(page.getByText(/Общий фонд:/)).toHaveCount(0);
+    await expect(page.getByText(/РћР±С‰РёР№ С„РѕРЅРґ:/)).toHaveCount(0);
+    await expect(page.getByTestId('owner-screen-motivation')).not.toContainText('Зона');
 
     // Seller personal sales view is accessible after funnel operations.
     await logoutToLogin(page);
@@ -578,3 +588,4 @@ test.describe('E2E Full Funnel Day', () => {
     await expect(page.getByTestId('seller-earnings-title')).toBeVisible({ timeout: 10000 });
   });
 });
+

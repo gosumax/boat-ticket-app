@@ -119,6 +119,140 @@ function getCurrentSeason() {
   return String(new Date().getFullYear());
 }
 
+export function DayParticipantsTable({ rows }) {
+  return (
+    <div className="overflow-x-auto" data-testid="owner-motivation-day-participants-table">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-left text-neutral-500 border-b border-neutral-800">
+            <th className="py-2 pr-2">Имя</th>
+            <th className="py-2 px-2">Роль</th>
+            <th className="py-2 px-2">Зона</th>
+            <th className="py-2 px-2 text-right">Очки</th>
+            <th className="py-2 px-2 text-right">k(очков)</th>
+            <th className="py-2 px-2 text-right">Итого очков</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => (
+            <tr
+              key={row.user_id || idx}
+              className="border-b border-neutral-800/50"
+              data-testid={`owner-motivation-day-row-${row.user_id || idx}`}
+            >
+              <td className="py-2 pr-2 font-medium truncate max-w-[100px]">{row.name || `User ${row.user_id}`}</td>
+              <td className="py-2 px-2 text-neutral-400">Прод.</td>
+              <td className="py-2 px-2 text-neutral-400">{row.zone || "—"}</td>
+              <td className="py-2 px-2 text-right text-neutral-300">{formatMotivationPoints(row.points_base || 0)}</td>
+              <td className="py-2 px-2 text-right text-neutral-400">{Number(row.k_streak ?? 1).toFixed(2)}</td>
+              <td className="py-2 px-2 text-right text-emerald-300 font-semibold">{formatMotivationPoints(row.points_total || 0)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function WeeklySellerTable({ sellers }) {
+  return (
+    <div className="overflow-x-auto" data-testid="owner-motivation-week-table">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-left text-neutral-500 border-b border-neutral-800">
+            <th className="py-2 px-2">Имя</th>
+            <th className="py-2 px-2 text-right">Очки</th>
+            <th className="py-2 px-2 text-right">k(очков)</th>
+            <th className="py-2 px-2 text-right">Итого</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sellers.map((seller, idx) => (
+            <tr
+              key={seller.user_id || idx}
+              className={[
+                "border-b border-neutral-800/50",
+                idx < 3 ? "bg-amber-900/10" : "",
+              ].join(" ")}
+            >
+              <td className="py-2 px-2 font-medium truncate max-w-[100px]">{seller.name || `User ${seller.user_id}`}</td>
+              <td className="py-2 px-2 text-right text-neutral-300">{formatMotivationPoints((seller.points_week_base ?? seller.points_base) || 0)}</td>
+              <td className="py-2 px-2 text-right text-neutral-400">{Number(seller.k_streak ?? 1).toFixed(2)}</td>
+              <td className="py-2 px-2 text-right text-emerald-300 font-semibold">{formatMotivationPoints((seller.points_week_total ?? seller.points_total) || 0)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function SeasonSellerTable({ sellers, minWorkedDaysSeason, minWorkedDaysSep }) {
+  return (
+    <div className="mt-4 overflow-x-auto" data-testid="owner-motivation-season-table">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-left text-neutral-500 border-b border-neutral-800">
+            <th className="py-2 pr-2">#</th>
+            <th className="py-2 px-2">Имя</th>
+            <th className="py-2 px-2 text-right">Очки</th>
+            <th className="py-2 px-2">Условие</th>
+            <th className="py-2 px-2 text-right">Выплата</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sellers.map((seller, idx) => (
+            <tr
+              key={seller.user_id || idx}
+              className={[
+                "border-b border-neutral-800/50",
+                idx < 3 ? "bg-amber-900/10" : "",
+              ].join(" ")}
+            >
+              <td className="py-2 pr-2">
+                {idx < 3 ? (
+                  <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-500/20 text-amber-300 font-bold">{idx + 1}</span>
+                ) : (
+                  <span className="text-neutral-500">{idx + 1}</span>
+                )}
+              </td>
+              <td className="py-2 px-2 font-medium truncate max-w-[100px]">{seller.name || `User ${seller.user_id}`}</td>
+              <td className="py-2 px-2 text-right text-emerald-300 font-semibold">{formatMotivationPoints(seller.points_total || 0)}</td>
+              <td className="py-2 px-2">
+                <div
+                  className={[
+                    "inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium",
+                    Number(seller.is_eligible || 0) === 1
+                      ? "border-emerald-500/40 bg-emerald-900/20 text-emerald-300"
+                      : "border-neutral-700 bg-neutral-900/40 text-neutral-300",
+                  ].join(" ")}
+                >
+                  {Number(seller.is_eligible || 0) === 1 ? "Условие выполнено" : "Условие не выполнено"}
+                </div>
+                <div className="mt-1 text-[10px] text-neutral-500">
+                  {formatInt(seller.worked_days_season || 0)}/{formatInt(minWorkedDaysSeason)} д. сезона ·{" "}
+                  {formatInt(seller.worked_days_sep || 0)}/{formatInt(minWorkedDaysSep)} д. сентября
+                </div>
+              </td>
+              <td className="py-2 px-2 text-right">
+                <div className="font-semibold text-sky-300">
+                  {formatRUBPrecise(seller.season_payout || 0)}
+                </div>
+                {Number(seller.season_payout_recipient || 0) === 1 && Number(seller.is_eligible || 0) !== 1 && (
+                  <div className="mt-1 text-[10px] text-neutral-500">Получит при выполнении условия</div>
+                )}
+                {Number(seller.season_payout_recipient || 0) !== 1 && (
+                  <div className="mt-1 text-[10px] text-neutral-500">Вне текущего прогноза схемы</div>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function OwnerMotivationView({ settingsRefreshKey }) {
   const [subTab, setSubTab] = useState("day"); // day | week | season
   
@@ -314,36 +448,7 @@ function DayView() {
       {payload.seller_rows.length > 0 && (
         <div className="mt-2">
           <div className="text-sm font-semibold px-1 mb-3">Участники</div>
-          <div className="overflow-x-auto" data-testid="owner-motivation-day-participants-table">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-left text-neutral-500 border-b border-neutral-800">
-                  <th className="py-2 pr-2">Имя</th>
-                  <th className="py-2 px-2">Роль</th>
-                  <th className="py-2 px-2">Зона</th>
-                  <th className="py-2 px-2 text-right">Очки</th>
-                  <th className="py-2 px-2 text-right">k(streak)</th>
-                  <th className="py-2 px-2 text-right">Итого очков</th>
-                </tr>
-              </thead>
-              <tbody>
-                {payload.seller_rows.map((p, idx) => (
-                  <tr
-                    key={p.user_id || idx}
-                    className="border-b border-neutral-800/50"
-                    data-testid={`owner-motivation-day-row-${p.user_id || idx}`}
-                  >
-                    <td className="py-2 pr-2 font-medium truncate max-w-[100px]">{p.name || `User ${p.user_id}`}</td>
-                    <td className="py-2 px-2 text-neutral-400">Прод.</td>
-                    <td className="py-2 px-2 text-neutral-400">{p.zone || '—'}</td>
-                    <td className="py-2 px-2 text-right text-neutral-300">{formatMotivationPoints(p.points_base || 0)}</td>
-                    <td className="py-2 px-2 text-right text-neutral-400">{Number(p.k_streak ?? 1).toFixed(2)}</td>
-                    <td className="py-2 px-2 text-right text-emerald-300 font-semibold">{formatMotivationPoints(p.points_total || 0)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DayParticipantsTable rows={payload.seller_rows} />
         </div>
       )}
 
@@ -506,38 +611,7 @@ function WeekView() {
       {payload.sellers.length > 0 && (
         <div className="mt-2">
           <div className="text-sm font-semibold px-1 mb-3">Рейтинг недели</div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-left text-neutral-500 border-b border-neutral-800">
-                  <th className="py-2 px-2">Имя</th>
-                  <th className="py-2 px-2">Зона</th>
-                  <th className="py-2 px-2 text-right">Очки</th>
-                  <th className="py-2 px-2 text-right">Серия</th>
-                  <th className="py-2 px-2 text-right">k(серии)</th>
-                  <th className="py-2 px-2 text-right">Итого</th>
-                </tr>
-              </thead>
-              <tbody>
-                {payload.sellers.map((s, idx) => (
-                  <tr
-                    key={s.user_id || idx}
-                    className={[
-                      "border-b border-neutral-800/50",
-                      idx < 3 ? "bg-amber-900/10" : "",
-                    ].join(" ")}
-                  >
-                    <td className="py-2 px-2 font-medium truncate max-w-[100px]">{s.name || `User ${s.user_id}`}</td>
-                    <td className="py-2 px-2 text-neutral-400">{s.zone || '—'}</td>
-                    <td className="py-2 px-2 text-right text-neutral-300">{formatMotivationPoints((s.points_week_base ?? s.points_base) || 0)}</td>
-                    <td className="py-2 px-2 text-right text-neutral-400">{s.streak_days || 0}</td>
-                    <td className="py-2 px-2 text-right text-neutral-400">{Number(s.k_streak ?? s.streak_multiplier ?? 1).toFixed(2)}</td>
-                    <td className="py-2 px-2 text-right text-emerald-300 font-semibold">{formatMotivationPoints((s.points_week_total ?? s.points_total) || 0)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <WeeklySellerTable sellers={payload.sellers} />
         </div>
       )}
 
@@ -789,70 +863,11 @@ function SeasonView({ settings }) {
                 </div>
               </div>
             </div>
-
-            <div className="mt-4 overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-left text-neutral-500 border-b border-neutral-800">
-                    <th className="py-2 pr-2">#</th>
-                    <th className="py-2 px-2">Имя</th>
-                    <th className="py-2 px-2">Зона</th>
-                    <th className="py-2 px-2 text-right">Очки</th>
-                    <th className="py-2 px-2">Условие</th>
-                    <th className="py-2 px-2 text-right">Выплата</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {payload.sellers.map((seller, idx) => (
-                    <tr
-                      key={seller.user_id || idx}
-                      className={[
-                        "border-b border-neutral-800/50",
-                        idx < 3 ? "bg-amber-900/10" : "",
-                      ].join(" ")}
-                    >
-                      <td className="py-2 pr-2">
-                        {idx < 3 ? (
-                          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-500/20 text-amber-300 font-bold">{idx + 1}</span>
-                        ) : (
-                          <span className="text-neutral-500">{idx + 1}</span>
-                        )}
-                      </td>
-                      <td className="py-2 px-2 font-medium truncate max-w-[100px]">{seller.name || `User ${seller.user_id}`}</td>
-                      <td className="py-2 px-2 text-neutral-400">{seller.zone || "—"}</td>
-                      <td className="py-2 px-2 text-right text-emerald-300 font-semibold">{formatMotivationPoints(seller.points_total || 0)}</td>
-                      <td className="py-2 px-2">
-                        <div
-                          className={[
-                            "inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium",
-                            Number(seller.is_eligible || 0) === 1
-                              ? "border-emerald-500/40 bg-emerald-900/20 text-emerald-300"
-                              : "border-neutral-700 bg-neutral-900/40 text-neutral-300",
-                          ].join(" ")}
-                        >
-                          {Number(seller.is_eligible || 0) === 1 ? "Условие выполнено" : "Условие не выполнено"}
-                        </div>
-                        <div className="mt-1 text-[10px] text-neutral-500">
-                          {formatInt(seller.worked_days_season || 0)}/{formatInt(payload.min_worked_days_season)} д. сезона ·{" "}
-                          {formatInt(seller.worked_days_sep || 0)}/{formatInt(payload.min_worked_days_sep)} д. сентября
-                        </div>
-                      </td>
-                      <td className="py-2 px-2 text-right">
-                        <div className="font-semibold text-sky-300">
-                          {formatRUBPrecise(seller.season_payout || 0)}
-                        </div>
-                        {Number(seller.season_payout_recipient || 0) === 1 && Number(seller.is_eligible || 0) !== 1 && (
-                          <div className="mt-1 text-[10px] text-neutral-500">Получит при выполнении условия</div>
-                        )}
-                        {Number(seller.season_payout_recipient || 0) !== 1 && (
-                          <div className="mt-1 text-[10px] text-neutral-500">Вне текущего прогноза схемы</div>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <SeasonSellerTable
+              sellers={payload.sellers}
+              minWorkedDaysSeason={payload.min_worked_days_season}
+              minWorkedDaysSep={payload.min_worked_days_sep}
+            />
           </div>
         </div>
       )}

@@ -95,4 +95,52 @@ describe('buildOwnerMotivationDayViewModel', () => {
     expect(viewModel.season_amount_day).toBe(700);
     expect(viewModel.total_funds_day).toBe(1200);
   });
+
+  it('carries additive owner calibration visibility from the hidden sidecar state', () => {
+    const viewModel = buildOwnerMotivationDayViewModel({
+      business_day: '2026-04-15',
+      payouts: [
+        {
+          user_id: 10,
+          name: 'Anna',
+          role: 'seller',
+          zone: 'center',
+          seller_calibration_state: {
+            calibration_status: 'calibrated',
+            effective_level: 'STRONG',
+            pending_next_week_level: 'TOP',
+            streak_days: 4,
+            streak_multiplier: 1.4,
+            effective_week_id: '2026-W16',
+            pending_week_id: '2026-W17',
+          },
+        },
+      ],
+      points_by_user: [
+        {
+          user_id: 10,
+          zone: 'center',
+          points_base: 12.4,
+          k_streak: 1.1,
+          points_total: 13.64,
+        },
+      ],
+    });
+
+    expect(viewModel.seller_rows).toEqual([
+      expect.objectContaining({
+        user_id: 10,
+        calibration_status: 'calibrated',
+        effective_level: 'STRONG',
+        pending_next_week_level: 'TOP',
+        streak_multiplier: 1.4,
+        effective_week_id: '2026-W16',
+        pending_week_id: '2026-W17',
+        seller_calibration_state: expect.objectContaining({
+          streak_days: 4,
+          streak_multiplier: 1.4,
+        }),
+      }),
+    ]);
+  });
 });
