@@ -21,9 +21,10 @@ describe('test DB isolation', () => {
 
   it('uses the dedicated test database instead of the main database.sqlite', () => {
     const actualDbPath = path.resolve(String(getDatabaseFilePath?.() || process.env.DB_FILE || ''));
+    const expectedTestDir = path.dirname(path.resolve(expectedTestDbPath));
 
-    expect(actualDbPath).toBe(path.resolve(expectedTestDbPath));
     expect(actualDbPath).not.toBe(path.resolve(mainDbPath));
-    expect(path.basename(actualDbPath)).toBe('test.sqlite');
+    expect(path.dirname(actualDbPath)).toBe(expectedTestDir);
+    expect(path.basename(actualDbPath)).toMatch(/^test(?:-\d+-\d+-\d+)?\.sqlite$/);
   });
 });

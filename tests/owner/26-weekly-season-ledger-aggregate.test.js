@@ -39,7 +39,11 @@ beforeEach(() => {
   // Clean up
   db.prepare(`DELETE FROM motivation_day_settings`).run();
   db.prepare(`DELETE FROM money_ledger`).run();
-  db.prepare(`UPDATE owner_settings SET settings_json = '{"motivationType":"team","motivation_percent":0.15}' WHERE id = 1`).run();
+  db.prepare(`
+    UPDATE owner_settings
+    SET settings_json = '{"motivationType":"team","motivation_percent":0.15,"seasonStart":"2033-01-01","seasonEnd":"2033-12-31"}'
+    WHERE id = 1
+  `).run();
 });
 
 describe('OWNER WEEKLY/SEASON LEDGER AGGREGATE', () => {
@@ -135,6 +139,11 @@ describe('OWNER WEEKLY/SEASON LEDGER AGGREGATE', () => {
     
     it('season_pool_total_ledger excludes entries from other seasons', async () => {
       const now = new Date().toISOString();
+      db.prepare(`
+        UPDATE owner_settings
+        SET settings_json = '{"motivationType":"team","motivation_percent":0.15,"seasonStart":"2033-01-01","seasonEnd":"2033-12-31"}'
+        WHERE id = 1
+      `).run();
       
       // Insert entry for 2033
       db.prepare(`

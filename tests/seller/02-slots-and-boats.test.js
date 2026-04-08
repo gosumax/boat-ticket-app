@@ -1,8 +1,8 @@
 // 02-slots-and-boats.test.js — Boats and slots listing for seller
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { getTestDb } from '../_helpers/dbReset.js';
-import { loadSeedData } from '../_helpers/loadSeedData.js';
+import { resetTestDb, getTestDb } from '../_helpers/dbReset.js';
+import { seedBasicData } from '../_helpers/seedBasic.js';
 import { makeApp } from '../_helpers/makeApp.js';
 import { httpLog } from '../_helpers/httpLog.js';
 
@@ -10,8 +10,9 @@ let app, db, seedData, token;
 
 beforeAll(async () => {
   httpLog.clear();
+  resetTestDb();
   db = getTestDb();
-  seedData = loadSeedData();
+  seedData = await seedBasicData(db);
   app = await makeApp();
   
   // Login sellerA

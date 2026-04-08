@@ -1,8 +1,8 @@
 // 01-auth-and-me.test.js — Auth flow for seller
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { getTestDb, getTableCounts } from '../_helpers/dbReset.js';
-import { loadSeedData } from '../_helpers/loadSeedData.js';
+import { resetTestDb, getTestDb } from '../_helpers/dbReset.js';
+import { seedBasicData } from '../_helpers/seedBasic.js';
 import { makeApp } from '../_helpers/makeApp.js';
 import { httpLog } from '../_helpers/httpLog.js';
 
@@ -10,8 +10,9 @@ let app, db, seedData;
 
 beforeAll(async () => {
   httpLog.clear();
-  db = getTestDb(); // Reuse already initialized DB
-  seedData = loadSeedData(); // Load seed data from global setup
+  resetTestDb();
+  db = getTestDb();
+  seedData = await seedBasicData(db);
   app = await makeApp();
 });
 

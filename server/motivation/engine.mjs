@@ -41,6 +41,18 @@ function hasCol(colsSet, name) {
   return colsSet && colsSet.has(name);
 }
 
+function normalizePointsZone(zone) {
+  const value = String(zone || '').trim().toLowerCase();
+  return ['hedgehog', 'center', 'sanatorium', 'stationary'].includes(value) ? value : null;
+}
+
+function resolveSellerOnlyCanonicalZone(boatType, zoneAtSale, sellerZone) {
+  const saleZone = normalizePointsZone(zoneAtSale);
+  if (saleZone) return saleZone;
+  if (boatType === 'banana') return normalizePointsZone(sellerZone) || 'center';
+  return 'center';
+}
+
 function getReserveTripDayExpr(db) {
   const presaleCols = safeGetColumns(db, 'presales');
   const ledgerCols = safeGetColumns(db, 'money_ledger');
@@ -71,15 +83,20 @@ function getPayrollEligibilitySql(db) {
   return {
     presaleJoinSql: hasPresales ? 'LEFT JOIN presales p ON p.id = ml.presale_id' : '',
     payrollEligiblePredicate: `(${tripDayExpr} IS NULL OR ${tripDayExpr} <= ?)`,
+    earnedOnDayPredicate: `(((${tripDayExpr}) = ?) OR ((${tripDayExpr}) IS NULL AND DATE(ml.business_day) = ?)) AND DATE(ml.business_day) <= ?`,
+    tripDayExpr,
   };
 }
 
-function calcFutureTripsReserveTotal(db, businessDay) {
+function calcFutureTripsReserveTotal(db, businessDay, options = {}) {
   try {
     if (!safeTableExists(db, 'money_ledger') || !safeTableExists(db, 'presales')) return 0;
 
     const ledgerCols = safeGetColumns(db, 'money_ledger');
     if (!hasCol(ledgerCols, 'business_day')) return 0;
+    const role = typeof options === 'string' ? options : options?.role;
+    const roleJoinSql = role ? 'LEFT JOIN users u ON u.id = ml.seller_id' : '';
+    const rolePredicateSql = role ? 'AND u.role = ?' : '';
 
     const tripDayExpr = getReserveTripDayExpr(db);
     const row = db.prepare(`
@@ -94,17 +111,60 @@ function calcFutureTripsReserveTotal(db, businessDay) {
         END), 0) AS reserve_total
       FROM money_ledger ml
       LEFT JOIN presales p ON p.id = ml.presale_id
+      ${roleJoinSql}
       WHERE ml.business_day = ?
         AND ml.status = 'POSTED'
         AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+        ${rolePredicateSql}
         AND ml.type IN (
           'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
           'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
           'SALE_CANCEL_REVERSE'
         )
-    `).get(businessDay, businessDay, businessDay);
+    `).get(...(role ? [businessDay, businessDay, businessDay, role] : [businessDay, businessDay, businessDay]));
 
     return Math.max(0, Number(row?.reserve_total || 0));
+  } catch {
+    return 0;
+  }
+}
+
+function calcEarnedTripDayRevenueTotal(db, businessDay, options = {}) {
+  try {
+    if (!safeTableExists(db, 'money_ledger')) return 0;
+
+    const { presaleJoinSql, earnedOnDayPredicate } = getPayrollEligibilitySql(db);
+    const role = typeof options === 'string' ? options : options?.role;
+    const roleJoinSql = role ? 'JOIN users u ON u.id = ml.seller_id' : '';
+    const rolePredicateSql = role ? 'AND u.role = ?' : '';
+    const row = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE
+          WHEN ml.type IN (
+            'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+            'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+          ) THEN ABS(ml.amount)
+          ELSE 0
+        END), 0) AS revenue_gross,
+        COALESCE(SUM(CASE
+          WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount)
+          ELSE 0
+        END), 0) AS refunds
+      FROM money_ledger ml
+      ${presaleJoinSql}
+      ${roleJoinSql}
+      WHERE ml.status = 'POSTED'
+        AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+        AND ${earnedOnDayPredicate}
+        ${rolePredicateSql}
+        AND ml.type IN (
+          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
+          'SALE_CANCEL_REVERSE'
+        )
+    `).get(...(role ? [businessDay, businessDay, businessDay, role] : [businessDay, businessDay, businessDay]));
+
+    return Math.max(0, roundToKopecks(Number(row?.revenue_gross || 0) - Number(row?.refunds || 0)));
   } catch {
     return 0;
   }
@@ -356,6 +416,7 @@ export function calcMotivationDay(db, day, options = {}) {
     ? 'dispatcher_shift_close'
     : 'default';
   const shiftCloseFormulaEnabled = profile === 'dispatcher_shift_close';
+  const sellerOnlyScope = !shiftCloseFormulaEnabled && options?.scope === 'seller_only';
   
   // Validate date format
   if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
@@ -421,13 +482,30 @@ export function calcMotivationDay(db, day, options = {}) {
       AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
       AND DATE(ml.business_day) = ?
   `).get(day);
-  
-  const revenue_total = Math.max(0, Number(revenueRow?.revenue_gross || 0) - Number(revenueRow?.refunds || 0));
-  const futureTripsReserveTotal = calcFutureTripsReserveTotal(db, day);
-  const salary_base = Math.max(0, roundToKopecks(revenue_total - futureTripsReserveTotal));
+
+  const revenueTotalPaymentDay = Math.max(0, Number(revenueRow?.revenue_gross || 0) - Number(revenueRow?.refunds || 0));
+  const sellerEarnedRevenueTotal = calcEarnedTripDayRevenueTotal(db, day, { role: 'seller' });
+  const earned_revenue_total = sellerOnlyScope
+    ? sellerEarnedRevenueTotal
+    : calcEarnedTripDayRevenueTotal(db, day);
+  const futureTripsReserveTotal = sellerOnlyScope
+    ? calcFutureTripsReserveTotal(db, day, { role: 'seller' })
+    : calcFutureTripsReserveTotal(db, day);
+  const revenue_total = sellerOnlyScope
+    ? sellerEarnedRevenueTotal
+    : revenueTotalPaymentDay;
+  const salary_base = sellerOnlyScope
+    ? Math.max(0, roundToKopecks(earned_revenue_total))
+    : Math.max(0, roundToKopecks(revenueTotalPaymentDay - futureTripsReserveTotal));
   const fundTotal = roundToKopecks(salary_base * p);
-  const withholdBaseRevenue = shiftCloseFormulaEnabled ? salary_base : revenue_total;
-  const { presaleJoinSql, payrollEligiblePredicate } = getPayrollEligibilitySql(db);
+  const withholdBaseRevenue = sellerOnlyScope
+    ? salary_base
+    : (shiftCloseFormulaEnabled ? salary_base : revenue_total);
+  const { presaleJoinSql, payrollEligiblePredicate, earnedOnDayPredicate } = getPayrollEligibilitySql(db);
+  const revenueScopePredicate = sellerOnlyScope
+    ? earnedOnDayPredicate
+    : `DATE(ml.business_day) = ? AND ${payrollEligiblePredicate}`;
+  const revenueScopeParams = sellerOnlyScope ? [day, day, day] : [day, day];
   
   // ====================
   // STEP 2.5: Calculate WITHHOLDS from fundTotal
@@ -462,13 +540,12 @@ export function calcMotivationDay(db, day, options = {}) {
     JOIN users u ON u.id = ml.seller_id
     WHERE ml.status = 'POSTED'
       AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-      AND DATE(ml.business_day) = ?
-      AND ${payrollEligiblePredicate}
+      AND ${revenueScopePredicate}
       AND ml.seller_id IS NOT NULL
       AND ml.seller_id > 0
       AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED')
       AND u.role = 'dispatcher'
-  `).all(day, day);
+  `).all(...revenueScopeParams);
 
   let activeDispatchersTodayIdsRaw = (dispatchersWithSalesTodayRaw || []).map((r) => Number(r.seller_id));
   const unattributedDispatcherRevenue = shiftCloseFormulaEnabled
@@ -573,8 +650,7 @@ export function calcMotivationDay(db, day, options = {}) {
     JOIN users u ON u.id = ml.seller_id
     WHERE ml.status = 'POSTED'
       AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-      AND DATE(ml.business_day) = ?
-      AND ${payrollEligiblePredicate}
+      AND ${revenueScopePredicate}
       AND ml.seller_id IS NOT NULL
       AND ml.seller_id > 0
       AND ml.type IN (
@@ -583,7 +659,7 @@ export function calcMotivationDay(db, day, options = {}) {
         'SALE_CANCEL_REVERSE'
       )
     GROUP BY ml.seller_id, u.username, u.role
-  `).all(day, day);
+  `).all(...revenueScopeParams);
   
   const activeSellersList = (usersWithRevenue || [])
     .filter((row) => String(row.role || '').toLowerCase() === 'seller')
@@ -657,7 +733,10 @@ export function calcMotivationDay(db, day, options = {}) {
   // STEP 4.5: Build revenue map
   // ====================
   const personalRevenueMap = new Map();
-  for (const participant of [...activeSellersList, ...activeDispatchersRevenueList]) {
+  const personalRevenueParticipants = sellerOnlyScope
+    ? activeSellersList
+    : [...activeSellersList, ...activeDispatchersRevenueList];
+  for (const participant of personalRevenueParticipants) {
     personalRevenueMap.set(participant.user_id, participant.revenue);
   }
   
@@ -839,31 +918,129 @@ export function calcMotivationDay(db, day, options = {}) {
   
   if (mode === 'adaptive') {
     const activeSellerIdSet = new Set(activeSellersList.map((seller) => seller.user_id));
-    const revenueBySellerAndType = db.prepare(`
-      SELECT
-        ml.seller_id,
-        COALESCE(b.type, gb.type) AS boat_type,
-        p.zone_at_sale,
-        COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
-        COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
-      FROM money_ledger ml
-      LEFT JOIN presales p ON p.id = ml.presale_id
-      LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
-      LEFT JOIN generated_slots gs ON (p.slot_uid LIKE 'generated:%' AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER))
-      LEFT JOIN boats b ON b.id = bs.boat_id
-      LEFT JOIN boats gb ON gb.id = gs.boat_id
-      WHERE ml.status = 'POSTED'
-        AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-        AND DATE(ml.business_day) = ?
-        AND ${payrollEligiblePredicate}
-        AND ml.seller_id IS NOT NULL
-        AND ml.seller_id > 0
-        AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
-      GROUP BY ml.seller_id, COALESCE(b.type, gb.type), p.zone_at_sale
-    `).all(day, day);
-    
     const sellerZones = db.prepare(`SELECT id, zone FROM users WHERE role = 'seller'`).all();
     const sellerZoneMap = new Map((sellerZones || []).map(r => [Number(r.id), r.zone]));
+    const canonicalCols = safeGetColumns(db, 'sales_transactions_canonical');
+    const canonicalHasBoatId = hasCol(canonicalCols, 'boat_id');
+    const canonicalBoatTypeExpr = canonicalHasBoatId
+      ? 'COALESCE(cb.type, gb.type, b.type)'
+      : 'COALESCE(gb.type, b.type)';
+    const ticketsExist = safeTableExists(db, 'tickets');
+    const ticketCols = safeGetColumns(db, 'tickets');
+    const ticketActivePredicate = hasCol(ticketCols, 'status')
+      ? `AND t.status = 'ACTIVE'`
+      : '';
+    const revenueBySellerAndType = (
+      sellerOnlyScope &&
+      safeTableExists(db, 'sales_transactions_canonical') &&
+      safeTableExists(db, 'presales')
+    )
+      ? db.prepare(`
+          WITH valid_canonical_presales AS (
+            SELECT
+              stc.presale_id
+              ${canonicalHasBoatId ? ', MAX(stc.boat_id) AS canonical_boat_id' : ''}
+            FROM sales_transactions_canonical stc
+            WHERE stc.status = 'VALID'
+              AND DATE(stc.business_day) = ?
+              AND stc.presale_id IS NOT NULL
+            GROUP BY stc.presale_id
+          ),
+          scoped_presales AS (
+            SELECT
+              p.id AS presale_id,
+              p.seller_id,
+              u.username AS seller_name,
+              u.zone AS seller_zone,
+              p.zone_at_sale,
+              ${canonicalBoatTypeExpr} AS boat_type,
+              CAST(COALESCE(p.total_price, 0) AS INTEGER) AS presale_revenue
+            FROM valid_canonical_presales vcp
+            JOIN presales p ON p.id = vcp.presale_id
+            JOIN users u ON u.id = p.seller_id
+            LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+            LEFT JOIN generated_slots gs
+              ON p.slot_uid LIKE 'generated:%'
+             AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER)
+            LEFT JOIN boats b ON b.id = bs.boat_id
+            LEFT JOIN boats gb ON gb.id = gs.boat_id
+            ${canonicalHasBoatId ? 'LEFT JOIN boats cb ON cb.id = vcp.canonical_boat_id' : ''}
+            WHERE p.seller_id IS NOT NULL
+              AND p.seller_id > 0
+              AND u.role = 'seller'
+              AND COALESCE(u.is_active, 1) = 1
+          )
+          ${ticketsExist ? `,
+          ticket_rows AS (
+            SELECT
+              sp.presale_id AS presale_id,
+              CAST(COALESCE(t.price, 0) AS INTEGER) AS revenue
+            FROM scoped_presales sp
+            JOIN tickets t ON t.presale_id = sp.presale_id
+            WHERE 1 = 1
+              ${ticketActivePredicate}
+          ),
+          presale_fallback_rows AS (
+            SELECT
+              sp.presale_id AS presale_id,
+              sp.presale_revenue AS revenue
+            FROM scoped_presales sp
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM tickets t
+              WHERE t.presale_id = sp.presale_id
+                ${ticketActivePredicate}
+            )
+          ),
+          source_rows AS (
+            SELECT * FROM ticket_rows
+            UNION ALL
+            SELECT * FROM presale_fallback_rows
+          )` : `,
+          source_rows AS (
+            SELECT
+              sp.presale_id AS presale_id,
+              sp.presale_revenue AS revenue
+            FROM scoped_presales sp
+          )`}
+          SELECT
+            sp.seller_id,
+            sp.seller_name,
+            sp.seller_zone,
+            sp.zone_at_sale,
+            sp.boat_type,
+            COALESCE(SUM(sr.revenue), 0) AS revenue_gross,
+            0 AS refunds
+          FROM scoped_presales sp
+          LEFT JOIN source_rows sr ON sr.presale_id = sp.presale_id
+          GROUP BY
+            sp.seller_id,
+            sp.seller_name,
+            sp.seller_zone,
+            sp.zone_at_sale,
+            sp.boat_type
+        `).all(day)
+      : db.prepare(`
+          SELECT
+            ml.seller_id,
+            COALESCE(b.type, gb.type) AS boat_type,
+            p.zone_at_sale,
+            COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
+            COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
+          FROM money_ledger ml
+          LEFT JOIN presales p ON p.id = ml.presale_id
+          LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+          LEFT JOIN generated_slots gs ON (p.slot_uid LIKE 'generated:%' AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER))
+          LEFT JOIN boats b ON b.id = bs.boat_id
+          LEFT JOIN boats gb ON gb.id = gs.boat_id
+          WHERE ml.status = 'POSTED'
+            AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+            AND ${revenueScopePredicate}
+            AND ml.seller_id IS NOT NULL
+            AND ml.seller_id > 0
+            AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
+          GROUP BY ml.seller_id, COALESCE(b.type, gb.type), p.zone_at_sale
+        `).all(...revenueScopeParams);
     
     const k_speed = Number(settings.k_speed ?? 1.2);
     const k_cruise = Number(settings.k_cruise ?? 3.0);
@@ -904,7 +1081,7 @@ export function calcMotivationDay(db, day, options = {}) {
         role: 'seller',
         name: s.name,
         zone,
-        revenue_total: s.revenue,
+        revenue_total: sellerOnlyScope ? 0 : Number(s.revenue || 0),
         revenue_by_type: { speed: 0, cruise: 0, banana: 0 },
         points_by_type: { speed: 0, cruise: 0, banana: 0 },
         points_base: 0,
@@ -918,9 +1095,10 @@ export function calcMotivationDay(db, day, options = {}) {
     
     for (const row of (revenueBySellerAndType || [])) {
       const sellerId = Number(row.seller_id);
-      if (!activeSellerIdSet.has(sellerId)) continue;
+      if (!sellerOnlyScope && !activeSellerIdSet.has(sellerId)) continue;
       const boatType = row.boat_type || null;
       const zoneAtSale = row.zone_at_sale || null;
+      const sellerZone = row.seller_zone ?? sellerZoneMap.get(sellerId) ?? null;
       const revenueGross = Number(row.revenue_gross || 0);
       const refunds = Number(row.refunds || 0);
       const revenueNet = Math.max(0, revenueGross - refunds);
@@ -936,8 +1114,8 @@ export function calcMotivationDay(db, day, options = {}) {
         entry = {
           user_id: sellerId,
           role: 'seller',
-          name: `Seller #${sellerId}`,
-          zone,
+          name: row.seller_name || `Seller #${sellerId}`,
+          zone: sellerZone ?? zone,
           revenue_total: 0,
           revenue_by_type: { speed: 0, cruise: 0, banana: 0 },
           points_by_type: { speed: 0, cruise: 0, banana: 0 },
@@ -954,7 +1132,9 @@ export function calcMotivationDay(db, day, options = {}) {
       entry.revenue_by_type[boatType] += revenueNet;
       entry.revenue_total += revenueNet;
       
-      const effectiveZone = zoneAtSale || entry.zone;
+      const effectiveZone = sellerOnlyScope
+        ? resolveSellerOnlyCanonicalZone(boatType, zoneAtSale, sellerZone ?? entry.zone)
+        : (zoneAtSale || entry.zone);
       const revenueInK = revenueNet / 1000;
       let pointsBase = 0;
       
@@ -976,27 +1156,29 @@ export function calcMotivationDay(db, day, options = {}) {
       }
     }
     
-    for (const dispatcher of (activeDispatchersTodayList || [])) {
-      const uid = Number(dispatcher.user_id);
-      if (!pointsByUserMap.has(uid)) {
-        pointsByUserMap.set(uid, {
-          user_id: uid,
-          role: 'dispatcher',
-          name: dispatcher.name,
-          zone: null,
-          revenue_total: Number(dispatcher.revenue || 0),
-          revenue_by_type: { speed: 0, cruise: 0, banana: 0 },
-          points_by_type: { speed: 0, cruise: 0, banana: 0 },
-          points_base: 0,
-          points_total: 0,
-          calibrated: 0,
-          current_level: 'NONE',
-          streak_days: 0,
-          k_streak: 1.0
-        });
+    if (!sellerOnlyScope) {
+      for (const dispatcher of (activeDispatchersTodayList || [])) {
+        const uid = Number(dispatcher.user_id);
+        if (!pointsByUserMap.has(uid)) {
+          pointsByUserMap.set(uid, {
+            user_id: uid,
+            role: 'dispatcher',
+            name: dispatcher.name,
+            zone: null,
+            revenue_total: Number(dispatcher.revenue || 0),
+            revenue_by_type: { speed: 0, cruise: 0, banana: 0 },
+            points_by_type: { speed: 0, cruise: 0, banana: 0 },
+            points_base: 0,
+            points_total: 0,
+            calibrated: 0,
+            current_level: 'NONE',
+            streak_days: 0,
+            k_streak: 1.0
+          });
+        }
       }
     }
-    
+
     points_by_user = Array.from(pointsByUserMap.values());
   }
 
@@ -1017,7 +1199,9 @@ export function calcMotivationDay(db, day, options = {}) {
   const stage3AllRevenueParticipantsMap = new Map();
 
   activeSellersList.forEach((seller) => upsertParticipant(stage3AllRevenueParticipantsMap, seller));
-  activeDispatchersRevenueList.forEach((dispatcher) => upsertParticipant(stage3AllRevenueParticipantsMap, dispatcher));
+  if (!sellerOnlyScope) {
+    activeDispatchersRevenueList.forEach((dispatcher) => upsertParticipant(stage3AllRevenueParticipantsMap, dispatcher));
+  }
   const stage3AllRevenueParticipants = Array.from(stage3AllRevenueParticipantsMap.values());
 
   const ensureStage3Payout = (member) => {
@@ -1045,7 +1229,7 @@ export function calcMotivationDay(db, day, options = {}) {
   teamFund = 0;
   individualFund = 0;
   teamPerPerson = 0;
-  active_dispatchers = activeDispatchersTodayList.length;
+  active_dispatchers = sellerOnlyScope ? 0 : activeDispatchersTodayList.length;
   active_sellers = activeSellersList.length;
   const useTeamIndividualSplitModel = shiftCloseFormulaEnabled || mode === 'adaptive';
 
@@ -1108,7 +1292,7 @@ export function calcMotivationDay(db, day, options = {}) {
         });
       });
     }
-    if (stage3TeamIncludeDispatchers) {
+    if (!sellerOnlyScope && stage3TeamIncludeDispatchers) {
       activeDispatchersRevenueList.forEach((dispatcher) => {
         if (!teamMembersMap.has(dispatcher.user_id)) {
           teamMembersMap.set(dispatcher.user_id, {
@@ -1280,6 +1464,7 @@ export function calcMotivationDay(db, day, options = {}) {
     business_day: day,
     mode,
     revenue_total: safeRevenueTotal,
+    earned_revenue_total,
     salary_base,
     future_trips_reserve_total: futureTripsReserveTotal,
     motivation_percent: safeMotivationPercent,

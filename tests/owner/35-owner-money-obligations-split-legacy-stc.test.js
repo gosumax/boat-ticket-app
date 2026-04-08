@@ -50,6 +50,20 @@ describe('OWNER MONEY SUMMARY: tomorrow obligations split survives legacy STC mi
     db.prepare(`UPDATE boat_slots SET trip_date = ? WHERE id = ?`).run(businessDay, todaySlotId);
     db.prepare(`UPDATE boat_slots SET trip_date = ? WHERE id = ?`).run(tomorrow, tomorrowSlotId);
     db.prepare(`UPDATE generated_slots SET trip_date = ? WHERE id = ?`).run(tomorrow, tomorrowGeneratedId);
+    db.prepare(`INSERT OR IGNORE INTO owner_settings (id, settings_json) VALUES (1, '{}')`).run();
+    db.prepare(`UPDATE owner_settings SET settings_json = ? WHERE id = 1`).run(JSON.stringify({
+      motivationType: 'team',
+      motivation_percent: 0.15,
+      team_share: 0.5,
+      individual_share: 0.5,
+      teamIncludeSellers: true,
+      teamIncludeDispatchers: true,
+      dispatcher_withhold_percent_total: 0.002,
+      weekly_withhold_percent_total: 0.008,
+      season_withhold_percent_total: 0.005,
+      viklif_withhold_percent_total: 0,
+    }));
+    db.prepare(`DELETE FROM motivation_day_settings WHERE business_day IN (?, ?)`).run(businessDay, tomorrow);
 
     const insertPresale = db.prepare(`
       INSERT INTO presales (

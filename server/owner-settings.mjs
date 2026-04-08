@@ -14,6 +14,7 @@ export const OWNER_SETTINGS_DEFAULTS = {
   motivation_percent: 0.15,
   weekly_percent: 0.01,
   season_percent: 0.02,
+  season_payout_scheme: "all",
   individual_share: 0.60,
   team_share: 0.40,
   daily_activation_threshold: 200000,

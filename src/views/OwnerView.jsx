@@ -13,20 +13,18 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 /**
  * OwnerView.jsx
  * OWNER SHELL (UI ONLY)
- * - Нижняя навигация всегда закреплена (fixed)
- * - Главный таб по умолчанию: Деньги
- * - Никаких действий, влияющих на продажи/рейсы/билеты
+ * - Bottom navigation stays fixed.
+ * - Default main tab: Money.
+ * - No actions here should affect sales, trips, or tickets.
  */
 
 /**
- * SCREEN 0 — Сравнение периодов (Owner)
+ * SCREEN 0 - Owner comparison view
  * Unified LineChart for: Revenue / Boats / Sellers
- */
-function OwnerComparePeriodsView() {
-  const [compareMode, setCompareMode] = useState("revenue"); // 'revenue' | 'boats' | 'sellers'
-  const [chartMode, setChartMode] = useState("daily"); // 'daily' | 'cumulative'
+ */function OwnerComparePeriodsView() {
+  const [compareMode, setCompareMode] = useState("revenue");
+  const [chartMode, setChartMode] = useState("daily");
 
-  // Date pickers state
   const today = new Date().toISOString().split('T')[0];
   const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
   const twoWeeksAgo = new Date(Date.now() - 14 * 86400000).toISOString().split('T')[0];
@@ -34,25 +32,27 @@ function OwnerComparePeriodsView() {
   const [toA, setToA] = useState(weekAgo);
   const [fromB, setFromB] = useState(weekAgo);
   const [toB, setToB] = useState(today);
+  const [entityFrom, setEntityFrom] = useState(weekAgo);
+  const [entityTo, setEntityTo] = useState(today);
 
-  // Boat/Seller selection
   const [selectedBoatId, setSelectedBoatId] = useState(null);
+  const [selectedBoatId2, setSelectedBoatId2] = useState(null);
   const [selectedSellerId, setSelectedSellerId] = useState(null);
+  const [selectedSellerId2, setSelectedSellerId2] = useState(null);
   const [boats, setBoats] = useState([]);
   const [sellers, setSellers] = useState([]);
 
-  // Period summary state (for revenue mode)
   const [periodSummary, setPeriodSummary] = useState(null);
   const [periodSummaryBusy, setPeriodSummaryBusy] = useState(false);
 
-  // Load boats list
   useEffect(() => {
     const loadBoats = async () => {
       try {
         const json = await apiClient.request('/owner/boats?preset=all', { method: 'GET' });
-        setBoats(json?.data?.boats || []);
-        if (json?.data?.boats?.length > 0 && !selectedBoatId) {
-          setSelectedBoatId(json.data.boats[0].boat_id);
+        const items = json?.data?.boats || [];
+        setBoats(items);
+        if (items.length > 0 && !selectedBoatId) {
+          setSelectedBoatId(items[0].boat_id);
         }
       } catch {}
     };
@@ -60,7 +60,6 @@ function OwnerComparePeriodsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compareMode]);
 
-  // Load sellers list
   useEffect(() => {
     const loadSellers = async () => {
       try {
@@ -76,14 +75,13 @@ function OwnerComparePeriodsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compareMode]);
 
-  // Load period summary (for revenue mode)
   useEffect(() => {
     const loadPeriodSummary = async () => {
       if (compareMode !== 'revenue') return;
       if (!fromA || !toA || !fromB || !toB) return;
       setPeriodSummaryBusy(true);
       try {
-        const url = `/owner/money/compare-periods?fromA=${encodeURIComponent(fromA)}&toA=${encodeURIComponent(toA)}&fromB=${encodeURIComponent(fromB)}&toB=${encodeURIComponent(toB)}`;
+        const url = "/owner/money/compare-periods?fromA=" + encodeURIComponent(fromA) + "&toA=" + encodeURIComponent(toA) + "&fromB=" + encodeURIComponent(fromB) + "&toB=" + encodeURIComponent(toB);
         const json = await apiClient.request(url, { method: 'GET' });
         setPeriodSummary(json?.data || null);
       } catch {
@@ -99,83 +97,79 @@ function OwnerComparePeriodsView() {
     <div className="p-4 pb-24 space-y-4">
       <div className="text-xl font-semibold">Сравнение</div>
 
-      {/* Info block */}
       <div className="rounded-2xl border border-neutral-800 p-3 text-xs text-neutral-500">
-        Сравнение считается по дате оплаты (business_day).
+        Сравнение использует дату оплаты (`business_day`).
       </div>
 
-      {/* Mode switcher */}
       <div className="rounded-2xl border border-neutral-800 p-1 flex gap-1">
         <ModeChip active={compareMode === "revenue"} onClick={() => setCompareMode("revenue")} label="Выручка" />
         <ModeChip active={compareMode === "boats"} onClick={() => setCompareMode("boats")} label="Лодки" />
         <ModeChip active={compareMode === "sellers"} onClick={() => setCompareMode("sellers")} label="Продавцы" />
       </div>
 
-      {/* Date pickers */}
-      <div className="rounded-2xl border border-neutral-800 p-3 space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-neutral-500 w-20">Период A:</span>
-          <input type="date" value={fromA} onChange={e => setFromA(e.target.value)}
-            className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
-          <span className="text-xs text-neutral-500">—</span>
-          <input type="date" value={toA} onChange={e => setToA(e.target.value)}
-            className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+      {compareMode === 'revenue' ? (
+        <div className="rounded-2xl border border-neutral-800 p-3 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-neutral-500 w-20">Период A:</span>
+            <input type="date" value={fromA} onChange={e => setFromA(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+            <span className="text-xs text-neutral-500">-</span>
+            <input type="date" value={toA} onChange={e => setToA(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-neutral-500 w-20">Период B:</span>
+            <input type="date" value={fromB} onChange={e => setFromB(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+            <span className="text-xs text-neutral-500">-</span>
+            <input type="date" value={toB} onChange={e => setToB(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-neutral-500 w-20">Период B:</span>
-          <input type="date" value={fromB} onChange={e => setFromB(e.target.value)}
-            className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
-          <span className="text-xs text-neutral-500">—</span>
-          <input type="date" value={toB} onChange={e => setToB(e.target.value)}
-            className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+      ) : (
+        <div className="rounded-2xl border border-neutral-800 p-3 space-y-3">
+          <div className="text-xs text-neutral-500">Один общий период для сравнения двух сущностей</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-neutral-500 w-20">Период:</span>
+            <input type="date" value={entityFrom} onChange={e => setEntityFrom(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+            <span className="text-xs text-neutral-500">-</span>
+            <input type="date" value={entityTo} onChange={e => setEntityTo(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Boat selector */}
       {compareMode === 'boats' && boats.length > 0 && (
-        <div className="rounded-2xl border border-neutral-800 p-3">
-          <select value={selectedBoatId || ''} onChange={e => setSelectedBoatId(Number(e.target.value))}
-            className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200">
-            {boats.map(b => (
-              <option key={b.boat_id} value={b.boat_id}>{b.boat_name}</option>
-            ))}
-          </select>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <EntitySelect label="Лодка 1" value={selectedBoatId} onChange={setSelectedBoatId} options={boats.map((b) => ({ id: b.boat_id, name: b.boat_name }))} testId="owner-compare-boat-a" />
+          <EntitySelect label="Лодка 2" value={selectedBoatId2} onChange={setSelectedBoatId2} options={boats.map((b) => ({ id: b.boat_id, name: b.boat_name }))} allowEmpty emptyLabel="Без второй лодки" testId="owner-compare-boat-b" />
         </div>
       )}
 
-      {/* Seller selector */}
       {compareMode === 'sellers' && sellers.length > 0 && (
-        <div className="rounded-2xl border border-neutral-800 p-3">
-          <select value={selectedSellerId || ''} onChange={e => setSelectedSellerId(Number(e.target.value))}
-            className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200">
-            {sellers.map(s => (
-              <option key={s.seller_id} value={s.seller_id}>{s.seller_name}</option>
-            ))}
-          </select>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <EntitySelect label="Продавец 1" value={selectedSellerId} onChange={setSelectedSellerId} options={sellers.map((s) => ({ id: s.seller_id, name: s.seller_name }))} testId="owner-compare-seller-a" />
+          <EntitySelect label="Продавец 2" value={selectedSellerId2} onChange={setSelectedSellerId2} options={sellers.map((s) => ({ id: s.seller_id, name: s.seller_name }))} allowEmpty emptyLabel="Без второго продавца" testId="owner-compare-seller-b" />
         </div>
       )}
 
-      {/* Unified LineChart */}
       <UnifiedLineChart
         compareMode={compareMode}
         chartMode={chartMode}
         setChartMode={setChartMode}
-        fromA={fromA} toA={toA} fromB={fromB} toB={toB}
+        fromA={fromA}
+        toA={toA}
+        fromB={fromB}
+        toB={toB}
+        entityFrom={entityFrom}
+        entityTo={entityTo}
         boatId={selectedBoatId}
+        boatId2={selectedBoatId2}
         sellerId={selectedSellerId}
+        sellerId2={selectedSellerId2}
       />
 
-      {/* Period Summary Cards (revenue mode only) */}
       {compareMode === 'revenue' && (
-        <PeriodSummaryCards
-          data={periodSummary}
-          busy={periodSummaryBusy}
-        />
+        <PeriodSummaryCards data={periodSummary} busy={periodSummaryBusy} />
       )}
     </div>
   );
 }
-
 function ModeChip({ active, onClick, label }) {
   return (
     <button
@@ -196,41 +190,64 @@ function ModeChip({ active, onClick, label }) {
 /**
  * Unified LineChart Component
  */
-function UnifiedLineChart({ compareMode, chartMode, setChartMode, fromA, toA, fromB, toB, boatId, sellerId }) {
+function EntitySelect({ label, value, onChange, options, allowEmpty = false, emptyLabel = '-', testId }) {
+  return (
+    <div className="rounded-2xl border border-neutral-800 p-3 space-y-2">
+      <div className="text-xs text-neutral-500">{label}</div>
+      <select
+        value={value || ''}
+        data-testid={testId}
+        onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}
+        className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200"
+      >
+        {allowEmpty && <option value="">{emptyLabel}</option>}
+        {options.map((option) => (
+          <option key={option.id} value={option.id}>{option.name}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function UnifiedLineChart({ compareMode, chartMode, setChartMode, fromA, toA, fromB, toB, entityFrom, entityTo, boatId, boatId2, sellerId, sellerId2 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [data, setData] = useState(null);
   const [warnings, setWarnings] = useState([]);
 
-  // Calculate days
   const parseDate = (s) => new Date(s + 'T00:00:00');
-  const daysInA = fromA && toA ? Math.ceil((parseDate(toA) - parseDate(fromA)) / 86400000) + 1 : 0;
-  const daysInB = fromB && toB ? Math.ceil((parseDate(toB) - parseDate(fromB)) / 86400000) + 1 : 0;
-  const maxDays = Math.max(daysInA, daysInB);
-  const isSingleDay = maxDays === 1;
+  const activeFrom = compareMode === 'revenue' ? fromA : entityFrom;
+  const activeTo = compareMode === 'revenue' ? toA : entityTo;
+  const activeDays = activeFrom && activeTo ? Math.ceil((parseDate(activeTo) - parseDate(activeFrom)) / 86400000) + 1 : 0;
+  const isEntityMode = compareMode === 'boats' || compareMode === 'sellers';
+  const hasSecondEntity = compareMode === 'boats' ? Boolean(boatId2) : compareMode === 'sellers' ? Boolean(sellerId2) : true;
 
   const load = async () => {
-    if (!fromA || !toA || !fromB || !toB) return;
-    if (compareMode === 'boats' && !boatId) return;
-    if (compareMode === 'sellers' && !sellerId) return;
+    if (compareMode === 'revenue') {
+      if (!fromA || !toA || !fromB || !toB) return;
+    } else {
+      if (!entityFrom || !entityTo) return;
+      if (compareMode === 'boats' && !boatId) return;
+      if (compareMode === 'sellers' && !sellerId) return;
+    }
 
     setErr("");
     setBusy(true);
     try {
       let url = '';
       if (compareMode === 'revenue') {
-        url = `/owner/money/compare-periods-daily?fromA=${encodeURIComponent(fromA)}&toA=${encodeURIComponent(toA)}&fromB=${encodeURIComponent(fromB)}&toB=${encodeURIComponent(toB)}&mode=${chartMode}`;
+        url = "/owner/money/compare-periods-daily?fromA=" + encodeURIComponent(fromA) + "&toA=" + encodeURIComponent(toA) + "&fromB=" + encodeURIComponent(fromB) + "&toB=" + encodeURIComponent(toB) + "&mode=" + chartMode;
       } else if (compareMode === 'boats') {
-        url = `/owner/money/compare-boat-daily?boatId=${boatId}&fromA=${encodeURIComponent(fromA)}&toA=${encodeURIComponent(toA)}&fromB=${encodeURIComponent(fromB)}&toB=${encodeURIComponent(toB)}&mode=${chartMode}`;
+        url = "/owner/money/compare-boat-daily?boatIdA=" + encodeURIComponent(boatId) + "&from=" + encodeURIComponent(entityFrom) + "&to=" + encodeURIComponent(entityTo) + (boatId2 ? "&boatIdB=" + encodeURIComponent(boatId2) : '') + "&mode=" + chartMode;
       } else if (compareMode === 'sellers') {
-        url = `/owner/money/compare-seller-daily?sellerId=${sellerId}&fromA=${encodeURIComponent(fromA)}&toA=${encodeURIComponent(toA)}&fromB=${encodeURIComponent(fromB)}&toB=${encodeURIComponent(toB)}&mode=${chartMode}`;
+        url = "/owner/money/compare-seller-daily?sellerIdA=" + encodeURIComponent(sellerId) + "&from=" + encodeURIComponent(entityFrom) + "&to=" + encodeURIComponent(entityTo) + (sellerId2 ? "&sellerIdB=" + encodeURIComponent(sellerId2) : '') + "&mode=" + chartMode;
       }
 
       const json = await apiClient.request(url, { method: "GET" });
       setData(json?.data || null);
       setWarnings(json?.meta?.warnings || []);
     } catch (e) {
-      setErr(e?.message || "Не удалось загрузить данные.");
+      setErr(e?.message || "Failed to load chart data.");
       setData(null);
       setWarnings([]);
     } finally {
@@ -241,14 +258,15 @@ function UnifiedLineChart({ compareMode, chartMode, setChartMode, fromA, toA, fr
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compareMode, chartMode, fromA, toA, fromB, toB, boatId, sellerId]);
+  }, [compareMode, chartMode, fromA, toA, fromB, toB, entityFrom, entityTo, boatId, boatId2, sellerId, sellerId2]);
 
   const points = data?.points || [];
   const periodA = data?.periodA || {};
   const periodB = data?.periodB || {};
-  const entityName = data?.boatName || data?.sellerName || '';
+  const sharedPeriod = data?.period || {};
+  const seriesALabel = compareMode === 'revenue' ? ('A: ' + (periodA.from || '-') + ' -> ' + (periodA.to || '-')) : (data?.entityAName || 'Сущность 1');
+  const seriesBLabel = compareMode === 'revenue' ? ('B: ' + (periodB.from || '-') + ' -> ' + (periodB.to || '-')) : (data?.entityBName || 'Сущность 2');
 
-  // Custom tooltip
   const CustomTooltip = ({ active, payload, label }) => {
     if (!active || !payload || payload.length === 0) return null;
     const a = payload.find(p => p.dataKey === 'A')?.value || 0;
@@ -261,89 +279,74 @@ function UnifiedLineChart({ compareMode, chartMode, setChartMode, fromA, toA, fr
       <div className="bg-neutral-900 border border-neutral-700 rounded-lg p-3 text-xs">
         <div className="text-neutral-400 mb-2">День {label}</div>
         <div className="flex justify-between gap-4">
-          <span className="text-blue-400">A:</span>
+          <span className="text-blue-400">{seriesALabel}:</span>
           <span className="text-neutral-200">{formatRUB(a)}</span>
         </div>
-        <div className="flex justify-between gap-4">
-          <span className="text-amber-400">B:</span>
-          <span className="text-neutral-200">{formatRUB(b)}</span>
-        </div>
-        <div className="border-t border-neutral-700 mt-2 pt-2">
+        {(compareMode === 'revenue' || hasSecondEntity) && (
           <div className="flex justify-between gap-4">
-            <span className="text-neutral-400">Δ:</span>
-            <span className={isPositive ? "text-green-400" : "text-red-400"}>
-              {isPositive ? '+' : ''}{formatRUBShort(deltaAbs)}
-            </span>
+            <span className="text-amber-400">{seriesBLabel}:</span>
+            <span className="text-neutral-200">{formatRUB(b)}</span>
           </div>
-          <div className="flex justify-between gap-4">
-            <span className="text-neutral-400">Δ%:</span>
-            <span className={isPositive ? "text-green-400" : "text-red-400"}>
-              {deltaPct !== null ? `${deltaPct >= 0 ? '+' : ''}${deltaPct.toFixed(1)}%` : '—'}
-            </span>
+        )}
+        {(compareMode === 'revenue' || hasSecondEntity) && (
+          <div className="border-t border-neutral-700 mt-2 pt-2">
+            <div className="flex justify-between gap-4">
+              <span className="text-neutral-400">Разница:</span>
+              <span className={isPositive ? "text-green-400" : "text-red-400"}>
+                {isPositive ? '+' : ''}{formatRUBShort(deltaAbs)}
+              </span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-neutral-400">Разница %:</span>
+              <span className={isPositive ? "text-green-400" : "text-red-400"}>
+                {deltaPct !== null ? (deltaPct >= 0 ? '+' : '') + deltaPct.toFixed(1) + '%' : '-'}
+              </span>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     );
   };
 
-  // Check if there's any data
   const hasData = points.some(p => p.A > 0 || p.B > 0);
 
   return (
     <div className="space-y-4">
-      {/* Mode toggle */}
       <div className="flex justify-end">
         <div className="flex rounded-lg border border-neutral-700 overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setChartMode('daily')}
-            className={`px-3 py-1 text-xs ${chartMode === 'daily' ? 'bg-neutral-700 text-white' : 'text-neutral-400'}`}
-          >
+          <button type="button" onClick={() => setChartMode('daily')} className={`px-3 py-1 text-xs ${chartMode === 'daily' ? 'bg-neutral-700 text-white' : 'text-neutral-400'}`}>
             По дням
           </button>
-          <button
-            type="button"
-            onClick={() => setChartMode('cumulative')}
-            className={`px-3 py-1 text-xs ${chartMode === 'cumulative' ? 'bg-neutral-700 text-white' : 'text-neutral-400'}`}
-          >
+          <button type="button" onClick={() => setChartMode('cumulative')} className={`px-3 py-1 text-xs ${chartMode === 'cumulative' ? 'bg-neutral-700 text-white' : 'text-neutral-400'}`}>
             Накопительно
           </button>
         </div>
       </div>
 
-      {/* Error */}
-      {err && (
-        <div className="rounded-2xl border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-200">{err}</div>
-      )}
+      {err && <div className="rounded-2xl border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-200">{err}</div>}
 
-      {/* Warnings */}
       {warnings.length > 0 && (
         <div className="rounded-2xl border border-amber-900/60 bg-amber-950/30 p-3">
-          <div className="text-xs text-amber-300 font-medium mb-1">Есть предупреждения</div>
+          <div className="text-xs text-amber-300 font-medium mb-1">Предупреждения</div>
           {warnings.map((w, i) => (<div key={i} className="text-xs text-amber-200/70">{w}</div>))}
         </div>
       )}
 
       {busy && <div className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-500">Загрузка...</div>}
 
-      {/* Single-day fallback */}
-      {!busy && isSingleDay && (
-        <div className="rounded-2xl border border-neutral-800 p-4">
-          <div className="text-sm text-neutral-400 mb-2">Один день — используйте больший период</div>
-        </div>
+      {!busy && !hasData && !err && (
+        <div className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-500">Нет данных за выбранный период</div>
       )}
 
-      {/* No data */}
-      {!busy && !isSingleDay && !hasData && !err && (
-        <div className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-500">Нет данных за выбранные периоды</div>
-      )}
-
-      {/* Line Chart */}
-      {!busy && !isSingleDay && hasData && (
+      {!busy && hasData && (
         <div className="rounded-2xl border border-neutral-800 p-3">
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs text-neutral-500">
-              {compareMode === 'revenue' ? 'Выручка (Net)' : compareMode === 'boats' ? `Лодка: ${entityName}` : `Продавец: ${entityName}`}
+              {compareMode === 'revenue'
+                ? 'Выручка (чистая)'
+                : compareMode === 'boats'
+                  ? ('Лодки: ' + (data?.entityAName || '-') + (hasSecondEntity ? ' / ' + (data?.entityBName || '-') : ''))
+                  : ('Продавцы: ' + (data?.entityAName || '-') + (hasSecondEntity ? ' / ' + (data?.entityBName || '-') : ''))}
               <span className="ml-2 text-neutral-600">({chartMode === 'cumulative' ? 'Накопительно' : 'По дням'})</span>
             </div>
           </div>
@@ -351,62 +354,36 @@ function UnifiedLineChart({ compareMode, chartMode, setChartMode, fromA, toA, fr
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={points} margin={{ top: 10, right: 30, left: 10, bottom: 10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" horizontal vertical={false} />
-                <XAxis
-                  dataKey="day"
-                  tick={{ fill: '#888', fontSize: 10 }}
-                  tickLine={false}
-                  axisLine={{ stroke: '#333' }}
-                  tickFormatter={(v, i) => (i % 5 === 0 || i === 0) ? v : ''}
-                />
-                <YAxis
-                  tick={{ fill: '#888', fontSize: 10 }}
-                  tickLine={false}
-                  axisLine={{ stroke: '#333' }}
-                  tickFormatter={v => formatRUBShort(v)}
-                />
+                <XAxis dataKey="day" tick={{ fill: '#888', fontSize: 10 }} tickLine={false} axisLine={{ stroke: '#333' }} tickFormatter={(v, i) => (i % 5 === 0 || i === 0) ? v : ''} />
+                <YAxis tick={{ fill: '#888', fontSize: 10 }} tickLine={false} axisLine={{ stroke: '#333' }} tickFormatter={v => formatRUBShort(v)} />
                 <Tooltip content={<CustomTooltip />} />
-                <Line
-                  type="monotone"
-                  dataKey="A"
-                  stroke="#3b82f6"
-                  strokeWidth={3}
-                  dot={false}
-                  activeDot={{ r: 5, fill: '#3b82f6' }}
-                  name="A"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="B"
-                  stroke="#f59e0b"
-                  strokeWidth={2}
-                  strokeOpacity={0.8}
-                  dot={false}
-                  activeDot={{ r: 5, fill: '#f59e0b' }}
-                  name="B"
-                />
+                <Line type="monotone" dataKey="A" stroke="#3b82f6" strokeWidth={3} dot={false} activeDot={{ r: 5, fill: '#3b82f6' }} name={seriesALabel} />
+                {(compareMode === 'revenue' || hasSecondEntity) && <Line type="monotone" dataKey="B" stroke="#f59e0b" strokeWidth={2} strokeOpacity={0.8} dot={false} activeDot={{ r: 5, fill: '#f59e0b' }} name={seriesBLabel} />}
               </LineChart>
             </ResponsiveContainer>
           </div>
-          <div className="flex justify-center gap-6 mt-3">
+          <div className="flex justify-center gap-6 mt-3 flex-wrap">
             <div className="flex items-center gap-2">
               <div className="w-4 h-0.5 bg-blue-500"></div>
-              <span className="text-xs text-neutral-400">A: {periodA.from || '—'} → {periodA.to || '—'}</span>
+              <span className="text-xs text-neutral-400">{seriesALabel}</span>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-0.5 bg-amber-500 opacity-80"></div>
-              <span className="text-xs text-neutral-400">B: {periodB.from || '—'} → {periodB.to || '—'}</span>
-            </div>
+            {(compareMode === 'revenue' || hasSecondEntity) && (
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-0.5 bg-amber-500 opacity-80"></div>
+                <span className="text-xs text-neutral-400">{seriesBLabel}</span>
+              </div>
+            )}
+            {isEntityMode && <div className="text-xs text-neutral-500">{sharedPeriod.from || '-'} {'->'} {sharedPeriod.to || '-'}</div>}
           </div>
         </div>
       )}
     </div>
   );
 }
-
 function formatRUBShort(v) {
   const n = Number(v || 0);
-  if (Math.abs(n) >= 1000000) return `${(n / 1000000).toFixed(1)}M ₽`;
-  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(0)}K ₽`;
+  if (Math.abs(n) >= 1000000) return `${(n / 1000000).toFixed(1)} млн ₽`;
+  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(0)} тыс ₽`;
   return `${n} ₽`;
 }
 
@@ -419,12 +396,12 @@ function formatRUB(v) {
       maximumFractionDigits: 0,
     }).format(n);
   } catch {
-    return `${Math.round(n)} ₽`;
+    return `${Math.round(n)} RUB`;
   }
 }
 
 /**
- * Period Summary Cards — shows cash/card breakdown for each period
+ * Period Summary Cards - shows cash/card breakdown for each period
  */
 function PeriodSummaryCards({ data, busy }) {
   if (busy) {
@@ -496,11 +473,11 @@ function PeriodSummaryCards({ data, busy }) {
 
       {/* Delta Block */}
       <div className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3">
-        <div className="text-xs text-neutral-500 mb-3">Изменение (A − B)</div>
+        <div className="text-xs text-neutral-500 mb-3">Изменение (A - B)</div>
         <div className="space-y-2">
-          <DeltaRow label="Δ Выручка" abs={delta.revenue_gross_abs} percent={delta.revenue_gross_percent} />
-          <DeltaRow label="Δ Возвраты" abs={delta.refund_abs} percent={delta.refund_percent} invertColors />
-          <DeltaRow label="Δ Чистые" abs={delta.net_total_abs} percent={delta.net_total_percent} />
+          <DeltaRow label="Разница по выручке" abs={delta.revenue_gross_abs} percent={delta.revenue_gross_percent} />
+          <DeltaRow label="Разница по возвратам" abs={delta.refund_abs} percent={delta.refund_percent} invertColors />
+          <DeltaRow label="Разница по чистым деньгам" abs={delta.net_total_abs} percent={delta.net_total_percent} />
         </div>
       </div>
     </div>
@@ -525,15 +502,15 @@ function PeriodCard({
     <div className={`rounded-2xl border ${borderCls} bg-neutral-950/40 p-3 space-y-3`}>
       <div className="flex items-center justify-between">
         <span className={`text-sm font-semibold ${titleCls}`}>{title}</span>
-        <span className="text-xs text-neutral-500">{from} → {to}</span>
+        <span className="text-xs text-neutral-500">{from} {'->'} {to}</span>
       </div>
 
       {/* Collected */}
       <div>
-        <div className="text-[11px] text-neutral-500">Выручка (собрано)</div>
+        <div className="text-[11px] text-neutral-500">Собранная выручка</div>
         <div className="text-lg font-bold">{formatRUB(collected_total)}</div>
         <div className="grid grid-cols-2 gap-2 mt-1">
-          <MoneySubRow label="Нал" value={formatRUB(collected_cash)} />
+          <MoneySubRow label="Наличные" value={formatRUB(collected_cash)} />
           <MoneySubRow label="Карта" value={formatRUB(collected_card)} />
         </div>
       </div>
@@ -544,7 +521,7 @@ function PeriodCard({
           <div className="text-[11px] text-neutral-500">Возвраты</div>
           <div className="text-lg font-bold text-red-400">{formatRUB(refund_total)}</div>
           <div className="grid grid-cols-2 gap-2 mt-1">
-            <MoneySubRow label="Нал" value={formatRUB(refund_cash)} />
+            <MoneySubRow label="Наличные" value={formatRUB(refund_cash)} />
             <MoneySubRow label="Карта" value={formatRUB(refund_card)} />
           </div>
         </div>
@@ -552,10 +529,10 @@ function PeriodCard({
 
       {/* Net */}
       <div className={`rounded-xl p-2 ${hasRefunds ? 'bg-emerald-950/30 border border-emerald-900/40' : ''}`}>
-        <div className="text-[11px] text-neutral-500">Чистые деньги {hasRefunds ? '(собрано − возвраты)' : ''}</div>
+        <div className="text-[11px] text-neutral-500">Чистые деньги {hasRefunds ? '(сборы - возвраты)' : ''}</div>
         <div className="text-lg font-bold text-emerald-400">{formatRUB(net_total)}</div>
         <div className="grid grid-cols-2 gap-2 mt-1">
-          <MoneySubRow label="Нал" value={formatRUB(net_cash)} />
+          <MoneySubRow label="Наличные" value={formatRUB(net_cash)} />
           <MoneySubRow label="Карта" value={formatRUB(net_card)} />
         </div>
       </div>
@@ -660,11 +637,11 @@ function OwnerBottomTabs({ tab, setTab }) {
   return (
     <div className="fixed bottom-0 left-0 right-0 z-40 px-2 pb-2 pointer-events-auto">
       <div className="mx-auto w-fit px-2 py-2 md:rounded-full md:border md:border-neutral-800 md:bg-neutral-950/60 md:backdrop-blur">
-        {/* MOBILE: 4 основных + Еще */}
+        {/* MOBILE: 4 primary tabs + More */}
         <div className="grid grid-cols-5 gap-1 md:hidden rounded-2xl">
           <TabButton
             label="Деньги"
-            icon="₽"
+            icon="$"
             active={tab === "money"}
             onClick={() => go("money")}
             dataTestId="owner-tab-money"
@@ -672,7 +649,7 @@ function OwnerBottomTabs({ tab, setTab }) {
           />
           <TabButton
             label="Сравнение"
-            icon="◆"
+            icon="*"
             active={tab === "compare"}
             onClick={() => go("compare")}
             dataTestId="owner-tab-compare"
@@ -680,7 +657,7 @@ function OwnerBottomTabs({ tab, setTab }) {
           />
           <TabButton
             label="Лодки"
-            icon="⛴"
+            icon="B"
             active={tab === "boats"}
             onClick={() => go("boats")}
             dataTestId="owner-tab-boats"
@@ -688,75 +665,75 @@ function OwnerBottomTabs({ tab, setTab }) {
           />
           <TabButton
             label="Продавцы"
-            icon="👤"
+            icon=""
             active={tab === "sellers"}
             onClick={() => go("sellers")}
             dataTestId="owner-tab-sellers"
             alwaysLabel
           />
           <TabButton
-            label="Еще"
-            icon="⋯"
+            label="Ещё"
+            icon="+"
             active={moreOpen}
             onClick={() => setMoreOpen((v) => !v)}
             alwaysLabel
           />
         </div>
 
-        {/* DESKTOP/TABLET: все вкладки */}
+        {/* DESKTOP/TABLET: all tabs */}
         <div className="hidden md:grid md:auto-cols-max md:grid-flow-col gap-1">
           <TabButton
             label="Деньги"
-            icon="₽"
+            icon="$"
             active={tab === "money"}
             onClick={() => go("money")}
             dataTestId="owner-tab-money"
           />
           <TabButton
             label="Сравнение"
-            icon="◆"
+            icon="*"
             active={tab === "compare"}
             onClick={() => go("compare")}
             dataTestId="owner-tab-compare"
           />
           <TabButton
             label="Лодки"
-            icon="⛴"
+            icon="B"
             active={tab === "boats"}
             onClick={() => go("boats")}
             dataTestId="owner-tab-boats"
           />
           <TabButton
             label="Продавцы"
-            icon="👤"
+            icon=""
             active={tab === "sellers"}
             onClick={() => go("sellers")}
             dataTestId="owner-tab-sellers"
           />
           <TabButton
             label="Мотивация"
-            icon="🏆"
+            icon="M"
             active={tab === "motivation"}
             onClick={() => go("motivation")}
             dataTestId="owner-tab-motivation"
           />
           <TabButton
             label="Настройки"
-            icon="⚙"
+            icon="S"
             active={tab === "settings"}
             onClick={() => go("settings")}
             dataTestId="owner-tab-settings"
           />
           <TabButton
             label="Загрузка"
-            icon="⬆"
+            icon="L"
             active={tab === "load"}
             onClick={() => go("load")}
             dataTestId="owner-tab-load"
           />
           <TabButton
             label="Экспорт"
-            icon="⇩"
+            icon="E"
             active={tab === "export"}
             onClick={() => go("export")}
             dataTestId="owner-tab-export"
@@ -764,7 +741,7 @@ function OwnerBottomTabs({ tab, setTab }) {
         </div>
       </div>
 
-      {/* MOBILE "ЕЩЕ" МЕНЮ */}
+      {/* MOBILE "MORE" MENU */}
       {moreOpen && (
         <div className="md:hidden">
           <button
@@ -778,28 +755,28 @@ function OwnerBottomTabs({ tab, setTab }) {
               <div className="p-2 grid grid-cols-2 gap-2">
                 <MoreItem
                   label="Мотивация"
-                  icon="🏆"
+                  icon="M"
                   active={tab === "motivation"}
                   onClick={() => go("motivation")}
             dataTestId="owner-tab-motivation"
                 />
                 <MoreItem
                   label="Настройки"
-                  icon="⚙"
+                  icon="S"
                   active={tab === "settings"}
                   onClick={() => go("settings")}
             dataTestId="owner-tab-settings"
                 />
                 <MoreItem
                   label="Загрузка"
-                  icon="⬆"
+                  icon="L"
                   active={tab === "load"}
                   onClick={() => go("load")}
             dataTestId="owner-tab-load"
                 />
                 <MoreItem
                   label="Экспорт"
-                  icon="⇩"
+                  icon="E"
                   active={tab === "export"}
                   onClick={() => go("export")}
             dataTestId="owner-tab-export"
@@ -850,7 +827,7 @@ function MoreItem({ label, icon, active, onClick }) {
         <span className="text-base leading-none">{icon}</span>
         <span className="text-sm">{label}</span>
       </div>
-      <span className="text-neutral-500">›</span>
+      <span className="text-neutral-500">{'>'}</span>
     </button>
   );
 }

@@ -6,9 +6,23 @@ import Database from 'better-sqlite3';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+let resetCounter = 0;
+
+function resolveTestDbPath() {
+  return process.env.TEST_DB_FILE || path.join(__dirname, '..', '..', '_testdata', 'test.sqlite');
+}
 
 export function resetTestDb() {
-  const testDbPath = path.join(__dirname, '..', '..', '_testdata', 'test.sqlite');
+  resetCounter += 1;
+  const testDbPath = path.join(
+    __dirname,
+    '..',
+    '..',
+    '_testdata',
+    `test-${process.pid}-${Date.now()}-${resetCounter}.sqlite`
+  );
+  process.env.TEST_DB_FILE = testDbPath;
+  process.env.DB_FILE = testDbPath;
   
   // Ensure _testdata directory exists
   const testDataDir = path.dirname(testDbPath);
@@ -61,8 +75,7 @@ export function resetTestDb() {
 }
 
 export function getTestDb() {
-  const testDbPath = path.join(__dirname, '..', '..', '_testdata', 'test.sqlite');
-  return new Database(testDbPath);
+  return new Database(resolveTestDbPath());
 }
 
 export function getTableCounts(db) {

@@ -14,6 +14,7 @@ const JWT_SECRET = 'boat_ticket_secret_key';
 
 describe('OWNER BOATS & SELLERS INVARIANT', () => {
   let day;
+  let yesterday;
   let ownerToken;
   let testBoatId;
   let testSellerId;
@@ -31,6 +32,7 @@ describe('OWNER BOATS & SELLERS INVARIANT', () => {
 
     // Get today's date from SQLite
     day = db.prepare("SELECT DATE('now','localtime') as d").get().d;
+    yesterday = db.prepare("SELECT DATE(?,'-1 day') as d").get(day).d;
 
     // Create owner user and token
     const hashedPassword = bcrypt.hashSync('password123', 10);
@@ -54,6 +56,7 @@ describe('OWNER BOATS & SELLERS INVARIANT', () => {
 
   beforeEach(() => {
     // Clear tables for isolation
+    db.prepare('DELETE FROM tickets').run();
     db.prepare('DELETE FROM sales_transactions_canonical').run();
     db.prepare('DELETE FROM money_ledger').run();
     db.prepare('DELETE FROM presales').run();
@@ -88,14 +91,61 @@ describe('OWNER BOATS & SELLERS INVARIANT', () => {
     expect(Number(found?.revenue || 0)).toBe(5000); // 3000 + 2000
   });
 
-  test('sellers revenue equals money_ledger grouped by seller', async () => {
-    // Insert money_ledger records for the seller (owner endpoint uses money_ledger)
-    const insertLedger = db.prepare(`
-      INSERT INTO money_ledger (seller_id, amount, method, status, kind, type, business_day)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+  test('sellers revenue follows canonical trip_date dataset instead of payment day ledger', async () => {
+    try {
+      const cols = db.prepare("PRAGMA table_info(boat_slots)").all().map(r => r.name);
+      if (!cols.includes('trip_date')) {
+        db.exec("ALTER TABLE boat_slots ADD COLUMN trip_date TEXT NULL");
+      }
+    } catch (e) {
+      // ignore
+    }
+    try {
+      const cols = db.prepare("PRAGMA table_info(tickets)").all().map(r => r.name);
+      if (!cols.includes('business_day')) {
+        db.exec("ALTER TABLE tickets ADD COLUMN business_day TEXT NULL");
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    const slotId = db.prepare(`
+      INSERT INTO boat_slots (boat_id, time, capacity, seats_left, is_active, trip_date)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(testBoatId, '10:00', 100, 100, 1, day).lastInsertRowid;
+
+    const presaleId = db.prepare(`
+      INSERT INTO presales (
+        boat_slot_id, customer_name, customer_phone, number_of_seats, total_price,
+        prepayment_amount, status, slot_uid, business_day, seller_id,
+        payment_cash_amount, payment_card_amount
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?)
+    `).run(
+      slotId,
+      'Seller invariant',
+      '79991234567',
+      2,
+      4000,
+      4000,
+      `boat_slot:${slotId}`,
+      day,
+      testSellerId,
+      1000,
+      3000
+    ).lastInsertRowid;
+
+    const insertTicket = db.prepare(`
+      INSERT INTO tickets (presale_id, boat_slot_id, ticket_code, status, price, business_day)
+      VALUES (?, ?, ?, 'ACTIVE', ?, ?)
     `);
-    insertLedger.run(testSellerId, 2500, 'CASH', 'POSTED', 'SELLER_SHIFT', 'SALE_ACCEPTED_CASH', day);
-    insertLedger.run(testSellerId, 1500, 'CARD', 'POSTED', 'SELLER_SHIFT', 'SALE_ACCEPTED_CARD', day);
+    insertTicket.run(presaleId, slotId, 'S1', 2500, yesterday);
+    insertTicket.run(presaleId, slotId, 'S2', 1500, yesterday);
+
+    db.prepare(`
+      INSERT INTO money_ledger (presale_id, seller_id, amount, method, status, kind, type, business_day)
+      VALUES (?, ?, ?, ?, 'POSTED', ?, ?, ?)
+    `).run(presaleId, testSellerId, 4000, 'CARD', 'SELLER_SHIFT', 'SALE_ACCEPTED_CARD', yesterday);
 
     const res = await request(app)
       .get('/api/owner/sellers?preset=today')
@@ -106,8 +156,10 @@ describe('OWNER BOATS & SELLERS INVARIANT', () => {
 
     // Find the test seller
     const found = apiSellers.find(s => s.seller_id === testSellerId);
-    // seller endpoint returns revenue_paid = cash + card from ledger
+    expect(Number(found?.revenue_forecast || 0)).toBe(4000);
     expect(Number(found?.revenue_paid || 0)).toBe(4000);
+    expect(Number(found?.tickets_total || 0)).toBe(2);
+    expect(Number(found?.shifts_count || 0)).toBe(1);
   });
 
 });

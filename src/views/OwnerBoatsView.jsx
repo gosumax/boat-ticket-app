@@ -32,6 +32,49 @@ function formatInt(v) {
   }
 }
 
+function formatPercent(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  const rounded = Math.round(n * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function formatDecimal(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  const rounded = Math.round(n * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function formatDateLabel(value) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return raw || "—";
+  return `${match[3]}.${match[2]}.${match[1]}`;
+}
+
+function formatTripMeta(trip) {
+  if (!trip) return "—";
+  const parts = [];
+  if (trip.date) parts.push(formatDateLabel(trip.date));
+  if (trip.time) parts.push(String(trip.time).slice(0, 5));
+  return parts.length > 0 ? parts.join(" · ") : "—";
+}
+
+function formatTripSecondary(trip) {
+  if (!trip) return "—";
+  const parts = [];
+  if (trip.tickets !== null && trip.tickets !== undefined && trip.capacity !== null && trip.capacity !== undefined) {
+    parts.push(`${formatInt(trip.tickets)} / ${formatInt(trip.capacity)} бил.`);
+  }
+  if (trip.fillPercent !== null && trip.fillPercent !== undefined) {
+    parts.push(`${formatPercent(trip.fillPercent)}% загрузки`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : "—";
+}
+
 async function ownerGet(url) {
   try {
     const json = await apiClient.request(url, { method: "GET" });
@@ -201,9 +244,10 @@ export default function OwnerBoatsView() {
               <DetailRow
                 key={b.boat_id}
                 testId={`owner-boats-row-${b.boat_id}`}
+                boat={b}
                 name={b.boat_name || `boat#${b.boat_id}`}
                 value={formatRUB(b.revenue)}
-                sub={`Билетов: ${formatInt(b.tickets)} · Рейсов: ${formatInt(b.trips)} · ${b.source || "none"}`}
+                sub={`Билетов: ${formatInt(b.tickets)} · Рейсов: ${formatInt(b.trips)} · Вместимость: ${formatInt(b.capacity)} · Загрузка: ${b.fillPercent === null || b.fillPercent === undefined ? "—" : `${formatPercent(b.fillPercent)}%`}`}
               />
             ))}
           </Group>
@@ -291,14 +335,127 @@ function Group({ title, subtitle, children }) {
   );
 }
 
-function DetailRow({ name, value, sub, testId }) {
+function DetailRow({ boat, name, value, sub, testId }) {
+  const [expanded, setExpanded] = useState(false);
+  const details = boat?.details || {};
+  const lostPotential = details?.lostPotential || { seats: 0, revenue: 0 };
+  const paymentMethods = details?.paymentMethods || { cash: 0, card: 0 };
+  const ticketTypes = details?.ticketTypes || null;
+
   return (
-    <div data-testid={testId} className="rounded-xl border border-white/10 bg-black/20 p-3 flex items-center justify-between gap-3 hover:bg-white/5 hover:border-white/20 transition-colors">
-      <div className="min-w-0">
-        <div className="text-sm font-semibold text-neutral-200 truncate">{name}</div>
-        {sub && <div className="text-sm text-white/70 mt-1 leading-tight">{sub}</div>}
+    <div data-testid={testId} className="rounded-xl border border-white/10 bg-black/20 transition-colors hover:bg-white/5 hover:border-white/20">
+      <button
+        type="button"
+        data-testid={boat ? `owner-boats-toggle-${boat.boat_id}` : undefined}
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full p-3 text-left"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-neutral-200 truncate">{name}</div>
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs leading-tight text-white/70">
+              <span>Билетов: {formatInt(boat?.tickets)}</span>
+              <span>Рейсов: {formatInt(boat?.trips)}</span>
+              <span>Вместимость: {formatInt(boat?.capacity)}</span>
+              <span>Загрузка: {boat?.fillPercent === null || boat?.fillPercent === undefined ? "—" : `${formatPercent(boat.fillPercent)}%`}</span>
+              <span>Доля: {boat?.sharePercent === null || boat?.sharePercent === undefined ? "—" : `${formatPercent(boat.sharePercent)}%`}</span>
+            </div>
+            {!boat && sub ? <div className="text-sm text-white/70 mt-1 leading-tight">{sub}</div> : null}
+          </div>
+          <div className="text-right shrink-0">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-600">
+              {expanded ? "Свернуть" : "Подробнее"}
+            </div>
+            <div className="mt-1 text-sm font-extrabold tracking-tight whitespace-nowrap">{value}</div>
+          </div>
+        </div>
+      </button>
+
+      {expanded && boat ? (
+        <div className="border-t border-white/10 px-3 pb-3 pt-3" data-testid={`owner-boats-details-${boat.boat_id}`}>
+          <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
+            <MiniStat label="Средний чек" value={formatRUB(details.avgCheck)} />
+            <MiniStat label="Выручка / рейс" value={formatRUB(details.avgRevenuePerTrip)} />
+            <MiniStat label="Пассажиров / рейс" value={formatDecimal(details.avgPassengersPerTrip)} />
+            <MiniStat label="Свободные места" value={formatInt(details.freeSeats)} />
+            <MiniStat label="Потерянный потенциал" value={`${formatInt(lostPotential.seats)} мест · ${formatRUB(lostPotential.revenue)}`} />
+            <MiniStat
+              label="% денежного потенциала"
+              value={details.potentialRevenuePercent === null || details.potentialRevenuePercent === undefined ? "—" : `${formatPercent(details.potentialRevenuePercent)}%`}
+            />
+            <MiniStat label="Полные рейсы" value={formatInt(details.fullTripsCount)} />
+            <MiniStat
+              label="Отмены"
+              value={`${formatInt(details?.cancellations?.count)} · ${formatRUB(details?.cancellations?.amount)}`}
+            />
+            <MiniStat
+              label="Возвраты"
+              value={`${formatInt(details?.refunds?.count)} · ${formatRUB(details?.refunds?.amount)}`}
+            />
+          </div>
+
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            <TripCard label="Лучший рейс" trip={details.bestTrip} />
+            <TripCard label="Худший рейс" trip={details.worstTrip} />
+          </div>
+
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            {ticketTypes?.available ? (
+              <BreakdownCard
+                label="Типы билетов"
+                items={[
+                  { label: "Взрослые", value: formatInt(ticketTypes.adult) },
+                  { label: "Подростковые", value: formatInt(ticketTypes.teen) },
+                  { label: "Детские", value: formatInt(ticketTypes.child) },
+                ]}
+              />
+            ) : null}
+            <BreakdownCard
+              label="Способы оплаты"
+              items={[
+                { label: "Наличные", value: formatRUB(paymentMethods.cash) },
+                { label: "Карта", value: formatRUB(paymentMethods.card) },
+              ]}
+            />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MiniStat({ label, value }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/30 p-2">
+      <div className="text-[10px] text-neutral-500">{label}</div>
+      <div className="mt-1 text-sm font-semibold leading-tight text-neutral-100">{value}</div>
+    </div>
+  );
+}
+
+function TripCard({ label, trip }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+      <div className="text-[10px] text-neutral-500">{label}</div>
+      <div className="mt-1 text-sm font-semibold text-neutral-100">{trip ? formatRUB(trip.revenue) : "—"}</div>
+      <div className="mt-1 text-xs text-white/70">{formatTripMeta(trip)}</div>
+      <div className="mt-1 text-xs text-neutral-500">{formatTripSecondary(trip)}</div>
+    </div>
+  );
+}
+
+function BreakdownCard({ label, items }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+      <div className="text-[10px] text-neutral-500">{label}</div>
+      <div className="mt-2 space-y-2">
+        {items.map((item) => (
+          <div key={item.label} className="flex items-center justify-between gap-3 text-sm">
+            <span className="text-white/70">{item.label}</span>
+            <span className="font-semibold text-neutral-100">{item.value}</span>
+          </div>
+        ))}
       </div>
-      <div className="text-sm font-extrabold tracking-tight whitespace-nowrap">{value}</div>
     </div>
   );
 }

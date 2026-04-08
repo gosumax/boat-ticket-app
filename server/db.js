@@ -245,21 +245,21 @@ try {
     console.log('[CAPACITY_FIX] Capacity fix already ran, skipping...');
   }
 
-  // LIGHTWEIGHT DB MIGRATION - RUN EVERY TIME (SAFE)
+  // LIGHTWEIGHT DB MIGRATION - only normalize legacy non-canonical labels
   console.log('[TYPE MIGRATE] Running lightweight boat type migration...');
 
   // Update boats with speed variations to canonical 'speed'
   const speedMigrationResult = db.prepare(`
     UPDATE boats
     SET type = 'speed'
-    WHERE lower(trim(type)) IN ('скоростная','скоростные','speed')
+    WHERE lower(trim(type)) IN ('скоростная','скоростные')
   `).run();
 
   // Update boats with cruise variations to canonical 'cruise'
   const cruiseMigrationResult = db.prepare(`
     UPDATE boats
     SET type = 'cruise'
-    WHERE lower(trim(type)) IN ('прогулочная','прогулочные','cruise')
+    WHERE lower(trim(type)) IN ('прогулочная','прогулочные')
   `).run();
 
   console.log(`[TYPE MIGRATE] Updated ${speedMigrationResult.changes} boats to speed and ${cruiseMigrationResult.changes} boats to cruise`);
@@ -1731,10 +1731,8 @@ try {
           "ELSE NULL END"
         : "NULL";
 
-      try { db.exec("DROP TRIGGER IF EXISTS trg_TICKETS_TO_SALES_TRANSACTIONS"); } catch {}
-
       db.exec(`
-        CREATE TRIGGER trg_TICKETS_TO_SALES_TRANSACTIONS
+        CREATE TRIGGER IF NOT EXISTS trg_TICKETS_TO_SALES_TRANSACTIONS
         AFTER INSERT ON tickets
         BEGIN
           INSERT OR IGNORE INTO sales_transactions (
@@ -1763,7 +1761,7 @@ try {
         END;
       `);
 
-      console.log("[TRIGGER] trg_TICKETS_TO_SALES_TRANSACTIONS created");
+      console.log("[TRIGGER] trg_TICKETS_TO_SALES_TRANSACTIONS ensured");
     } else {
       console.log("[TRIGGER] trg_TICKETS_TO_SALES_TRANSACTIONS skipped (missing required tickets columns)");
     }

@@ -7,7 +7,7 @@ const __dirname = path.dirname(__filename);
 
 export async function makeApp() {
   // Set test DB path BEFORE importing server modules
-  const testDbPath = path.join(__dirname, '..', '..', '_testdata', 'test.sqlite');
+  const testDbPath = process.env.TEST_DB_FILE || path.join(__dirname, '..', '..', '_testdata', 'test.sqlite');
   process.env.DB_FILE = testDbPath;
   process.env.NODE_ENV = 'test'; // Disable auto-migrations
   

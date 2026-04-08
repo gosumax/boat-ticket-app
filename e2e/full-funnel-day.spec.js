@@ -355,6 +355,7 @@ test.describe('E2E Full Funnel Day', () => {
     const shiftOwnerUi = await readMoneyByTestId(page, 'shiftclose-owner-final-kpi');
     const shiftWithholdWeeklyUi = await readMoneyByTestId(page, 'shiftclose-withhold-weekly');
     const shiftWithholdSeasonUi = await readMoneyByTestIdPrecise(page, 'shiftclose-withhold-season');
+    const shiftWithholdSeasonTodayUi = await readMoneyByTestIdPrecise(page, 'shiftclose-withhold-season-today');
     const roundingSeasonLocator = page.getByTestId('shiftclose-withhold-rounding-season');
     const shiftWithholdRoundingSeasonUi = (await roundingSeasonLocator.count()) > 0
       ? await readMoneyByTestIdPrecise(page, 'shiftclose-withhold-rounding-season')
@@ -379,8 +380,15 @@ test.describe('E2E Full Funnel Day', () => {
     expect(shiftCardUi).toBeCloseTo(toNum(shiftSummary.collected_card), 2);
     expect(shiftTotalUi).toBeCloseTo(toNum(shiftSummary.collected_total), 2);
     expect(shiftOwnerUi).toBe(shiftOwnerExpected);
+    await expect(page.getByTestId('shiftclose-summary')).toContainText('Season фонд всего');
+    await expect(page.getByTestId('shiftclose-summary')).not.toContainText('Отложить в Season фонд');
     if (shiftSummary?.motivation_withhold) {
       expect(shiftWithholdWeeklyUi).toBe(Math.round(toNum(shiftSummary.motivation_withhold.weekly_amount)));
+      const seasonTodayExpected = toNum(
+        shiftSummary?.shift_close_breakdown?.totals?.season_from_revenue ??
+        shiftSummary.motivation_withhold.season_from_revenue ??
+        shiftSummary.motivation_withhold.season_amount
+      );
       const seasonTotalExpected = toNum(
         shiftSummary.motivation_withhold.season_total ??
         shiftSummary.motivation_withhold.season_fund_total ??
@@ -389,6 +397,7 @@ test.describe('E2E Full Funnel Day', () => {
           toNum(shiftSummary.motivation_withhold.season_from_prepayment_transfer)
         )
       );
+      expect(shiftWithholdSeasonTodayUi).toBeCloseTo(seasonTodayExpected, 2);
       expect(shiftWithholdSeasonUi).toBeCloseTo(seasonTotalExpected, 2);
       if (shiftWithholdRoundingSeasonUi !== null) {
         expect(shiftWithholdRoundingSeasonUi).toBeCloseTo(toNum(shiftSummary.motivation_withhold.rounding_to_season_amount_total), 2);
@@ -424,6 +433,7 @@ test.describe('E2E Full Funnel Day', () => {
     const ownerCollectedCashUi = await readMoneyByTestId(page, 'owner-money-collected-cash');
     const ownerCollectedCardUi = await readMoneyByTestId(page, 'owner-money-collected-card');
     const ownerMainKpiUi = await readMoneyByTestId(page, 'owner-money-main-kpi');
+    const ownerMoneySeasonTodayUi = await readMoneyByTestId(page, 'owner-money-funds-season');
     const ownerTomorrowObligationsCashUi = await readMoneyByTestId(page, 'owner-money-obligations-tomorrow-cash');
     const ownerTomorrowObligationsCardUi = await readMoneyByTestId(page, 'owner-money-obligations-tomorrow-card');
     const ownerTomorrowObligationsTotalUi = await readMoneyByTestId(page, 'owner-money-obligations-tomorrow-total');
@@ -435,6 +445,10 @@ test.describe('E2E Full Funnel Day', () => {
     );
     expect(ownerCollectedCardUi).toBe(
       Math.round(toNum(ownerDecisionMetrics.received_card_today ?? totals.collected_card))
+    );
+    await expect(page.getByText('Season сегодня по закрытию смены')).toBeVisible();
+    expect(ownerMoneySeasonTodayUi).toBe(
+      Math.round(toNum(ownerDecisionMetrics.withhold_season_today ?? totals.funds_withhold_season_today))
     );
     const ownerMainKpiExpected = formatRUBUiExpected(
       ownerDecisionMetrics.can_take_cash_today ??
@@ -499,6 +513,26 @@ test.describe('E2E Full Funnel Day', () => {
 
     await page.locator('[data-testid="owner-tab-motivation"]:visible').first().click();
     await expect(page.getByTestId('owner-screen-motivation')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('Season начислено в фонд за день')).toBeVisible();
+    await expect
+      .poll(
+        async () => readMoneyByTestId(page, 'owner-motivation-day-season-funds'),
+        { timeout: 15000 }
+      )
+      .toBe(
+        Math.round(
+          toNum(totals.funds_withhold_season_today)
+        )
+      );
+    expect(ownerMoneySeasonTodayUi).toBe(
+      Math.round(
+        toNum(
+          shiftSummary?.shift_close_breakdown?.totals?.season_from_revenue ??
+          shiftSummary?.motivation_withhold?.season_from_revenue ??
+          shiftSummary?.motivation_withhold?.season_amount
+        )
+      )
+    );
     await page.getByTestId('owner-motivation-tab-week').click();
     const weekKey = getCurrentISOWeek();
     const ownerWeeklyRes = await request.get(`/api/owner/motivation/weekly?week=${encodeURIComponent(weekKey)}`, {
@@ -518,9 +552,17 @@ test.describe('E2E Full Funnel Day', () => {
     });
     expect(ownerSeasonRes.ok()).toBeTruthy();
     const ownerSeasonData = (await ownerSeasonRes.json())?.data || {};
-    const expectedSeasonCurrent = toNum(ownerSeasonData.season_pool_total_current || ownerSeasonData.season_pool_total_ledger);
+    const expectedSeasonCurrent =
+      toNum(ownerSeasonData.season_pool_from_revenue_total ?? ownerSeasonData.season_pool_total_current ?? ownerSeasonData.season_pool_total_ledger ?? 0) +
+      toNum(ownerSeasonData.season_pool_rounding_total) +
+      toNum(ownerSeasonData.season_pool_dispatcher_decision_total ?? ownerSeasonData.season_pool_manual_transfer_total ?? 0);
     expect(await readMoneyByTestIdPrecise(page, 'owner-season-current-fund')).toBeCloseTo(expectedSeasonCurrent, 2);
     expect(await readMoneyByTestIdPrecise(page, 'owner-season-rounding-total')).toBeCloseTo(toNum(ownerSeasonData.season_pool_rounding_total), 2);
+    expect(await readMoneyByTestIdPrecise(page, 'owner-season-dispatcher-decision-total')).toBeCloseTo(
+      toNum(ownerSeasonData.season_pool_dispatcher_decision_total ?? ownerSeasonData.season_pool_manual_transfer_total ?? 0),
+      2
+    );
+    await expect(page.getByText(/Общий фонд:/)).toHaveCount(0);
 
     // Seller personal sales view is accessible after funnel operations.
     await logoutToLogin(page);

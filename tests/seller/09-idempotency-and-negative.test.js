@@ -1,8 +1,8 @@
 // 09-idempotency-and-negative.test.js — Idempotency and negative tests
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
-import { getTestDb, getTableCounts } from '../_helpers/dbReset.js';
-import { loadSeedData } from '../_helpers/loadSeedData.js';
+import { resetTestDb, getTestDb, getTableCounts } from '../_helpers/dbReset.js';
+import { seedBasicData } from '../_helpers/seedBasic.js';
 import { makeApp } from '../_helpers/makeApp.js';
 import { httpLog } from '../_helpers/httpLog.js';
 
@@ -10,8 +10,9 @@ let app, db, seedData, token;
 
 beforeAll(async () => {
   httpLog.clear();
+  resetTestDb();
   db = getTestDb();
-  seedData = loadSeedData();
+  seedData = await seedBasicData(db);
   app = await makeApp();
   
   // Login sellerA

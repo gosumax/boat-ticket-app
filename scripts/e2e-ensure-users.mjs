@@ -219,20 +219,64 @@ function ensureGeneratedSlot({ day, type }) {
   }
 
   const slotUid = `generated:${slot.id}`;
-  db.prepare('DELETE FROM tickets WHERE presale_id IN (SELECT id FROM presales WHERE slot_uid = ?)').run(slotUid);
-  db.prepare('DELETE FROM presales WHERE slot_uid = ?').run(slotUid);
+  db.prepare(`
+    DELETE FROM tickets
+    WHERE presale_id IN (
+      SELECT p.id
+      FROM presales p
+      WHERE p.slot_uid = ?
+        AND NOT EXISTS (
+          SELECT 1
+          FROM money_ledger ml
+          WHERE ml.presale_id = p.id
+            AND ml.status = 'POSTED'
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM sales_transactions_canonical stc
+          WHERE stc.presale_id = p.id
+            AND stc.status = 'VALID'
+        )
+    )
+  `).run(slotUid);
+  db.prepare(`
+    DELETE FROM presales
+    WHERE slot_uid = ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM money_ledger ml
+        WHERE ml.presale_id = presales.id
+          AND ml.status = 'POSTED'
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM sales_transactions_canonical stc
+        WHERE stc.presale_id = presales.id
+          AND stc.status = 'VALID'
+      )
+  `).run(slotUid);
 
   const cap = Number(slot.capacity || 12) > 0 ? Number(slot.capacity) : 12;
+  const occupiedSeatsRow = db.prepare(`
+    SELECT COALESCE(SUM(number_of_seats), 0) AS occupied
+    FROM presales
+    WHERE slot_uid = ?
+      AND status IN ('ACTIVE', 'PAID', 'UNPAID', 'RESERVED', 'PARTIALLY_PAID', 'CONFIRMED', 'USED')
+  `).get(slotUid);
+  const occupiedSeats = Math.max(0, Number(occupiedSeatsRow?.occupied || 0));
   db.prepare(`
     UPDATE generated_slots
     SET is_active = 1,
-        seats_left = CASE WHEN capacity > 0 THEN capacity ELSE ? END,
+        seats_left = CASE
+          WHEN capacity > 0 THEN MAX(0, capacity - ?)
+          ELSE MAX(0, ? - ?)
+        END,
         price_adult = ?,
         price_child = ?,
         price_teen = ?,
         duration_minutes = 60
     WHERE id = ?
-  `).run(cap, prices.adult, prices.child, prices.teen, slot.id);
+  `).run(occupiedSeats, cap, occupiedSeats, prices.adult, prices.child, prices.teen, slot.id);
 
   console.log(`[E2E_SLOTS] prepared clean slot uid=${slotUid} date=${day} type=${type} time=${departureTime}`);
   return { slotUid, day, type, time: departureTime };

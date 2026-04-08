@@ -59,23 +59,32 @@ async function loginApi(request, username, password) {
   return body.token;
 }
 
-async function getSeasonFundCurrent(request, ownerToken, seasonId) {
+async function getSeasonDispatcherDecisionTotal(request, ownerToken, seasonId) {
   const res = await request.get(`/api/owner/motivation/season?season_id=${seasonId}`, {
     headers: { Authorization: `Bearer ${ownerToken}` },
   });
   expect(res.ok()).toBeTruthy();
   const body = await res.json();
   const data = body?.data || {};
-  return Number(data.season_pool_total_current ?? data.season_pool_total_ledger ?? 0);
+  return Number(data.season_pool_dispatcher_decision_total ?? data.season_pool_manual_transfer_total ?? 0);
 }
 
-async function waitSeasonFundAtLeast(request, ownerToken, seasonId, minValue) {
+async function getSeasonPayload(request, ownerToken, seasonId) {
+  const res = await request.get(`/api/owner/motivation/season?season_id=${seasonId}`, {
+    headers: { Authorization: `Bearer ${ownerToken}` },
+  });
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  return body?.data || {};
+}
+
+async function waitSeasonDispatcherDecisionAtLeast(request, ownerToken, seasonId, minValue) {
   for (let i = 0; i < 20; i += 1) {
-    const current = await getSeasonFundCurrent(request, ownerToken, seasonId);
+    const current = await getSeasonDispatcherDecisionTotal(request, ownerToken, seasonId);
     if (current >= minValue) return current;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error(`season_pool_total_current did not reach ${minValue}`);
+  throw new Error(`season_pool_dispatcher_decision_total did not reach ${minValue}`);
 }
 
 test.describe('A. Dispatcher Presale Creation', () => {
@@ -214,7 +223,7 @@ test.describe('A. Dispatcher Presale Creation', () => {
     const ownerToken = await loginApi(request, ownerUsername, ownerPassword);
 
     const seasonId = String(new Date().getFullYear());
-    const seasonBefore = await getSeasonFundCurrent(request, ownerToken, seasonId);
+    const seasonBefore = await getSeasonDispatcherDecisionTotal(request, ownerToken, seasonId);
 
     const presalesBefore = await fetchPresales(request, dispatcherToken);
     const maxBefore = getMaxPresaleId(presalesBefore);
@@ -239,7 +248,17 @@ test.describe('A. Dispatcher Presale Creation', () => {
 
     await expect(page.getByTestId(`presale-card-${presaleId}`)).toHaveCount(0, { timeout: 10000 });
 
-    const seasonAfter = await waitSeasonFundAtLeast(request, ownerToken, seasonId, seasonBefore + 1000);
-    expect(seasonAfter).toBeGreaterThanOrEqual(seasonBefore + 1000);
+    const seasonPayload = await getSeasonPayload(request, ownerToken, seasonId);
+    const isInsideConfiguredSeason =
+      String(E2E_TARGET_DATE) >= String(seasonPayload.season_from || '') &&
+      String(E2E_TARGET_DATE) <= String(seasonPayload.season_to || '');
+
+    if (isInsideConfiguredSeason) {
+      const seasonAfter = await waitSeasonDispatcherDecisionAtLeast(request, ownerToken, seasonId, seasonBefore + 1000);
+      expect(seasonAfter).toBeGreaterThanOrEqual(seasonBefore + 1000);
+    } else {
+      const seasonAfter = await getSeasonDispatcherDecisionTotal(request, ownerToken, seasonId);
+      expect(seasonAfter).toBe(seasonBefore);
+    }
   });
 });

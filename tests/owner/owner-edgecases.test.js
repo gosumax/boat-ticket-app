@@ -29,6 +29,22 @@ describe('OWNER EDGE CASES', () => {
     } catch (e) {
       // ignore
     }
+    try {
+      const cols = db.prepare("PRAGMA table_info(boat_slots)").all().map(r => r.name);
+      if (!cols.includes('trip_date')) {
+        db.exec("ALTER TABLE boat_slots ADD COLUMN trip_date TEXT NULL");
+      }
+    } catch (e) {
+      // ignore
+    }
+    try {
+      const cols = db.prepare("PRAGMA table_info(tickets)").all().map(r => r.name);
+      if (!cols.includes('business_day')) {
+        db.exec("ALTER TABLE tickets ADD COLUMN business_day TEXT NULL");
+      }
+    } catch (e) {
+      // ignore
+    }
 
     // Get today's date from SQLite
     day = db.prepare("SELECT DATE('now','localtime') as d").get().d;
@@ -54,14 +70,15 @@ describe('OWNER EDGE CASES', () => {
 
     // Create test boat_slot
     const insertSlot = db.prepare(`
-      INSERT INTO boat_slots (boat_id, time, capacity, seats_left, is_active)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO boat_slots (boat_id, time, capacity, seats_left, is_active, trip_date)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
-    testSlotId = insertSlot.run(testBoatId, '10:00', 100, 100, 1).lastInsertRowid;
+    testSlotId = insertSlot.run(testBoatId, '10:00', 100, 100, 1, day).lastInsertRowid;
   });
 
   beforeEach(() => {
     // Clear tables for isolation
+    db.prepare('DELETE FROM tickets').run();
     db.prepare('DELETE FROM sales_transactions_canonical').run();
     db.prepare('DELETE FROM money_ledger').run();
     db.prepare('DELETE FROM presales').run();
@@ -103,17 +120,35 @@ describe('OWNER EDGE CASES', () => {
   test('partial payment does not inflate seller revenue', async () => {
     // Create a presale with partial prepayment
     const insertPresale = db.prepare(`
-      INSERT INTO presales (customer_name, customer_phone, number_of_seats, total_price, business_day, status, boat_slot_id, prepayment_amount)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO presales (
+        customer_name, customer_phone, number_of_seats, total_price, business_day, status,
+        boat_slot_id, prepayment_amount, seller_id, slot_uid, payment_cash_amount, payment_card_amount
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const presaleId = insertPresale.run('Test', '79991234567', 2, 3000, day, 'ACTIVE', testSlotId, 1000).lastInsertRowid;
+    const presaleId = insertPresale.run(
+      'Test',
+      '79991234567',
+      2,
+      3000,
+      day,
+      'ACTIVE',
+      testSlotId,
+      1000,
+      testSellerId,
+      `boat_slot:${testSlotId}`,
+      1000,
+      0
+    ).lastInsertRowid;
 
-    // Insert ledger entry for partial payment (only what was actually paid)
-    const insertLedger = db.prepare(`
-      INSERT INTO money_ledger (presale_id, seller_id, amount, method, status, kind, type, business_day)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    insertLedger.run(presaleId, testSellerId, 1000, 'CASH', 'POSTED', 'SELLER_SHIFT', 'SALE_PREPAYMENT_CASH', day);
+    db.prepare(`
+      INSERT INTO tickets (presale_id, boat_slot_id, ticket_code, status, price, business_day)
+      VALUES (?, ?, ?, 'ACTIVE', ?, ?)
+    `).run(presaleId, testSlotId, 'PART-1', 1500, day);
+    db.prepare(`
+      INSERT INTO tickets (presale_id, boat_slot_id, ticket_code, status, price, business_day)
+      VALUES (?, ?, ?, 'ACTIVE', ?, ?)
+    `).run(presaleId, testSlotId, 'PART-2', 1500, day);
 
     const res = await request(app)
       .get('/api/owner/sellers?preset=today')
@@ -122,25 +157,45 @@ describe('OWNER EDGE CASES', () => {
     expect(res.status).toBe(200);
     const found = res.body.data?.items?.find(s => s.seller_id === testSellerId);
 
-    // Seller revenue should only be the actual payment (1000), not total_price (3000)
+    expect(Number(found?.revenue_forecast || 0)).toBe(3000);
     expect(Number(found?.revenue_paid || 0)).toBe(1000);
+    expect(Number(found?.revenue_pending || 0)).toBe(2000);
+    expect(Number(found?.tickets_total || 0)).toBe(2);
+    expect(Number(found?.tickets_paid || 0)).toBe(0);
+    expect(Number(found?.tickets_pending || 0)).toBe(2);
   });
 
-  test('multiple payments on same presale sum correctly', async () => {
-    // Create a presale
+  test('seller revenue uses active ticket sum before presale total fallback', async () => {
     const insertPresale = db.prepare(`
-      INSERT INTO presales (customer_name, customer_phone, number_of_seats, total_price, business_day, status, boat_slot_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO presales (
+        customer_name, customer_phone, number_of_seats, total_price, business_day, status,
+        boat_slot_id, prepayment_amount, seller_id, slot_uid, payment_cash_amount, payment_card_amount
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const presaleId = insertPresale.run('Test', '79991234567', 2, 3000, day, 'ACTIVE', testSlotId).lastInsertRowid;
+    const presaleId = insertPresale.run(
+      'Ticket-first',
+      '79991234567',
+      2,
+      9999,
+      day,
+      'ACTIVE',
+      testSlotId,
+      3000,
+      testSellerId,
+      `boat_slot:${testSlotId}`,
+      500,
+      2500
+    ).lastInsertRowid;
 
-    // Insert multiple ledger entries for same presale
-    const insertLedger = db.prepare(`
-      INSERT INTO money_ledger (presale_id, seller_id, amount, method, status, kind, type, business_day)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    insertLedger.run(presaleId, testSellerId, 1000, 'CASH', 'POSTED', 'SELLER_SHIFT', 'SALE_PREPAYMENT_CASH', day);
-    insertLedger.run(presaleId, testSellerId, 2000, 'CARD', 'POSTED', 'SELLER_SHIFT', 'SALE_ACCEPTED_CARD', day);
+    db.prepare(`
+      INSERT INTO tickets (presale_id, boat_slot_id, ticket_code, status, price, business_day)
+      VALUES (?, ?, ?, 'ACTIVE', ?, ?)
+    `).run(presaleId, testSlotId, 'TF-1', 1000, day);
+    db.prepare(`
+      INSERT INTO tickets (presale_id, boat_slot_id, ticket_code, status, price, business_day)
+      VALUES (?, ?, ?, 'ACTIVE', ?, ?)
+    `).run(presaleId, testSlotId, 'TF-2', 2000, day);
 
     const res = await request(app)
       .get('/api/owner/sellers?preset=today')
@@ -149,8 +204,9 @@ describe('OWNER EDGE CASES', () => {
     expect(res.status).toBe(200);
     const found = res.body.data?.items?.find(s => s.seller_id === testSellerId);
 
-    // Seller revenue should sum all payments
+    expect(Number(found?.revenue_forecast || 0)).toBe(3000);
     expect(Number(found?.revenue_paid || 0)).toBe(3000);
+    expect(Number(found?.tickets_total || 0)).toBe(2);
   });
 
 });

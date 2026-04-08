@@ -830,7 +830,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-2 px-3 bg-neutral-900 rounded-lg">
-                  <span className="text-neutral-400">Отложить в Season фонд</span>
+                  <span className="text-neutral-400">Season фонд всего</span>
                   <span data-testid="shiftclose-withhold-season" className="text-lg font-bold text-purple-300">
                     {formatRUBExact(payrollMath?.seasonFundTotal ?? 0)}
                   </span>

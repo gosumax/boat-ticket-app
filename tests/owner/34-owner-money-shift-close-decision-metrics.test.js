@@ -129,6 +129,14 @@ describe('OWNER MONEY SUMMARY: SHIFT CLOSE DECISION METRICS', () => {
     const ownerDecisionMetrics = ownerData.owner_decision_metrics || {};
     const ownerTotals = ownerData.totals || {};
     const dispatcherBody = dispatcherSummaryRes.body || {};
+    const dispatcherWithhold = dispatcherBody.motivation_withhold || {};
+    const dispatcherShiftCloseTotals = dispatcherBody.shift_close_breakdown?.totals || {};
+    const motivationDayRes = await request(app)
+      .get(`/api/owner/motivation/day?day=${today}`)
+      .set('Authorization', `Bearer ${ownerToken}`);
+    expect(motivationDayRes.status).toBe(200);
+    expect(motivationDayRes.body?.ok).toBe(true);
+    const motivationDayWithhold = motivationDayRes.body?.data?.withhold || {};
 
     expect(ownerDecisionMetrics.business_day).toBe(today);
     expect(ownerDecisionMetrics.source).toBe('shift_close_breakdown');
@@ -138,7 +146,15 @@ describe('OWNER MONEY SUMMARY: SHIFT CLOSE DECISION METRICS', () => {
     expect(Number(ownerDecisionMetrics.received_card_today || 0)).toBeCloseTo(Number(dispatcherBody.collected_card || 0), 6);
     expect(Number(ownerDecisionMetrics.received_total_today || 0)).toBeCloseTo(Number(dispatcherBody.collected_total || 0), 6);
     expect(Number(ownerDecisionMetrics.withhold_weekly_today || 0)).toBeCloseTo(Number(dispatcherBody.weekly_fund || 0), 6);
-    expect(Number(ownerDecisionMetrics.withhold_season_today || 0)).toBeCloseTo(Number(dispatcherBody.season_fund_total || 0), 6);
+    expect(Number(ownerDecisionMetrics.withhold_season_today || 0)).toBeCloseTo(
+      Number(
+        dispatcherShiftCloseTotals.season_from_revenue ??
+        dispatcherWithhold.season_from_revenue ??
+        dispatcherWithhold.season_amount ??
+        0
+      ),
+      6
+    );
     expect(Number(ownerDecisionMetrics.obligations_tomorrow_cash || 0)).toBeCloseTo(1200, 6);
     expect(Number(ownerDecisionMetrics.obligations_tomorrow_card || 0)).toBeCloseTo(800, 6);
     expect(Number(ownerDecisionMetrics.obligations_tomorrow_total || 0)).toBeCloseTo(2000, 6);
@@ -150,6 +166,8 @@ describe('OWNER MONEY SUMMARY: SHIFT CLOSE DECISION METRICS', () => {
 
     expect(Number(ownerTotals.owner_cash_today || 0)).toBeCloseTo(Number(dispatcherBody.owner_cash_today || 0), 6);
     expect(Number(ownerTotals.weekly_fund || 0)).toBeCloseTo(Number(dispatcherBody.weekly_fund || 0), 6);
+    expect(Number(ownerTotals.funds_withhold_weekly_today || 0)).toBeCloseTo(Number(motivationDayWithhold.weekly_amount || 0), 6);
+    expect(Number(ownerTotals.funds_withhold_season_today || 0)).toBeCloseTo(Number(motivationDayWithhold.season_amount || 0), 6);
     expect(Number(ownerTotals.season_fund_total || 0)).toBeCloseTo(Number(dispatcherBody.season_fund_total || 0), 6);
     expect(Number(ownerTotals.obligations_tomorrow_cash || 0)).toBeCloseTo(1200, 6);
     expect(Number(ownerTotals.obligations_tomorrow_card || 0)).toBeCloseTo(800, 6);

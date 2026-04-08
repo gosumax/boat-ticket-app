@@ -3,11 +3,21 @@ import {
   getSeasonConfigUiState,
   getSeasonDisplayWarnings,
   resolveSeasonBoundaries,
+  toCanonicalSeasonDate,
   validateSeasonBoundaryPair,
 } from '../../src/utils/seasonBoundaries.js';
 
 describe('Owner motivation season boundaries UI fallback', () => {
-  it('uses saved MM-DD boundaries when both values are valid', () => {
+  it('uses seasonStart/seasonEnd from owner settings when both values are valid', () => {
+    const result = resolveSeasonBoundaries({
+      seasonStart: '2026-05-01',
+      seasonEnd: '2026-10-15',
+    });
+
+    expect(result).toEqual({ start: '05-01', end: '10-15' });
+  });
+
+  it('falls back to saved MM-DD boundaries when seasonStart/seasonEnd are absent', () => {
     const result = resolveSeasonBoundaries({
       season_start_mmdd: '05-01',
       season_end_mmdd: '10-15',
@@ -53,6 +63,11 @@ describe('Owner settings season MM-DD UI validation', () => {
     expect(validation.start).toBe('05-01');
     expect(validation.end).toBe('10-15');
   });
+
+  it('builds canonical YYYY-MM-DD values from MM-DD for save payloads', () => {
+    expect(toCanonicalSeasonDate('01-01')).toBe('2026-01-01');
+    expect(toCanonicalSeasonDate('12-01')).toBe('2026-12-01');
+  });
 });
 
 describe('Owner season config status and badge UI', () => {
@@ -67,8 +82,8 @@ describe('Owner season config status and badge UI', () => {
 
   it('shows custom status and badge for custom boundaries', () => {
     const ui = getSeasonConfigUiState({
-      season_start_mmdd: '05-01',
-      season_end_mmdd: '10-15',
+      seasonStart: '2026-05-01',
+      seasonEnd: '2026-10-15',
     });
     expect(ui.start).toBe('05-01');
     expect(ui.end).toBe('10-15');

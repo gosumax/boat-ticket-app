@@ -1,5 +1,6 @@
 const MMDD_RE = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+const CANONICAL_SEASON_BOUNDARY_YEAR = '2026';
 
 export function normalizeMmdd(value) {
   return String(value ?? '').trim();
@@ -7,6 +8,12 @@ export function normalizeMmdd(value) {
 
 export function isValidMmdd(value) {
   return MMDD_RE.test(normalizeMmdd(value));
+}
+
+export function toCanonicalSeasonDate(mmdd, year = CANONICAL_SEASON_BOUNDARY_YEAR) {
+  const normalized = normalizeMmdd(mmdd);
+  if (!MMDD_RE.test(normalized)) return '';
+  return `${year}-${normalized}`;
 }
 
 export function validateSeasonBoundaryPair(startRaw, endRaw) {
@@ -55,6 +62,12 @@ export function validateSeasonBoundaryPair(startRaw, endRaw) {
 }
 
 export function resolveSeasonBoundaries(settings) {
+  const seasonStart = String(settings?.seasonStart ?? '').trim();
+  const seasonEnd = String(settings?.seasonEnd ?? '').trim();
+  if (YMD_RE.test(seasonStart) && YMD_RE.test(seasonEnd) && seasonStart <= seasonEnd) {
+    return { start: seasonStart.slice(5), end: seasonEnd.slice(5) };
+  }
+
   const start = normalizeMmdd(settings?.season_start_mmdd);
   const end = normalizeMmdd(settings?.season_end_mmdd);
   if (MMDD_RE.test(start) && MMDD_RE.test(end) && start <= end) {

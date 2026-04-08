@@ -92,6 +92,23 @@ describe('OWNER SETTINGS CONTRACT', () => {
       expect(getRes.body.data.weekly_percent).toBe(0.02);
       expect(getRes.body.data.season_percent).toBe(0.03);
     });
+
+    it('persists season payout scheme separately from other motivation settings', async () => {
+      const payload = { motivationType: 'adaptive', season_payout_scheme: 'top5' };
+
+      await request(app)
+        .put('/api/owner/settings/full')
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send(payload);
+
+      const getRes = await request(app)
+        .get('/api/owner/settings/full')
+        .set('Authorization', `Bearer ${ownerToken}`);
+
+      expect(getRes.body.data.motivationType).toBe('adaptive');
+      expect(getRes.body.data.season_payout_scheme).toBe('top5');
+      expect(getRes.body.data.seasonPayoutScheme).toBe('top5');
+    });
     
     it('persists individual_share and team_share', async () => {
       const payload = { individual_share: 0.6, team_share: 0.4 };
@@ -293,9 +310,9 @@ describe('OWNER SETTINGS CONTRACT', () => {
     });
   });
   
-  describe('C) Share normalization', () => {
+  describe('C) Share independence', () => {
     
-    it('normalizes individual_share + team_share != 1', async () => {
+    it('keeps individual_share and team_share as separate stored values', async () => {
       const payload = { individual_share: 0.7, team_share: 0.5 }; // Sum = 1.2
       
       const putRes = await request(app)
@@ -304,10 +321,14 @@ describe('OWNER SETTINGS CONTRACT', () => {
         .send(payload);
       
       expect(putRes.status).toBe(200);
-      
-      // Should normalize to 0.7/1.2 = 0.5833..., 0.5/1.2 = 0.4167...
-      const sum = putRes.body.data.individual_share + putRes.body.data.team_share;
-      expect(Math.abs(sum - 1)).toBeLessThan(0.01);
+
+      expect(putRes.body.data.individual_share).toBe(0.7);
+      expect(putRes.body.data.team_share).toBe(0.5);
+
+      const row = db.prepare('SELECT settings_json FROM owner_settings WHERE id = 1').get();
+      const parsed = JSON.parse(row.settings_json || '{}');
+      expect(parsed.individual_share).toBe(0.7);
+      expect(parsed.team_share).toBe(0.5);
     });
   });
   
@@ -374,6 +395,15 @@ describe('OWNER SETTINGS CONTRACT', () => {
       expect(getRes.status).toBe(200);
       expect(getRes.body.data.season_start_mmdd).toBe('05-01');
       expect(getRes.body.data.season_end_mmdd).toBe('10-15');
+      expect(getRes.body.data.seasonStart).toBe('2026-05-01');
+      expect(getRes.body.data.seasonEnd).toBe('2026-10-15');
+
+      const row = db.prepare('SELECT settings_json FROM owner_settings WHERE id = 1').get();
+      const parsed = JSON.parse(row.settings_json || '{}');
+      expect(parsed.season_start_mmdd).toBe('05-01');
+      expect(parsed.season_end_mmdd).toBe('10-15');
+      expect(parsed.seasonStart).toBe('2026-05-01');
+      expect(parsed.seasonEnd).toBe('2026-10-15');
     });
 
     it('returns 400 when MM-DD format is invalid', async () => {

@@ -16,7 +16,7 @@ export default async function globalSetup() {
   console.log('[GLOBAL SETUP] Initializing test database...');
   console.log('[GLOBAL SETUP] DB_FILE =', process.env.DB_FILE);
   
-  resetTestDb();
+  const seededDbPath = resetTestDb();
   const db = getTestDb();
   const seedData = await seedBasicData(db);
   db.close();
@@ -24,6 +24,8 @@ export default async function globalSetup() {
   // Write seedData to temp file for tests to read
   const seedDataPath = path.join(__dirname, '..', '_testdata', 'seedData.json');
   fs.writeFileSync(seedDataPath, JSON.stringify(seedData, null, 2));
+  const seedDbPathFile = path.join(__dirname, '..', '_testdata', 'seedDbPath.txt');
+  fs.writeFileSync(seedDbPathFile, String(seededDbPath || process.env.DB_FILE || ''));
   
   console.log('[GLOBAL SETUP] Test database ready');
 }

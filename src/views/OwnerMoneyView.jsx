@@ -22,8 +22,8 @@ import {
 } from "../utils/ownerMoneyKpi.js";
 
 const OWNER_MONEY_TOP_LABEL_OVERRIDES = {
-  "owner-money-funds-weekly": "Отложить сегодня в Weekly фонд",
-  "owner-money-funds-season": "Отложить сегодня в Season фонд",
+  "owner-money-funds-weekly": "Weekly сегодня по закрытию смены",
+  "owner-money-funds-season": "Season сегодня по закрытию смены",
   "owner-money-obligations-tomorrow-cash": "Обязательства на завтра наличными",
   "owner-money-obligations-tomorrow-card": "Обязательства на завтра картой",
   "owner-money-obligations-tomorrow-total": "Обязательства на завтра итого",
@@ -218,8 +218,8 @@ export default function OwnerMoneyView() {
   );
   const topSeasonWithhold = Number(
     ownerDecisionMetrics?.withhold_season_today ??
-    money.totals?.season_fund_total ??
-    fundsWithholdSeasonToday
+    money.totals?.funds_withhold_season_today ??
+    money.totals?.season_fund_total
   );
   const topTomorrowObligationsCash = Number(
     ownerDecisionMetrics?.obligations_tomorrow_cash ??

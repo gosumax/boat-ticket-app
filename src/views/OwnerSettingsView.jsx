@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import apiClient from "../utils/apiClient.js";
-import { getSeasonConfigUiState, validateSeasonBoundaryPair } from "../utils/seasonBoundaries.js";
+import { getSeasonConfigUiState, toCanonicalSeasonDate, validateSeasonBoundaryPair } from "../utils/seasonBoundaries.js";
 
 /**
  * OwnerSettingsView.jsx
@@ -40,6 +40,7 @@ export default function OwnerSettingsView({ onSettingsSaved }) {
   const [teamIncludeDispatchers, setTeamIncludeDispatchers] = useState(true);
   const [toWeeklyFund, setToWeeklyFund] = useState(1);
   const [toSeasonFund, setToSeasonFund] = useState(2);
+  const [seasonPayoutScheme, setSeasonPayoutScheme] = useState("all");
 
   // Новые поля финальной мотивации
   const [individualShare, setIndividualShare] = useState(60);  // проценты в UI
@@ -127,6 +128,8 @@ export default function OwnerSettingsView({ onSettingsSaved }) {
       if (typeof s.teamIncludeDispatchers === "boolean") setTeamIncludeDispatchers(s.teamIncludeDispatchers);
       if (typeof s.toWeeklyFundLegacy === "number") setToWeeklyFund(s.toWeeklyFundLegacy);
       if (typeof s.toSeasonFundLegacy === "number") setToSeasonFund(s.toSeasonFundLegacy);
+      if (typeof s.season_payout_scheme === "string") setSeasonPayoutScheme(s.season_payout_scheme);
+      else if (typeof s.seasonPayoutScheme === "string") setSeasonPayoutScheme(s.seasonPayoutScheme);
 
       // Новые поля финальной мотивации
       if (typeof s.individual_share === "number") setIndividualShare(Math.round(s.individual_share * 100));
@@ -188,8 +191,8 @@ export default function OwnerSettingsView({ onSettingsSaved }) {
       return;
     }
     
-    // Validation: individual_share + team_share = 100% (only for adaptive)
-    if (motivationType === 'adaptive' && individualShare + teamShare !== 100) {
+    // Shares stay independent owner settings; do not block save on their sum.
+    if (motivationType === 'adaptive' && !Number.isFinite(individualShare + teamShare)) {
       setErr("Сумма индивидуального и командного распределения должна быть 100%");
       return;
     }
@@ -210,12 +213,18 @@ export default function OwnerSettingsView({ onSettingsSaved }) {
     
     setBusy(true);
     try {
+      const canonicalSeasonStart = seasonBoundaryValidation.start
+        ? toCanonicalSeasonDate(seasonBoundaryValidation.start)
+        : seasonStart;
+      const canonicalSeasonEnd = seasonBoundaryValidation.end
+        ? toCanonicalSeasonDate(seasonBoundaryValidation.end)
+        : seasonEnd;
       const payload = {
         businessName,
         timezone,
         currency,
-        seasonStart,
-        seasonEnd,
+        seasonStart: canonicalSeasonStart,
+        seasonEnd: canonicalSeasonEnd,
         badDay,
         normalDay,
         goodDay,
@@ -226,6 +235,7 @@ export default function OwnerSettingsView({ onSettingsSaved }) {
         teamIncludeDispatchers,
         toWeeklyFund,
         toSeasonFund,
+        season_payout_scheme: seasonPayoutScheme,
         // Новые поля финальной мотивации
         individual_share: individualShare / 100,
         team_share: teamShare / 100,
@@ -262,7 +272,14 @@ export default function OwnerSettingsView({ onSettingsSaved }) {
             }
           : {}),
       };
-      await apiClient.request(`/owner/settings/full`, { method: "PUT", body: payload });
+      const json = await apiClient.request(`/owner/settings/full`, { method: "PUT", body: payload });
+      const saved = json?.data || null;
+      if (typeof saved?.seasonStart === "string") setSeasonStart(saved.seasonStart);
+      if (typeof saved?.seasonEnd === "string") setSeasonEnd(saved.seasonEnd);
+      if (typeof saved?.season_start_mmdd === "string") setSeasonStartMmdd(saved.season_start_mmdd);
+      if (typeof saved?.season_end_mmdd === "string") setSeasonEndMmdd(saved.season_end_mmdd);
+      if (typeof saved?.season_payout_scheme === "string") setSeasonPayoutScheme(saved.season_payout_scheme);
+      else if (typeof saved?.seasonPayoutScheme === "string") setSeasonPayoutScheme(saved.seasonPayoutScheme);
       setSaveOk(true);
       if (onSettingsSaved) onSettingsSaved();
     } catch (e) {
@@ -326,21 +343,18 @@ export default function OwnerSettingsView({ onSettingsSaved }) {
   const showTeamBlocks = isTeam || isAdaptive;
   const showAdaptiveBlocks = isAdaptive;
 
-  // Auto-fix shares: when one changes, auto-set the other to sum to 100
+  // Keep shares independent: changing one owner setting must not rewrite the other.
   const handleIndividualShareChange = (val) => {
     const clamped = Math.max(0, Math.min(100, val));
     setIndividualShare(clamped);
-    setTeamShare(100 - clamped);
   };
   const handleTeamShareChange = (val) => {
     const clamped = Math.max(0, Math.min(100, val));
     setTeamShare(clamped);
-    setIndividualShare(100 - clamped);
   };
 
   // Validation: can save?
   const motivationPercentValid = typeof motivationPercent === 'number' && !isNaN(motivationPercent) && motivationPercent >= 0 && motivationPercent <= 100;
-  const sharesValid = !isAdaptive || (individualShare + teamShare === 100);
   const adaptivePointCoefficientsValid = [
     coefSpeed, coefWalk, coefFishing,
     kBananaHedgehog, kBananaCenter, kBananaSanatorium, kBananaStationary,
@@ -352,7 +366,7 @@ export default function OwnerSettingsView({ onSettingsSaved }) {
     kDispatchers >= 1 &&
     kDispatchers <= 1.5;
   const coefficientsValid = !isAdaptive || (adaptivePointCoefficientsValid && dispatcherWeightValid);
-  const canSave = motivationPercentValid && sharesValid && coefficientsValid;
+  const canSave = motivationPercentValid && coefficientsValid;
 
   return (
     <div className="p-4 pb-24 space-y-4">
@@ -499,7 +513,7 @@ export default function OwnerSettingsView({ onSettingsSaved }) {
       {showAdaptiveBlocks && (
         <Section title="Распределение фонда (adaptive)">
           <div className="text-xs text-neutral-500 mb-2">
-            Сумма индивидуальной и командной доли всегда равна 100%
+            Индивидуальная и командная доли настраиваются отдельно и сохраняются как отдельные owner settings.
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Card>
@@ -511,6 +525,25 @@ export default function OwnerSettingsView({ onSettingsSaved }) {
               <NumberRow label="" value={teamShare} onChange={handleTeamShareChange} suffix="%" min={0} max={100} />
             </Card>
           </div>
+        </Section>
+      )}
+
+      {showAdaptiveBlocks && (
+        <Section title="Сезонный фонд (adaptive)">
+          <Card>
+            <div className="text-sm text-neutral-400 mb-3">Схема распределения сезонного фонда</div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <Chip active={seasonPayoutScheme === "all"} onClick={() => setSeasonPayoutScheme("all")} label="Все" />
+              <Chip active={seasonPayoutScheme === "top3"} onClick={() => setSeasonPayoutScheme("top3")} label="Топ-3" />
+              <Chip active={seasonPayoutScheme === "top5"} onClick={() => setSeasonPayoutScheme("top5")} label="Топ-5" />
+            </div>
+            <div className="mt-3 text-xs text-neutral-500">
+              Условия допуска применяются автоматически для всех схем: минимум 75 рабочих дней за сезон и 20 рабочих дней в сентябре.
+            </div>
+            <div className="mt-2 text-xs text-neutral-500">
+              "Все" — выплаты всем выполнившим условия, "Топ-3" и "Топ-5" — только лучшим по очкам среди выполнивших условия.
+            </div>
+          </Card>
         </Section>
       )}
 

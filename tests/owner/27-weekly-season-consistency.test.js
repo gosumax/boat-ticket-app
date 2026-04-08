@@ -200,13 +200,13 @@ describe('WEEKLY/SEASON CONSISTENCY', () => {
       expect(seasonRes.body.meta.consistency_diagnostics.warnings).toHaveLength(0);
     });
 
-    it('applies custom season_start_mmdd/season_end_mmdd range for pool and points', async () => {
+    it('applies owner_settings seasonStart/seasonEnd range for pool and points', async () => {
       const sellerId = seedData?.users?.sellerA?.id || db.prepare(`SELECT id FROM users WHERE role = 'seller' AND is_active = 1 LIMIT 1`).get()?.id;
       db.prepare(`UPDATE owner_settings SET settings_json = ? WHERE id = 1`).run(JSON.stringify({
         motivationType: 'team',
         motivation_percent: 0.15,
-        season_start_mmdd: '05-10',
-        season_end_mmdd: '05-12'
+        seasonStart: '2032-05-10',
+        seasonEnd: '2032-05-12'
       }));
 
       const inRangeDays = ['2032-05-10', '2032-05-12'];

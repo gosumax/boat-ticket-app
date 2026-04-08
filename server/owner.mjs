@@ -74,15 +74,38 @@ function getFundLedgerByDay(type, dateFrom, dateTo) {
 }
 
 function getSalesDaysInRange(dateFrom, dateTo) {
-  return db.prepare(`
-    SELECT DISTINCT DATE(business_day) AS business_day
-    FROM money_ledger
-    WHERE status = 'POSTED'
-      AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-      AND type IN (${SALES_AND_REFUND_TYPES_SQL})
-      AND DATE(business_day) BETWEEN ? AND ?
-    ORDER BY DATE(business_day)
-  `).all(dateFrom, dateTo).map((row) => row.business_day);
+  const days = new Set(
+    db.prepare(`
+      SELECT DISTINCT DATE(business_day) AS business_day
+      FROM money_ledger
+      WHERE status = 'POSTED'
+        AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+        AND type IN (${SALES_AND_REFUND_TYPES_SQL})
+        AND DATE(business_day) BETWEEN ? AND ?
+      ORDER BY DATE(business_day)
+    `).all(dateFrom, dateTo).map((row) => row.business_day).filter(Boolean)
+  );
+
+  const canonicalExists = db.prepare(`
+    SELECT 1
+    FROM sqlite_master
+    WHERE type = 'table' AND name = 'sales_transactions_canonical'
+    LIMIT 1
+  `).get();
+  if (canonicalExists) {
+    const canonicalDays = db.prepare(`
+      SELECT DISTINCT DATE(business_day) AS business_day
+      FROM sales_transactions_canonical
+      WHERE status = 'VALID'
+        AND DATE(business_day) BETWEEN ? AND ?
+      ORDER BY DATE(business_day)
+    `).all(dateFrom, dateTo);
+    for (const row of (canonicalDays || [])) {
+      if (row?.business_day) days.add(row.business_day);
+    }
+  }
+
+  return [...days].sort();
 }
 
 function getFundWithholdDaysInRange(dateFrom, dateTo) {
@@ -183,6 +206,116 @@ function getWithholdRecalcDiagnostics(dayRows, withholdField) {
   };
 }
 
+function buildCanonicalSeasonSnapshot(dateFrom, dateTo, eligibilityWindows = {}) {
+  const salesDays = getSalesDaysInRange(dateFrom, dateTo);
+  const fundDays = getFundWithholdDaysInRange(dateFrom, dateTo);
+  const days = [...new Set([...(salesDays || []), ...(fundDays || [])])].sort();
+  const sellersMap = new Map();
+  const dailyRows = [];
+  const errors = [];
+  let seasonFromRevenueTotal = 0;
+  let roundingToSeasonTotal = 0;
+
+  for (const day of days) {
+    try {
+      const fundDayResult = calcMotivationDay(db, day);
+      if (fundDayResult?.error) throw new Error(fundDayResult.error);
+
+      const sellerOnlyDayResult = calcMotivationDay(db, day, { scope: 'seller_only' });
+      if (sellerOnlyDayResult?.error) throw new Error(sellerOnlyDayResult.error);
+
+      const withhold = fundDayResult?.data?.withhold || {};
+      const seasonFromRevenue = roundToKopecks(
+        Number(withhold.season_amount_base ?? withhold.season_from_revenue ?? withhold.season_amount ?? 0)
+      );
+      const roundingToSeason = roundToKopecks(
+        Number(withhold.rounding_to_season_amount_total ?? withhold.season_amount_from_rounding ?? 0)
+      );
+
+      seasonFromRevenueTotal = roundToKopecks(seasonFromRevenueTotal + seasonFromRevenue);
+      roundingToSeasonTotal = roundToKopecks(roundingToSeasonTotal + roundingToSeason);
+
+      dailyRows.push({
+        business_day: day,
+        season_from_revenue: seasonFromRevenue,
+        rounding_to_season_amount_total: roundingToSeason,
+        lock: sellerOnlyDayResult?.data?.lock ?? fundDayResult?.data?.lock ?? null,
+      });
+
+      const rankingData = sellerOnlyDayResult?.data || {};
+      const sellerDayMap = new Map();
+      const pointsRows = Array.isArray(rankingData?.points_by_user) ? rankingData.points_by_user : [];
+
+      for (const entry of pointsRows) {
+        if (String(entry?.role || 'seller') !== 'seller') continue;
+        const sellerId = Number(entry?.user_id);
+        if (!Number.isFinite(sellerId) || sellerId <= 0) continue;
+
+        sellerDayMap.set(sellerId, {
+          user_id: sellerId,
+          name: entry?.name || `User ${sellerId}`,
+          zone: entry?.zone ?? null,
+          revenue_day: roundToKopecks(Number(entry?.revenue_total ?? 0)),
+          points_day_total: roundToKopecks(Number(entry?.points_total ?? 0)),
+        });
+      }
+
+      for (const sellerDay of sellerDayMap.values()) {
+        const revenueDay = roundToKopecks(Number(sellerDay?.revenue_day ?? 0));
+        const pointsDayTotal = roundToKopecks(Number(sellerDay?.points_day_total ?? 0));
+        if (revenueDay <= 0 && pointsDayTotal <= 0) continue;
+
+        let seller = sellersMap.get(sellerDay.user_id);
+        if (!seller) {
+          seller = {
+            user_id: sellerDay.user_id,
+            name: sellerDay.name || `User ${sellerDay.user_id}`,
+            zone: sellerDay.zone ?? null,
+            revenue_total: 0,
+            points_total: 0,
+            worked_days_season: 0,
+            worked_days_sep: 0,
+            worked_days_end_sep: 0,
+          };
+          sellersMap.set(sellerDay.user_id, seller);
+        }
+
+        seller.name = sellerDay.name || seller.name;
+        seller.zone = sellerDay.zone ?? seller.zone ?? null;
+        seller.revenue_total = roundToKopecks(seller.revenue_total + revenueDay);
+        seller.points_total = roundToKopecks(seller.points_total + pointsDayTotal);
+        seller.worked_days_season += 1;
+
+        if (eligibilityWindows.sepFrom && eligibilityWindows.sepTo && day >= eligibilityWindows.sepFrom && day <= eligibilityWindows.sepTo) {
+          seller.worked_days_sep += 1;
+        }
+        if (
+          eligibilityWindows.endSepFrom &&
+          eligibilityWindows.endSepTo &&
+          day >= eligibilityWindows.endSepFrom &&
+          day <= eligibilityWindows.endSepTo
+        ) {
+          seller.worked_days_end_sep += 1;
+        }
+      }
+    } catch (e) {
+      errors.push({
+        business_day: day,
+        error: e?.message || 'calcMotivationDay failed',
+      });
+    }
+  }
+
+  return {
+    days,
+    dailyRows,
+    errors,
+    sellers: [...sellersMap.values()],
+    seasonFromRevenueTotal: roundToKopecks(seasonFromRevenueTotal),
+    roundingToSeasonTotal: roundToKopecks(roundingToSeasonTotal),
+  };
+}
+
 function formatYmdLocal(date) {
   const d = new Date(date);
   const y = d.getFullYear();
@@ -251,20 +384,237 @@ function getIsoWeekRangeLocal(weekIdRaw) {
   };
 }
 
+function calcCurrentWeeklyTop3Split(poolTotal, distribution = { first: 0.5, second: 0.3, third: 0.2 }) {
+  const total = Math.max(0, Math.round(Number(poolTotal || 0)));
+  const first = Math.max(0, Math.round(total * Number(distribution.first || 0)));
+  const second = Math.max(0, Math.round(total * Number(distribution.second || 0)));
+  const third = Math.max(0, total - first - second);
+  return { first, second, third };
+}
+
+const SEASON_PAYOUT_SCHEMES = new Set(['all', 'top3', 'top5']);
+
+function normalizeSeasonPayoutScheme(raw) {
+  const scheme = String(raw || '').trim().toLowerCase();
+  return SEASON_PAYOUT_SCHEMES.has(scheme) ? scheme : 'all';
+}
+
+function getSeasonPayoutModeLabel(scheme) {
+  if (scheme === 'top3') return 'eligible_top3_weighted_by_rank';
+  if (scheme === 'top5') return 'eligible_top5_weighted_by_rank';
+  return 'eligible_all_equal_split';
+}
+
+function selectSeasonPayoutRecipients(sellers, scheme) {
+  const rankedSellers = (Array.isArray(sellers) ? sellers : []).filter((seller) => Number(seller?.user_id || 0) > 0);
+  if (scheme === 'top3') return rankedSellers.slice(0, 3);
+  if (scheme === 'top5') return rankedSellers.slice(0, 5);
+  return rankedSellers;
+}
+
+function getSeasonPayoutWeights(scheme, recipientCount) {
+  const count = Math.max(0, Number(recipientCount || 0));
+  if (count <= 0) return [];
+
+  if (scheme === 'all') {
+    return Array.from({ length: count }, () => 1 / count);
+  }
+
+  if (scheme === 'top3') {
+    if (count === 1) return [1];
+    if (count === 2) return [0.6, 0.4];
+    return [0.5, 0.3, 0.2];
+  }
+
+  if (count === 1) return [1];
+  if (count === 2) return [0.6, 0.4];
+  if (count === 3) return [0.5, 0.3, 0.2];
+  if (count === 4) return [0.4, 0.3, 0.2, 0.1];
+  return [0.35, 0.25, 0.18, 0.12, 0.1];
+}
+
+function allocateSeasonPayouts(totalAmount, recipients, scheme) {
+  const payoutMap = new Map();
+  const shareMap = new Map();
+  const preparedRecipients = (Array.isArray(recipients) ? recipients : [])
+    .map((recipient) => Number(recipient?.user_id || 0))
+    .filter((userId) => userId > 0);
+  const payoutFundTotal = roundToKopecks(Math.max(0, Number(totalAmount || 0)));
+  const payoutWeights = getSeasonPayoutWeights(scheme, preparedRecipients.length);
+
+  if (preparedRecipients.length === 0 || payoutFundTotal <= 0 || payoutWeights.length !== preparedRecipients.length) {
+    return { payoutMap, shareMap, allocatedTotal: 0 };
+  }
+
+  const totalKopecks = Math.max(0, Math.round(payoutFundTotal * 100));
+  const payoutKopecks = payoutWeights.map((weight) => Math.max(0, Math.floor(totalKopecks * Number(weight || 0))));
+  let undistributedKopecks = Math.max(0, totalKopecks - payoutKopecks.reduce((sum, amount) => sum + amount, 0));
+
+  for (let index = 0; undistributedKopecks > 0; index = (index + 1) % payoutKopecks.length) {
+    payoutKopecks[index] += 1;
+    undistributedKopecks -= 1;
+  }
+
+  let allocatedTotal = 0;
+  preparedRecipients.forEach((userId, index) => {
+    const payoutAmount = roundToKopecks(payoutKopecks[index] / 100);
+    shareMap.set(userId, Number(payoutWeights[index] || 0));
+    payoutMap.set(userId, payoutAmount);
+    allocatedTotal = roundToKopecks(allocatedTotal + payoutAmount);
+  });
+
+  return {
+    payoutMap,
+    shareMap,
+    allocatedTotal: roundToKopecks(allocatedTotal),
+  };
+}
+
+function getWeeklyCanonicalPresaleRows(dateFrom, dateTo) {
+  const seatsCol = pickFirstExisting('presales', ['number_of_seats', 'qty', 'seats'], 'number_of_seats');
+  const boatTypeCol = pickFirstExisting('boats', ['boat_type', 'type', 'category'], 'type');
+  const tripDayExpr = getTripDayExpr();
+  const generatedTripDayExpr = hasColumn('generated_slots', 'trip_date') ? 'gs.trip_date' : 'NULL';
+  const boatSlotTripDayExpr = hasColumn('boat_slots', 'trip_date') ? 'bs.trip_date' : 'NULL';
+  const resolvedTripDayExpr = `COALESCE(${generatedTripDayExpr}, ${boatSlotTripDayExpr}, ${tripDayExpr})`;
+  const paidAmountExpr = `CAST(MAX(
+    COALESCE(p.prepayment_amount, 0),
+    COALESCE(p.payment_cash_amount, 0) + COALESCE(p.payment_card_amount, 0),
+    0
+  ) AS INTEGER)`;
+
+  return db.prepare(`
+    WITH scoped_presales AS (
+      SELECT
+        p.id AS presale_id,
+        p.seller_id AS seller_id,
+        COALESCE(u.username, 'Seller ' || p.seller_id) AS seller_name,
+        u.zone AS seller_zone,
+        b.${boatTypeCol} AS boat_type,
+        p.zone_at_sale AS zone_at_sale,
+        ${resolvedTripDayExpr} AS trip_date,
+        CAST(COALESCE(p.${seatsCol}, 0) AS INTEGER) AS presale_tickets,
+        CAST(COALESCE(p.total_price, 0) AS INTEGER) AS presale_revenue,
+        ${paidAmountExpr} AS paid_amount_raw
+      FROM presales p
+      LEFT JOIN users u ON u.id = p.seller_id
+      LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+      LEFT JOIN generated_slots gs
+        ON p.slot_uid LIKE 'generated:%'
+       AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER)
+      JOIN boats b ON b.id = COALESCE(gs.boat_id, bs.boat_id)
+      WHERE p.status = 'ACTIVE'
+        AND p.seller_id IS NOT NULL
+        AND p.seller_id > 0
+        AND u.role = 'seller'
+        AND COALESCE(u.is_active, 1) = 1
+        AND ${resolvedTripDayExpr} BETWEEN ? AND ?
+    ),
+    ticket_rows AS (
+      SELECT
+        sp.presale_id AS presale_id,
+        CAST(COALESCE(t.price, 0) AS INTEGER) AS revenue
+      FROM scoped_presales sp
+      JOIN tickets t ON t.presale_id = sp.presale_id
+      WHERE t.status = 'ACTIVE'
+    ),
+    presale_fallback_rows AS (
+      SELECT
+        sp.presale_id AS presale_id,
+        sp.presale_revenue AS revenue
+      FROM scoped_presales sp
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM tickets t
+        WHERE t.presale_id = sp.presale_id
+      )
+    ),
+    source_rows AS (
+      SELECT * FROM ticket_rows
+      UNION ALL
+      SELECT * FROM presale_fallback_rows
+    ),
+    presale_metrics AS (
+      SELECT
+        sp.presale_id AS presale_id,
+        sp.seller_id AS seller_id,
+        sp.seller_name AS seller_name,
+        sp.seller_zone AS seller_zone,
+        sp.boat_type AS boat_type,
+        sp.zone_at_sale AS zone_at_sale,
+        COALESCE(SUM(sr.revenue), 0) AS revenue_forecast,
+        MIN(sp.paid_amount_raw) AS paid_amount_raw
+      FROM scoped_presales sp
+      LEFT JOIN source_rows sr ON sr.presale_id = sp.presale_id
+      GROUP BY
+        sp.presale_id,
+        sp.seller_id,
+        sp.seller_name,
+        sp.seller_zone,
+        sp.boat_type,
+        sp.zone_at_sale
+    )
+    SELECT
+      seller_id,
+      seller_name,
+      seller_zone,
+      boat_type,
+      zone_at_sale,
+      COALESCE(SUM(revenue_forecast), 0) AS revenue_forecast,
+      COALESCE(SUM(CASE
+        WHEN paid_amount_raw < 0 THEN 0
+        WHEN paid_amount_raw > revenue_forecast THEN revenue_forecast
+        ELSE paid_amount_raw
+      END), 0) AS revenue_paid,
+      COALESCE(SUM(CASE
+        WHEN revenue_forecast - CASE
+          WHEN paid_amount_raw < 0 THEN 0
+          WHEN paid_amount_raw > revenue_forecast THEN revenue_forecast
+          ELSE paid_amount_raw
+        END > 0
+        THEN revenue_forecast - CASE
+          WHEN paid_amount_raw < 0 THEN 0
+          WHEN paid_amount_raw > revenue_forecast THEN revenue_forecast
+          ELSE paid_amount_raw
+        END
+        ELSE 0
+      END), 0) AS revenue_pending
+    FROM presale_metrics
+    GROUP BY seller_id, seller_name, seller_zone, boat_type, zone_at_sale
+    HAVING revenue_forecast > 0
+    ORDER BY seller_id ASC, boat_type ASC, zone_at_sale ASC
+  `).all(dateFrom, dateTo);
+}
+
 function resolveSeasonDateRange(seasonId, settings) {
   const defaultStart = '01-01';
   const defaultEnd = '12-31';
-  const rawStart = String(settings?.season_start_mmdd ?? '').trim();
-  const rawEnd = String(settings?.season_end_mmdd ?? '').trim();
-  const hasValidCustomRange =
-    SEASON_MMDD_REGEX.test(rawStart) &&
-    SEASON_MMDD_REGEX.test(rawEnd) &&
-    rawStart <= rawEnd;
+  const ymdRegex = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+  const rawSeasonStart = String(settings?.seasonStart ?? '').trim();
+  const rawSeasonEnd = String(settings?.seasonEnd ?? '').trim();
+  const hasValidYmdRange =
+    ymdRegex.test(rawSeasonStart) &&
+    ymdRegex.test(rawSeasonEnd) &&
+    rawSeasonStart <= rawSeasonEnd;
 
-  const startMmdd = hasValidCustomRange ? rawStart : defaultStart;
-  const endMmdd = hasValidCustomRange ? rawEnd : defaultEnd;
+  const rawStartMmdd = String(settings?.season_start_mmdd ?? '').trim();
+  const rawEndMmdd = String(settings?.season_end_mmdd ?? '').trim();
+  const hasValidMmddRange =
+    SEASON_MMDD_REGEX.test(rawStartMmdd) &&
+    SEASON_MMDD_REGEX.test(rawEndMmdd) &&
+    rawStartMmdd <= rawEndMmdd;
+
+  const startMmdd = hasValidYmdRange
+    ? rawSeasonStart.slice(5)
+    : (hasValidMmddRange ? rawStartMmdd : defaultStart);
+  const endMmdd = hasValidYmdRange
+    ? rawSeasonEnd.slice(5)
+    : (hasValidMmddRange ? rawEndMmdd : defaultEnd);
   const seasonFrom = `${seasonId}-${startMmdd}`;
   const seasonTo = `${seasonId}-${endMmdd}`;
+  const source = hasValidYmdRange
+    ? 'owner_settings.seasonStart/seasonEnd'
+    : (hasValidMmddRange ? 'owner_settings.season_start_mmdd/season_end_mmdd' : 'calendar_year_default');
 
   return {
     seasonFrom,
@@ -272,6 +622,7 @@ function resolveSeasonDateRange(seasonId, settings) {
     startMmdd,
     endMmdd,
     isDefaultRange: startMmdd === defaultStart && endMmdd === defaultEnd,
+    source,
   };
 }
 
@@ -561,7 +912,8 @@ router.get('/money/summary', (req, res) => {
     const explicitFrom = req.query.from;
     const explicitTo = req.query.to;
     const preset = String(req.query.preset || 'today');
-    let fromExpr, toExpr;
+    let fromExpr = null;
+    let toExpr = null;
     if (explicitFrom && explicitTo) {
       fromExpr = `'${String(explicitFrom).replace(/'/g, "''")}'`;
       toExpr = `'${String(explicitTo).replace(/'/g, "''")}'`;
@@ -1287,7 +1639,10 @@ router.get('/money/summary', (req, res) => {
           received_card_today: Number(shiftCloseBreakdown?.totals?.card_received ?? canonicalCollectedCard),
           received_total_today: Number(shiftCloseBreakdown?.totals?.total_received ?? canonicalCollectedTotal),
           withhold_weekly_today: Number(shiftCloseBreakdown?.totals?.weekly_fund ?? fundsWithholdWeeklyToday),
-          withhold_season_today: Number(shiftCloseBreakdown?.totals?.season_fund_total ?? fundsWithholdSeasonToday),
+          withhold_season_today: Number(
+            shiftCloseBreakdown?.totals?.season_from_revenue ??
+            fundsWithholdSeasonToday
+          ),
           obligations_tomorrow_cash: Number(tomorrowObligations.cash || 0),
           obligations_tomorrow_card: Number(tomorrowObligations.card || 0),
           obligations_tomorrow_total: Number(tomorrowObligations.revenue || 0),
@@ -1369,7 +1724,10 @@ router.get('/money/summary', (req, res) => {
           funds_withhold_cash_today: fundsWithholdCashToday,
           funds_withhold_card_today: fundsWithholdCardToday,
           weekly_fund: Number(ownerDecisionMetrics?.withhold_weekly_today ?? fundsWithholdWeeklyToday),
-          season_fund_total: Number(ownerDecisionMetrics?.withhold_season_today ?? fundsWithholdSeasonToday),
+          season_fund_total: Number(
+            shiftCloseBreakdown?.totals?.season_fund_total ??
+            fundsWithholdSeasonToday
+          ),
           obligations_tomorrow_cash: Number(ownerDecisionMetrics?.obligations_tomorrow_cash ?? 0),
           obligations_tomorrow_card: Number(ownerDecisionMetrics?.obligations_tomorrow_card ?? 0),
           obligations_tomorrow_total: Number(ownerDecisionMetrics?.obligations_tomorrow_total ?? 0),
@@ -1951,10 +2309,10 @@ router.get('/money/compare-periods', (req, res) => {
 // =====================
 router.get('/money/compare-periods-daily', (req, res) => {
   try {
-    const fromA = String(req.query.fromA || '').replace(/[^0-9-]/g, '');
-    const toA = String(req.query.toA || '').replace(/[^0-9-]/g, '');
-    const fromB = String(req.query.fromB || '').replace(/[^0-9-]/g, '');
-    const toB = String(req.query.toB || '').replace(/[^0-9-]/g, '');
+    const fromA = sanitizeCompareDateParam(req.query.fromA);
+    const toA = sanitizeCompareDateParam(req.query.toA);
+    const fromB = sanitizeCompareDateParam(req.query.fromB);
+    const toB = sanitizeCompareDateParam(req.query.toB);
     const mode = req.query.mode === 'cumulative' ? 'cumulative' : 'daily';
 
     if (!fromA || !toA || !fromB || !toB) {
@@ -2050,35 +2408,86 @@ router.get('/money/compare-periods-daily', (req, res) => {
   }
 });
 
+function sanitizeCompareDateParam(value) {
+  return String(value || '').replace(/[^0-9-]/g, '');
+}
+
+function parseOptionalCompareId(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getCompareDateKeys(from, to) {
+  const parseDate = (s) => new Date(`${s}T00:00:00`);
+  const dayCount = Math.ceil((parseDate(to) - parseDate(from)) / 86400000) + 1;
+  const dateKeys = [];
+
+  for (let i = 0; i < dayCount; i++) {
+    dateKeys.push(formatYmdLocal(new Date(parseDate(from).getTime() + i * 86400000)));
+  }
+
+  return { dayCount, dateKeys };
+}
+
+function buildSamePeriodComparePoints(dateKeys, seriesA, seriesB, mode) {
+  const points = [];
+  let cumulativeA = 0;
+  let cumulativeB = 0;
+
+  for (let i = 0; i < dateKeys.length; i++) {
+    const date = dateKeys[i];
+    const revenueA = Number(seriesA?.get(date)?.revenue_net || 0);
+    const revenueB = Number(seriesB?.get(date)?.revenue_net || 0);
+
+    if (mode === 'cumulative') {
+      cumulativeA += revenueA;
+      cumulativeB += revenueB;
+      points.push({ day: i + 1, date, A: cumulativeA, B: cumulativeB });
+      continue;
+    }
+
+    points.push({ day: i + 1, date, A: revenueA, B: revenueB });
+  }
+
+  return points;
+}
+
 // =====================
 // GET /api/owner/money/compare-boat-daily?boatId=ID&fromA..&toA..&fromB..&toB..&mode=daily|cumulative
 // Daily revenue for a specific boat (by PAYMENT DATE)
 // =====================
 router.get('/money/compare-boat-daily', (req, res) => {
   try {
-    const boatId = parseInt(req.query.boatId, 10);
-    if (!boatId) {
+    const boatId = parseOptionalCompareId(req.query.boatId);
+    const boatIdA = parseOptionalCompareId(req.query.boatIdA ?? req.query.boatId);
+    const boatIdB = parseOptionalCompareId(req.query.boatIdB);
+    const from = sanitizeCompareDateParam(req.query.from || req.query.fromA);
+    const to = sanitizeCompareDateParam(req.query.to || req.query.toA);
+    const samePeriodMode = Boolean((req.query.from || req.query.to || req.query.boatIdA !== undefined || req.query.boatIdB !== undefined) && from && to);
+    if (!samePeriodMode && !boatId) {
       return res.status(400).json({ ok: false, error: 'Требуется boatId' });
     }
 
-    const fromA = String(req.query.fromA || '').replace(/[^0-9-]/g, '');
-    const toA = String(req.query.toA || '').replace(/[^0-9-]/g, '');
-    const fromB = String(req.query.fromB || '').replace(/[^0-9-]/g, '');
-    const toB = String(req.query.toB || '').replace(/[^0-9-]/g, '');
+    const fromA = sanitizeCompareDateParam(req.query.fromA);
+    const toA = sanitizeCompareDateParam(req.query.toA);
+    const fromB = sanitizeCompareDateParam(req.query.fromB);
+    const toB = sanitizeCompareDateParam(req.query.toB);
     const mode = req.query.mode === 'cumulative' ? 'cumulative' : 'daily';
 
-    if (!fromA || !toA || !fromB || !toB) {
+    if (!samePeriodMode && (!fromA || !toA || !fromB || !toB)) {
       return res.status(400).json({ ok: false, error: 'Требуются fromA, toA, fromB, toB' });
     }
 
     const warnings = [];
+    const getBoatName = (id) => {
+      if (!id) return null;
+      const boatRow = db.prepare(`SELECT name FROM boats WHERE id = ?`).get(id);
+      return boatRow?.name || `Boat ${id}`;
+    };
 
-    // Get boat name
-    const boatRow = db.prepare(`SELECT name FROM boats WHERE id = ?`).get(boatId);
-    const boatName = boatRow?.name || `Boat ${boatId}`;
-
-    // Helper to get daily revenue for a boat
-    const getDailyRevenueForBoat = (fromExpr, toExpr) => {
+    const getDailyRevenueForBoat = (targetBoatId, fromExpr, toExpr) => {
+      if (!targetBoatId) return new Map();
       const rows = db.prepare(`
         SELECT
           DATE(ml.business_day) AS day,
@@ -2090,11 +2499,11 @@ router.get('/money/compare-boat-daily', (req, res) => {
         WHERE ml.status = 'POSTED'
           AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
           AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
-          AND bs.boat_id = ${boatId}
-          AND DATE(ml.business_day) BETWEEN '${fromExpr}' AND '${toExpr}'
+          AND bs.boat_id = ?
+          AND DATE(ml.business_day) BETWEEN ? AND ?
         GROUP BY DATE(ml.business_day)
         ORDER BY day ASC
-      `).all();
+      `).all(targetBoatId, fromExpr, toExpr);
 
       const map = new Map();
       for (const r of rows) {
@@ -2108,8 +2517,37 @@ router.get('/money/compare-boat-daily', (req, res) => {
       return map;
     };
 
-    const dailyA = getDailyRevenueForBoat(fromA, toA);
-    const dailyB = getDailyRevenueForBoat(fromB, toB);
+    if (samePeriodMode) {
+      if (!boatIdA) {
+        return res.status(400).json({ ok: false, error: 'Требуется boatIdA' });
+      }
+      if (!from || !to) {
+        return res.status(400).json({ ok: false, error: 'Требуются from, to' });
+      }
+
+      const { dayCount, dateKeys } = getCompareDateKeys(from, to);
+      const dailyA = getDailyRevenueForBoat(boatIdA, from, to);
+      const dailyB = getDailyRevenueForBoat(boatIdB, from, to);
+
+      return res.json({
+        ok: true,
+        data: {
+          comparisonType: 'entities',
+          boatIdA,
+          boatIdB,
+          entityAName: getBoatName(boatIdA),
+          entityBName: getBoatName(boatIdB),
+          period: { from, to, days: dayCount },
+          mode,
+          points: buildSamePeriodComparePoints(dateKeys, dailyA, dailyB, mode),
+        },
+        meta: { warnings },
+      });
+    }
+
+    const boatName = getBoatName(boatId);
+    const dailyA = getDailyRevenueForBoat(boatId, fromA, toA);
+    const dailyB = getDailyRevenueForBoat(boatId, fromB, toB);
 
     // Determine max days
     const parseDate = (s) => new Date(s + 'T00:00:00');
@@ -2176,29 +2614,35 @@ router.get('/money/compare-boat-daily', (req, res) => {
 // =====================
 router.get('/money/compare-seller-daily', (req, res) => {
   try {
-    const sellerId = parseInt(req.query.sellerId, 10);
-    if (!sellerId) {
+    const sellerId = parseOptionalCompareId(req.query.sellerId);
+    const sellerIdA = parseOptionalCompareId(req.query.sellerIdA ?? req.query.sellerId);
+    const sellerIdB = parseOptionalCompareId(req.query.sellerIdB);
+    const from = sanitizeCompareDateParam(req.query.from || req.query.fromA);
+    const to = sanitizeCompareDateParam(req.query.to || req.query.toA);
+    const samePeriodMode = Boolean((req.query.from || req.query.to || req.query.sellerIdA !== undefined || req.query.sellerIdB !== undefined) && from && to);
+    if (!samePeriodMode && !sellerId) {
       return res.status(400).json({ ok: false, error: 'Требуется sellerId' });
     }
 
-    const fromA = String(req.query.fromA || '').replace(/[^0-9-]/g, '');
-    const toA = String(req.query.toA || '').replace(/[^0-9-]/g, '');
-    const fromB = String(req.query.fromB || '').replace(/[^0-9-]/g, '');
-    const toB = String(req.query.toB || '').replace(/[^0-9-]/g, '');
+    const fromA = sanitizeCompareDateParam(req.query.fromA);
+    const toA = sanitizeCompareDateParam(req.query.toA);
+    const fromB = sanitizeCompareDateParam(req.query.fromB);
+    const toB = sanitizeCompareDateParam(req.query.toB);
     const mode = req.query.mode === 'cumulative' ? 'cumulative' : 'daily';
 
-    if (!fromA || !toA || !fromB || !toB) {
+    if (!samePeriodMode && (!fromA || !toA || !fromB || !toB)) {
       return res.status(400).json({ ok: false, error: 'Требуются fromA, toA, fromB, toB' });
     }
 
     const warnings = [];
+    const getSellerName = (id) => {
+      if (!id) return null;
+      const sellerRow = db.prepare(`SELECT username FROM users WHERE id = ?`).get(id);
+      return sellerRow?.username || `Seller ${id}`;
+    };
 
-    // Get seller username
-    const sellerRow = db.prepare(`SELECT username FROM users WHERE id = ?`).get(sellerId);
-    const sellerName = sellerRow?.username || `Seller ${sellerId}`;
-
-    // Helper to get daily revenue for a seller
-    const getDailyRevenueForSeller = (fromExpr, toExpr) => {
+    const getDailyRevenueForSeller = (targetSellerId, fromExpr, toExpr) => {
+      if (!targetSellerId) return new Map();
       const rows = db.prepare(`
         SELECT
           DATE(ml.business_day) AS day,
@@ -2208,11 +2652,11 @@ router.get('/money/compare-seller-daily', (req, res) => {
         WHERE ml.status = 'POSTED'
           AND ml.kind = 'SELLER_SHIFT'
           AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
-          AND ml.seller_id = ${sellerId}
-          AND DATE(ml.business_day) BETWEEN '${fromExpr}' AND '${toExpr}'
+          AND ml.seller_id = ?
+          AND DATE(ml.business_day) BETWEEN ? AND ?
         GROUP BY DATE(ml.business_day)
         ORDER BY day ASC
-      `).all();
+      `).all(targetSellerId, fromExpr, toExpr);
 
       const map = new Map();
       for (const r of rows) {
@@ -2226,8 +2670,37 @@ router.get('/money/compare-seller-daily', (req, res) => {
       return map;
     };
 
-    const dailyA = getDailyRevenueForSeller(fromA, toA);
-    const dailyB = getDailyRevenueForSeller(fromB, toB);
+    if (samePeriodMode) {
+      if (!sellerIdA) {
+        return res.status(400).json({ ok: false, error: 'Требуется sellerIdA' });
+      }
+      if (!from || !to) {
+        return res.status(400).json({ ok: false, error: 'Требуются from, to' });
+      }
+
+      const { dayCount, dateKeys } = getCompareDateKeys(from, to);
+      const dailyA = getDailyRevenueForSeller(sellerIdA, from, to);
+      const dailyB = getDailyRevenueForSeller(sellerIdB, from, to);
+
+      return res.json({
+        ok: true,
+        data: {
+          comparisonType: 'entities',
+          sellerIdA,
+          sellerIdB,
+          entityAName: getSellerName(sellerIdA),
+          entityBName: getSellerName(sellerIdB),
+          period: { from, to, days: dayCount },
+          mode,
+          points: buildSamePeriodComparePoints(dateKeys, dailyA, dailyB, mode),
+        },
+        meta: { warnings },
+      });
+    }
+
+    const sellerName = getSellerName(sellerId);
+    const dailyA = getDailyRevenueForSeller(sellerId, fromA, toA);
+    const dailyB = getDailyRevenueForSeller(sellerId, fromB, toB);
 
     // Determine max days
     const parseDate = (s) => new Date(s + 'T00:00:00');
@@ -2553,8 +3026,6 @@ router.get('/money/compare-sellers', (req, res) => {
 router.get('/motivation/day', (req, res) => {
   try {
     const day = String(req.query.day || '').trim();
-    
-    // Use the shared calculation engine
     const result = calcMotivationDay(db, day);
     
     if (result.error) {
@@ -2594,7 +3065,6 @@ router.get('/motivation/weekly', (req, res) => {
     const dateFrom = weekRange.dateFrom;
     const dateTo = weekRange.dateTo;
     
-    // Get settings for coefficients (load from owner_settings table)
     const settings = resolveOwnerSettings(db);
     const k_speed = Number(settings.k_speed ?? 1.2);
     const k_cruise = Number(settings.k_cruise ?? 3.0);
@@ -2606,23 +3076,8 @@ router.get('/motivation/weekly', (req, res) => {
     const k_banana_center = Number(settings.k_banana_center ?? 2.2);
     const k_banana_sanatorium = Number(settings.k_banana_sanatorium ?? 1.2);
     const k_banana_stationary = Number(settings.k_banana_stationary ?? 1.0);
-    
-    // ====================
-    // Calculate revenue_total_week from money_ledger (same source as day endpoint)
-    // ====================
-    const weeklyRevenueTotalRow = db.prepare(`
-      SELECT
-        COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
-        COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
-      FROM money_ledger ml
-      WHERE ml.status = 'POSTED'
-        AND ml.kind = 'SELLER_SHIFT'
-        AND DATE(ml.business_day) BETWEEN ? AND ?
-    `).get(dateFrom, dateTo);
-    
-    const revenue_total_week = Math.max(0, Number(weeklyRevenueTotalRow?.revenue_gross || 0) - Number(weeklyRevenueTotalRow?.refunds || 0));
     const weekly_percent = Number(settings.weekly_percent ?? 0.01);
-    
+
     const getZoneK = (zone) => {
       if (zone === 'hedgehog') return k_zone_hedgehog;
       if (zone === 'center') return k_zone_center;
@@ -2638,91 +3093,104 @@ router.get('/motivation/weekly', (req, res) => {
       if (zone === 'stationary') return k_banana_stationary;
       return 1.0;
     };
-    
-    // Get all active sellers
-    const sellersRows = db.prepare(`
-      SELECT id, username, zone FROM users WHERE role = 'seller' AND is_active = 1
-    `).all();
-    
-    // Get seller zones map
-    const sellerZoneMap = new Map((sellersRows || []).map(r => [Number(r.id), { name: r.username, zone: r.zone }]));
-    
-    // Get weekly revenue by seller and boat type (same logic as motivation/day)
-    const weeklyRevenue = db.prepare(`
-      SELECT
-        ml.seller_id,
-        COALESCE(b.type, gb.type) AS boat_type,
-        p.zone_at_sale,
-        COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
-        COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
-      FROM money_ledger ml
-      LEFT JOIN presales p ON p.id = ml.presale_id
-      LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
-      LEFT JOIN generated_slots gs ON (p.slot_uid LIKE 'generated:%' AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER))
-      LEFT JOIN boats b ON b.id = bs.boat_id
-      LEFT JOIN boats gb ON gb.id = gs.boat_id
-      WHERE ml.status = 'POSTED'
-        AND ml.kind = 'SELLER_SHIFT'
-        AND DATE(ml.business_day) BETWEEN ? AND ?
-        AND ml.seller_id IS NOT NULL
-        AND ml.seller_id > 0
-      GROUP BY ml.seller_id, COALESCE(b.type, gb.type), p.zone_at_sale
-    `).all(dateFrom, dateTo);
-    
-    // Build weekly points by seller
+    const normalizeZone = (zone) => {
+      const value = String(zone || '').trim().toLowerCase();
+      return ['hedgehog', 'center', 'sanatorium', 'stationary'].includes(value) ? value : null;
+    };
+    const resolvePointsZone = (boatType, zoneAtSale, sellerZone) => {
+      const saleZone = normalizeZone(zoneAtSale);
+      if (saleZone) return saleZone;
+      if (boatType === 'banana') return normalizeZone(sellerZone) || 'center';
+      return 'center';
+    };
+
+    const canonicalRows = getWeeklyCanonicalPresaleRows(dateFrom, dateTo);
+    const useCanonicalForecast = canonicalRows.length > 0;
     const weeklyPointsMap = new Map();
-    
-    // Initialize all sellers with zero
-    for (const [sellerId, info] of sellerZoneMap) {
-      weeklyPointsMap.set(sellerId, {
-        user_id: sellerId,
-        name: info.name,
-        zone: info.zone,
-        revenue_total_week: 0,
-        points_week_base: 0
-      });
-    }
-    
-    // Calculate points_base for each revenue row
-    for (const row of (weeklyRevenue || [])) {
-      const sellerId = Number(row.seller_id);
-      const boatType = row.boat_type || null;
-      const zoneAtSale = row.zone_at_sale || null;
-      const revenueGross = Number(row.revenue_gross || 0);
-      const refunds = Number(row.refunds || 0);
-      const revenueNet = Math.max(0, revenueGross - refunds);
-      
-      if (!boatType || !['speed', 'cruise', 'banana'].includes(boatType)) continue;
-      
-      let entry = weeklyPointsMap.get(sellerId);
-      if (!entry) {
-        entry = {
+    let revenue_total_week = 0;
+
+    if (useCanonicalForecast) {
+      for (const row of canonicalRows) {
+        const sellerId = Number(row.seller_id);
+        const boatType = String(row.boat_type || '').toLowerCase();
+        const revenueForecast = roundToKopecks(Number(row.revenue_forecast || 0));
+        if (!Number.isFinite(sellerId) || sellerId <= 0) continue;
+        if (!['speed', 'cruise', 'banana'].includes(boatType)) continue;
+
+        let entry = weeklyPointsMap.get(sellerId);
+        if (!entry) {
+          entry = {
+            user_id: sellerId,
+            name: row.seller_name || `Seller ${sellerId}`,
+            zone: normalizeZone(row.seller_zone),
+            revenue_total_week: 0,
+            points_week_base: 0,
+          };
+          weeklyPointsMap.set(sellerId, entry);
+        }
+
+        const effectiveZone = resolvePointsZone(boatType, row.zone_at_sale, row.seller_zone);
+        const revenueInK = revenueForecast / 1000;
+        let pointsBase = 0;
+
+        if (boatType === 'speed') {
+          pointsBase = revenueInK * k_speed * getZoneK(effectiveZone);
+        } else if (boatType === 'cruise') {
+          pointsBase = revenueInK * k_cruise * getZoneK(effectiveZone);
+        } else if (boatType === 'banana') {
+          pointsBase = revenueInK * getBananaK(effectiveZone);
+        }
+
+        entry.revenue_total_week = roundToKopecks(entry.revenue_total_week + revenueForecast);
+        entry.points_week_base += pointsBase;
+      }
+
+      revenue_total_week = roundToKopecks(
+        canonicalRows.reduce((sum, row) => sum + Number(row.revenue_forecast || 0), 0)
+      );
+    } else {
+      const fallbackRows = db.prepare(`
+        SELECT
+          ml.seller_id AS seller_id,
+          COALESCE(u.username, 'Seller ' || ml.seller_id) AS seller_name,
+          u.zone AS seller_zone,
+          COALESCE(SUM(CASE
+            WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED')
+            THEN ml.amount ELSE 0
+          END), 0) AS revenue_gross,
+          COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
+        FROM money_ledger ml
+        JOIN users u ON u.id = ml.seller_id
+        WHERE ml.status = 'POSTED'
+          AND ml.kind = 'SELLER_SHIFT'
+          AND u.role = 'seller'
+          AND COALESCE(u.is_active, 1) = 1
+          AND DATE(ml.business_day) BETWEEN ? AND ?
+        GROUP BY ml.seller_id, seller_name, seller_zone
+      `).all(dateFrom, dateTo);
+
+      for (const row of fallbackRows) {
+        const sellerId = Number(row.seller_id);
+        const revenueNet = Math.max(
+          0,
+          Number(row.revenue_gross || 0) - Number(row.refunds || 0)
+        );
+        if (!Number.isFinite(sellerId) || sellerId <= 0 || revenueNet <= 0) continue;
+
+        weeklyPointsMap.set(sellerId, {
           user_id: sellerId,
-          name: `Seller #${sellerId}`,
-          zone: null,
-          revenue_total_week: 0,
-          points_week_base: 0
-        };
-        weeklyPointsMap.set(sellerId, entry);
+          name: row.seller_name || `Seller ${sellerId}`,
+          zone: normalizeZone(row.seller_zone),
+          revenue_total_week: roundToKopecks(revenueNet),
+          points_week_base: roundToKopecks(revenueNet / 1000),
+        });
       }
-      
-      const effectiveZone = zoneAtSale || entry.zone;
-      const revenueInK = revenueNet / 1000;
-      let pointsBase = 0;
-      
-      if (boatType === 'speed') {
-        pointsBase = revenueInK * k_speed * getZoneK(effectiveZone);
-      } else if (boatType === 'cruise') {
-        pointsBase = revenueInK * k_cruise * getZoneK(effectiveZone);
-      } else if (boatType === 'banana') {
-        pointsBase = revenueInK * getBananaK(effectiveZone);
-      }
-      
-      entry.revenue_total_week += revenueNet;
-      entry.points_week_base += pointsBase;
+
+      revenue_total_week = roundToKopecks(
+        [...weeklyPointsMap.values()].reduce((sum, row) => sum + Number(row.revenue_total_week || 0), 0)
+      );
     }
-    
-    // Apply current streak multiplier to each seller
+
     const sellers = [];
     for (const [sellerId, entry] of weeklyPointsMap) {
       const state = getSellerState(sellerId);
@@ -2759,7 +3227,7 @@ router.get('/motivation/weekly', (req, res) => {
       weeklyWithholdByDay.reduce((sum, row) => sum + Number(row.day_total || 0), 0)
     );
 
-    // Backward-compatible pool for payouts (calculated from weekly_percent and revenue)
+    // Weekly visible fund follows canonical weekly seller-only revenue * weekly_percent.
     const weekly_pool_total = Math.floor(revenue_total_week * weekly_percent);
 
     // Expected weekly fund for consistency check comes from immutable ledger-by-day source.
@@ -2815,25 +3283,20 @@ router.get('/motivation/weekly', (req, res) => {
 
     // Current-week top-3 forecast distribution (Owner tab "Week").
     // This is the actual weekly fund accrued so far and used by UI "НЕДЕЛЯ".
-    const weeklyLedgerByDayMap = new Map(weeklyWithholdByDay.map((row) => [row.business_day, Number(row.day_total || 0)]));
-    const weeklySalesDays = getSalesDaysInRange(dateFrom, dateTo);
-    const weeklyOpenSalesDays = weeklySalesDays.filter((day) => !weeklyLedgerByDayMap.has(day));
-    const weeklyOpenWithholdCalc = calcWithholdTotalForDays(weeklyOpenSalesDays, 'weekly_amount');
-    const weekly_pool_total_current = roundToKopecks(
-      weekly_pool_total_ledger + Number(weeklyOpenWithholdCalc.total || 0)
-    );
+    const weekly_pool_total_current = weekly_pool_total;
     const weekly_distribution_current = { first: 0.5, second: 0.3, third: 0.2 };
+    const weeklyCurrentSplit = calcCurrentWeeklyTop3Split(weekly_pool_total_current, weekly_distribution_current);
 
     sellers.forEach((s, idx) => {
-      let weekly_payout_current = 0;
+      let weeklyPayoutCurrent = 0;
       if (idx === 0) {
-        weekly_payout_current = roundDownTo50(weekly_pool_total_current * weekly_distribution_current.first);
+        weeklyPayoutCurrent = weeklyCurrentSplit.first;
       } else if (idx === 1) {
-        weekly_payout_current = roundDownTo50(weekly_pool_total_current * weekly_distribution_current.second);
+        weeklyPayoutCurrent = weeklyCurrentSplit.second;
       } else if (idx === 2) {
-        weekly_payout_current = roundDownTo50(weekly_pool_total_current * weekly_distribution_current.third);
+        weeklyPayoutCurrent = weeklyCurrentSplit.third;
       }
-      s.weekly_payout_current = weekly_payout_current;
+      s.weekly_payout_current = weeklyPayoutCurrent;
     });
     
     return res.json({
@@ -2864,14 +3327,22 @@ router.get('/motivation/weekly', (req, res) => {
         }))
       },
       meta: {
-        points_rule: 'v3_zone_at_sale_fallback_user_zone_streak_multiplier',
+        points_rule: useCanonicalForecast
+          ? 'v3_weekly_seller_only_canonical_zone_at_sale_banana_user_zone_streak_multiplier'
+          : 'seller_only_ledger_fallback_revenue_proxy_streak_multiplier',
         streak_mode: 'current_state_multiplier',
+        ranking_source: useCanonicalForecast
+          ? 'seller_only_weekly_canonical_presales'
+          : 'seller_only_ledger_fallback',
+        fund_source: useCanonicalForecast
+          ? 'canonical_weekly_revenue_x_weekly_percent'
+          : 'seller_only_ledger_revenue_x_weekly_percent',
+        payout_schedule: 'sunday_top3_by_points',
         consistency_diagnostics: {
           warnings: weeklyConsistencyWarnings,
           duplicate_withhold_days: weeklyPoolDuplicateDays,
           recalculation_drift_days: weeklyPoolRecalcDiagnostics.driftDays,
           recalculation_errors: weeklyPoolRecalcDiagnostics.errors,
-          open_sales_day_recalculation_errors: weeklyOpenWithholdCalc.errors,
         }
       }
     });
@@ -2903,6 +3374,7 @@ router.get('/motivation/season', (req, res) => {
     // Settings for backward-compatible season pool percent
     const settings = resolveOwnerSettings(db);
     const season_percent = Number(settings.season_percent ?? 0.02);
+    const seasonPayoutScheme = normalizeSeasonPayoutScheme(settings.season_payout_scheme);
     const seasonRange = resolveSeasonDateRange(seasonId, settings);
     const seasonFrom = seasonRange.seasonFrom;
     const seasonTo = seasonRange.seasonTo;
@@ -2922,25 +3394,79 @@ router.get('/motivation/season', (req, res) => {
     const sellersRows = db.prepare(`
       SELECT id, username, zone FROM users WHERE role = 'seller' AND is_active = 1
     `).all();
+    const activeSellersById = new Map(
+      (sellersRows || []).map((seller) => [Number(seller.id), seller])
+    );
+    const canonicalSeasonSnapshot = buildCanonicalSeasonSnapshot(seasonFrom, seasonTo, {
+      sepFrom,
+      sepTo,
+      endSepFrom,
+      endSepTo,
+    });
+    const canonicalSeasonParticipants = canonicalSeasonSnapshot.sellers
+      .map((seller) => {
+        const sellerId = Number(seller.user_id);
+        const activeSeller = activeSellersById.get(sellerId);
+        if (!activeSeller) return null;
+
+        const worked_days_season = Number(seller.worked_days_season || 0);
+        const worked_days_sep = Number(seller.worked_days_sep || 0);
+        const worked_days_end_sep = Number(seller.worked_days_end_sep || 0);
+
+        return {
+          user_id: sellerId,
+          name: seller.name || activeSeller.username || `Seller ${sellerId}`,
+          zone: seller.zone ?? activeSeller.zone ?? null,
+          revenue_total: roundToKopecks(Number(seller.revenue_total || 0)),
+          points_total: roundToKopecks(Number(seller.points_total || 0)),
+          worked_days_season,
+          worked_days_sep,
+          worked_days_end_sep,
+          is_eligible:
+            worked_days_season >= MIN_WORKED_DAYS_SEASON &&
+            worked_days_sep >= MIN_WORKED_DAYS_SEP &&
+            worked_days_end_sep >= 1
+              ? 1
+              : 0,
+          season_payout: 0,
+          season_payout_recipient: 0,
+          season_share: 0,
+        };
+      })
+      .filter((seller) => (
+        seller &&
+        (
+          Number(seller.revenue_total || 0) > 0 ||
+          Number(seller.points_total || 0) > 0 ||
+          Number(seller.worked_days_season || 0) > 0
+        )
+      ));
+    const useCanonicalSeasonRanking = canonicalSeasonParticipants.some((seller) => (
+      Number(seller?.points_total || 0) > 0
+    ));
     
-    let seasonStats = [];
-    if (seasonRange.isDefaultRange) {
-      // Keep legacy source for full-year range.
+    const canonicalSeasonStats = db.prepare(`
+      SELECT seller_id,
+             COALESCE(SUM(revenue_day), 0) AS revenue_total,
+             COALESCE(SUM(points_day_total), 0) AS points_total
+      FROM seller_day_stats
+      WHERE DATE(business_day) BETWEEN ? AND ?
+      GROUP BY seller_id
+    `).all(seasonFrom, seasonTo);
+
+    const hasCanonicalSeasonPoints = canonicalSeasonStats.some((row) => (
+      Number(row?.points_total || 0) > 0
+    ));
+
+    let seasonStats = canonicalSeasonStats;
+    let season_stats_source = 'seller_day_stats';
+    if (!hasCanonicalSeasonPoints && seasonRange.isDefaultRange) {
       seasonStats = db.prepare(`
         SELECT seller_id, revenue_total, points_total
         FROM seller_season_stats
         WHERE season_id = ?
       `).all(seasonId);
-    } else {
-      // Custom season boundaries: accumulate strictly from immutable daily stats inside range.
-      seasonStats = db.prepare(`
-        SELECT seller_id,
-               COALESCE(SUM(revenue_day), 0) AS revenue_total,
-               COALESCE(SUM(points_day_total), 0) AS points_total
-        FROM seller_day_stats
-        WHERE DATE(business_day) BETWEEN ? AND ?
-        GROUP BY seller_id
-      `).all(seasonFrom, seasonTo);
+      season_stats_source = 'seller_season_stats_fallback';
     }
     
     // Build stats map
@@ -3032,8 +3558,10 @@ router.get('/motivation/season', (req, res) => {
     const seasonWithholdLedgerTotal = roundToKopecks(
       seasonWithholdByDay.reduce((sum, row) => sum + Number(row.day_total || 0), 0)
     );
-    const season_pool_total_daily_sum = roundToKopecks(seasonWithholdLedgerTotal + season_pool_manual_transfer_total);
-
+    const useCanonicalSeasonFunds =
+      Number(canonicalSeasonSnapshot.seasonFromRevenueTotal || 0) > 0 ||
+      Number(canonicalSeasonSnapshot.roundingToSeasonTotal || 0) > 0 ||
+      canonicalSeasonParticipants.length > 0;
     const seasonPoolDuplicateDays = seasonWithholdByDay
       .filter((row) => Number(row.entry_count || 0) > 1)
       .map((row) => ({
@@ -3042,7 +3570,27 @@ router.get('/motivation/season', (req, res) => {
         ledger_day_total: roundToKopecks(Number(row.day_total || 0)),
       }));
     const seasonPoolRecalcDiagnostics = getWithholdRecalcDiagnostics(seasonWithholdByDay, 'season_amount');
-    const season_pool_rounding_total = roundToKopecks(Number(seasonPoolRecalcDiagnostics.roundingToSeasonTotal || 0));
+    const useCanonicalSeasonFundBreakdown =
+      useCanonicalSeasonFunds &&
+      seasonPoolRecalcDiagnostics.driftDays.length === 0 &&
+      canonicalSeasonSnapshot.errors.length === 0;
+    const seasonRecalcErrors = useCanonicalSeasonFundBreakdown
+      ? canonicalSeasonSnapshot.errors
+      : seasonPoolRecalcDiagnostics.errors;
+    const fallbackSeasonRoundingTotal = roundToKopecks(Number(seasonPoolRecalcDiagnostics.roundingToSeasonTotal || 0));
+    const season_pool_rounding_total = useCanonicalSeasonFundBreakdown
+      ? roundToKopecks(Number(canonicalSeasonSnapshot.roundingToSeasonTotal || 0))
+      : fallbackSeasonRoundingTotal;
+    const season_pool_from_revenue_total = useCanonicalSeasonFundBreakdown
+      ? roundToKopecks(Number(canonicalSeasonSnapshot.seasonFromRevenueTotal || 0))
+      : roundToKopecks(Math.max(0, seasonWithholdLedgerTotal - season_pool_rounding_total));
+    const season_pool_total_daily_sum = roundToKopecks(seasonWithholdLedgerTotal + season_pool_manual_transfer_total);
+    const season_pool_dispatcher_decision_total = season_pool_manual_transfer_total;
+    const season_payout_fund_total = roundToKopecks(
+      season_pool_from_revenue_total +
+      season_pool_rounding_total +
+      season_pool_dispatcher_decision_total
+    );
 
     const season_pool_diff = roundToKopecks(season_pool_total_ledger - season_pool_total_daily_sum);
     const seasonConsistencyWarnings = [];
@@ -3052,53 +3600,41 @@ router.get('/motivation/season', (req, res) => {
     if (seasonPoolRecalcDiagnostics.driftDays.length > 0) {
       seasonConsistencyWarnings.push(`recalculation drift on ${seasonPoolRecalcDiagnostics.driftDays.length} day(s)`);
     }
-    if (seasonPoolRecalcDiagnostics.errors.length > 0) {
-      seasonConsistencyWarnings.push(`recalculation errors on ${seasonPoolRecalcDiagnostics.errors.length} day(s)`);
+    if (seasonRecalcErrors.length > 0) {
+      seasonConsistencyWarnings.push(`recalculation errors on ${seasonRecalcErrors.length} day(s)`);
     }
     const season_pool_is_consistent =
       isMoneyEqual(season_pool_total_ledger, season_pool_total_daily_sum) &&
       seasonConsistencyWarnings.length === 0;
-    const season_pool_total_current = season_pool_total_ledger;
+    // Owner card "Сейчас начислено" must answer only the revenue-driven season-fund question.
+    const season_pool_total_current = season_pool_from_revenue_total;
     
     // Build sellers list with eligibility
-    const sellers = (sellersRows || []).map(r => {
-      const sellerId = Number(r.id);
-      const stats = statsMap.get(sellerId) || { revenue_total: 0, points_total: 0 };
-      const eligibility = eligibilityMap.get(sellerId) || { worked_days_season: 0, worked_days_sep: 0, worked_days_end_sep: 0, is_eligible: 0 };
-      return {
-        user_id: sellerId,
-        name: r.username,
-        zone: r.zone,
-        revenue_total: stats.revenue_total,
-        points_total: stats.points_total,
-        worked_days_season: eligibility.worked_days_season,
-        worked_days_sep: eligibility.worked_days_sep,
-        worked_days_end_sep: eligibility.worked_days_end_sep,
-        is_eligible: eligibility.is_eligible,
-        season_payout: 0,
-        season_share: 0
-      };
-    });
-    
-    // Calculate sum of points for eligible sellers
-    const eligibleSellers = sellers.filter(s => s.is_eligible === 1);
-    const eligible_count = eligibleSellers.length;
-    const sum_points_eligible = eligibleSellers.reduce((sum, s) => sum + s.points_total, 0);
-    
-    // Calculate payouts for eligible sellers (proportional by points)
-    let season_payouts_sum = 0;
-    if (sum_points_eligible > 0 && eligible_count > 0) {
-      for (const seller of sellers) {
-        if (seller.is_eligible === 1 && seller.points_total > 0) {
-          const rawPayout = season_pool_total * (seller.points_total / sum_points_eligible);
-          seller.season_payout = roundDownTo50(Math.floor(rawPayout));
-          seller.season_share = seller.points_total / sum_points_eligible;
-          season_payouts_sum += seller.season_payout;
-        }
-      }
-    }
-    
-    const season_payouts_remainder = season_pool_total - season_payouts_sum;
+    const sellers = useCanonicalSeasonRanking
+      ? canonicalSeasonParticipants.map((seller) => ({ ...seller }))
+      : (sellersRows || []).map((r) => {
+        const sellerId = Number(r.id);
+        const stats = statsMap.get(sellerId) || { revenue_total: 0, points_total: 0 };
+        const eligibility = eligibilityMap.get(sellerId) || { worked_days_season: 0, worked_days_sep: 0, worked_days_end_sep: 0, is_eligible: 0 };
+        return {
+          user_id: sellerId,
+          name: r.username,
+          zone: r.zone,
+          revenue_total: stats.revenue_total,
+          points_total: stats.points_total,
+          worked_days_season: eligibility.worked_days_season,
+          worked_days_sep: eligibility.worked_days_sep,
+          worked_days_end_sep: eligibility.worked_days_end_sep,
+          is_eligible: eligibility.is_eligible,
+          season_payout: 0,
+          season_payout_recipient: 0,
+          season_share: 0
+        };
+      }).filter((seller) => (
+        Number(seller.revenue_total || 0) > 0 ||
+        Number(seller.points_total || 0) > 0 ||
+        Number(seller.worked_days_season || 0) > 0
+      ));
     
     // Sort: points_total desc, revenue_total desc, name asc
     sellers.sort((a, b) => {
@@ -3109,6 +3645,28 @@ router.get('/motivation/season', (req, res) => {
     
     // Assign ranks
     sellers.forEach((s, i) => { s.rank = i + 1; });
+
+    // Calculate sum of points for eligible sellers
+    const eligibleSellers = sellers.filter((seller) => seller.is_eligible === 1);
+    const eligible_count = eligibleSellers.length;
+    const sum_points_eligible = eligibleSellers.reduce((sum, seller) => sum + Number(seller.points_total || 0), 0);
+
+    const seasonPayoutRecipients = selectSeasonPayoutRecipients(sellers, seasonPayoutScheme);
+    const { payoutMap, shareMap, allocatedTotal: season_payouts_sum } = allocateSeasonPayouts(
+      season_payout_fund_total,
+      seasonPayoutRecipients,
+      seasonPayoutScheme
+    );
+
+    for (const seller of sellers) {
+      const sellerId = Number(seller.user_id || 0);
+      seller.season_payout = roundToKopecks(Number(payoutMap.get(sellerId) || 0));
+      seller.season_share = Number(shareMap.get(sellerId) || 0);
+      seller.season_payout_recipient = payoutMap.has(sellerId) ? 1 : 0;
+    }
+
+    const season_payout_recipient_count = seasonPayoutRecipients.length;
+    const season_payouts_remainder = roundToKopecks(season_payout_fund_total - season_payouts_sum);
     
     // Top 3 (by points_total, not payouts)
     const top3 = sellers.slice(0, 3);
@@ -3123,28 +3681,40 @@ router.get('/motivation/season', (req, res) => {
         season_percent,
         season_pool_total,
         season_pool_total_ledger,
+        season_payout_fund_total,
+        season_payout_scheme: seasonPayoutScheme,
         season_pool_total_daily_sum,
         season_pool_diff,
         season_pool_is_consistent,
         season_pool_total_current,
+        season_pool_from_revenue_total,
         season_pool_rounding_total,
+        season_pool_dispatcher_decision_total,
         season_pool_manual_transfer_total,
         eligible_count,
         sum_points_eligible,
+        season_payout_recipient_count,
         season_payouts_sum,
         season_payouts_remainder,
         sellers,
         top3
       },
       meta: {
-        season_payout_mode: 'eligible_all_proportional_by_points',
+        season_payout_mode: getSeasonPayoutModeLabel(seasonPayoutScheme),
+        season_payout_scheme: seasonPayoutScheme,
+        season_payout_fund_source: 'season_pool_from_revenue_total+season_pool_rounding_total+season_pool_dispatcher_decision_total',
         eligibility_rules: {
           min_worked_days_season: MIN_WORKED_DAYS_SEASON,
           min_worked_days_sep: MIN_WORKED_DAYS_SEP,
           end_sep_window_days: END_SEP_WINDOW_DAYS
         },
-        rounding: 'roundDownTo50',
-        season_rule: seasonRange.isDefaultRange ? 'calendar_year_jan01_dec31' : 'settings_mmdd_inclusive',
+        rounding: 'weighted_split_to_kopecks_remainder_by_recipient_order',
+        season_rule: seasonRange.isDefaultRange ? 'calendar_year_jan01_dec31' : 'owner_settings_inclusive',
+        season_rule_source: seasonRange.source,
+        season_stats_source: useCanonicalSeasonRanking
+          ? 'seller_only_motivation_day_canonical'
+          : season_stats_source,
+        seller_ranking_scope: 'seller_participants_only',
         season_boundaries_mmdd: {
           start: seasonRange.startMmdd,
           end: seasonRange.endMmdd,
@@ -3153,7 +3723,7 @@ router.get('/motivation/season', (req, res) => {
           warnings: seasonConsistencyWarnings,
           duplicate_withhold_days: seasonPoolDuplicateDays,
           recalculation_drift_days: seasonPoolRecalcDiagnostics.driftDays,
-          recalculation_errors: seasonPoolRecalcDiagnostics.errors,
+          recalculation_errors: seasonRecalcErrors,
         }
       }
     });
@@ -3186,7 +3756,7 @@ router.get('/invariants', (req, res) => {
     // === DAY INVARIANTS ===
     if (business_day) {
       const dayErrors = [];
-      const motivationResult = calcMotivationDay(db, business_day);
+      const motivationResult = calcMotivationDay(db, business_day, { scope: 'seller_only' });
       
       if (motivationResult.error) {
         dayErrors.push(`calcMotivationDay error: ${motivationResult.error}`);
@@ -3486,97 +4056,432 @@ router.get('/boats', (req, res) => {
       toExpr = r.to;
     }
 
-    const seatsCol = pickFirstExisting('presales', ['number_of_seats', 'qty', 'seats'], null);
-    const ticketsAgg = seatsCol ? `COALESCE(SUM(p.${seatsCol}),0)` : `COUNT(*)`;
-
     const boatTypeCol = pickFirstExisting('boats', ['boat_type', 'type', 'category'], null);
+    const seatsCol = pickFirstExisting('presales', ['number_of_seats', 'qty', 'seats'], 'number_of_seats');
+    const generatedTripDayExpr = hasColumn('generated_slots', 'trip_date') ? 'gs.trip_date' : 'NULL';
+    const boatSlotTripDayExpr = hasColumn('boat_slots', 'trip_date') ? 'bs.trip_date' : 'NULL';
+    const generatedTimeExpr = hasColumn('generated_slots', 'time') ? 'gs.time' : 'NULL';
+    const boatSlotTimeExpr = hasColumn('boat_slots', 'time') ? 'bs.time' : 'NULL';
+    const generatedCapacityCol = pickFirstExisting('generated_slots', ['capacity', 'cap'], null);
+    const boatSlotCapacityCol = pickFirstExisting('boat_slots', ['capacity', 'cap'], null);
+    const generatedLegacyPriceCol = pickFirstExisting('generated_slots', ['price', 'price_adult'], null);
+    const boatSlotLegacyPriceCol = pickFirstExisting('boat_slots', ['price', 'price_adult'], null);
+    const generatedAdultPriceExpr = hasColumn('generated_slots', 'price_adult') ? 'gs.price_adult' : 'NULL';
+    const generatedTeenPriceExpr = hasColumn('generated_slots', 'price_teen') ? 'gs.price_teen' : 'NULL';
+    const generatedChildPriceExpr = hasColumn('generated_slots', 'price_child') ? 'gs.price_child' : 'NULL';
+    const boatSlotAdultPriceExpr = hasColumn('boat_slots', 'price_adult') ? 'bs.price_adult' : 'NULL';
+    const boatSlotTeenPriceExpr = hasColumn('boat_slots', 'price_teen') ? 'bs.price_teen' : 'NULL';
+    const boatSlotChildPriceExpr = hasColumn('boat_slots', 'price_child') ? 'bs.price_child' : 'NULL';
+    const boatAdultPriceExpr = hasColumn('boats', 'price_adult') ? 'b.price_adult' : 'NULL';
+    const boatTeenPriceExpr = hasColumn('boats', 'price_teen') ? 'b.price_teen' : 'NULL';
+    const boatChildPriceExpr = hasColumn('boats', 'price_child') ? 'b.price_child' : 'NULL';
+    const generatedCapacityExpr = generatedCapacityCol ? `gs.${generatedCapacityCol}` : 'NULL';
+    const boatSlotCapacityExpr = boatSlotCapacityCol ? `bs.${boatSlotCapacityCol}` : 'NULL';
+    const generatedLegacyPriceExpr = generatedLegacyPriceCol ? `gs.${generatedLegacyPriceCol}` : 'NULL';
+    const boatSlotLegacyPriceExpr = boatSlotLegacyPriceCol ? `bs.${boatSlotLegacyPriceCol}` : 'NULL';
+    const resolvedTripDayExpr = `COALESCE(${generatedTripDayExpr}, ${boatSlotTripDayExpr}, ${tripDayExpr})`;
+    const resolvedTripTimeExpr = `COALESCE(${generatedTimeExpr}, ${boatSlotTimeExpr})`;
+    const resolvedCapacityExpr = `COALESCE(${generatedCapacityExpr}, ${boatSlotCapacityExpr}, 0)`;
+    const tripReferencePriceExpr = `CAST(MAX(
+      COALESCE(${generatedAdultPriceExpr}, ${boatSlotAdultPriceExpr}, ${boatAdultPriceExpr}, 0),
+      COALESCE(${generatedTeenPriceExpr}, ${boatSlotTeenPriceExpr}, ${boatTeenPriceExpr}, 0),
+      COALESCE(${generatedChildPriceExpr}, ${boatSlotChildPriceExpr}, ${boatChildPriceExpr}, 0),
+      COALESCE(${boatSlotLegacyPriceExpr}, ${generatedLegacyPriceExpr}, ${boatAdultPriceExpr}, 0)
+    ) AS INTEGER)`;
+    const resolvedTripRange = fromExpr && toExpr ? `AND ${resolvedTripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}` : '';
+    const ledgerTripDayExpr = getLedgerTripDayExpr();
+    const refundTripRange = fromExpr && toExpr ? `AND ${ledgerTripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}` : '';
 
-    // Per-boat aggregates (revenue/tickets/trips)
-    const whereRange = fromExpr && toExpr ? `AND ${tripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}` : '';
+    const scopedPresalesCteSql = `WITH scoped_presales AS (
+      SELECT
+        p.id AS presale_id,
+        b.id AS boat_id,
+        b.name AS boat_name,
+        ${boatTypeCol ? `b.${boatTypeCol} AS boat_type,` : `NULL AS boat_type,`}
+        COALESCE(
+          p.slot_uid,
+          CASE
+            WHEN p.boat_slot_id IS NOT NULL THEN 'boat_slot:' || p.boat_slot_id
+            ELSE 'presale:' || p.id
+          END
+        ) AS trip_key,
+        ${resolvedTripDayExpr} AS trip_date,
+        ${resolvedTripTimeExpr} AS trip_time,
+        CAST(COALESCE(${resolvedCapacityExpr}, 0) AS INTEGER) AS trip_capacity,
+        ${tripReferencePriceExpr} AS trip_reference_price,
+        CAST(COALESCE(p.${seatsCol}, 0) AS INTEGER) AS presale_tickets,
+        CAST(COALESCE(p.total_price, 0) AS INTEGER) AS presale_revenue,
+        CAST(COALESCE(p.payment_cash_amount, 0) AS INTEGER) AS payment_cash_amount,
+        CAST(COALESCE(p.payment_card_amount, 0) AS INTEGER) AS payment_card_amount,
+        p.tickets_json AS tickets_json
+      FROM presales p
+      LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+      LEFT JOIN generated_slots gs
+        ON p.slot_uid LIKE 'generated:%'
+       AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER)
+      JOIN boats b ON b.id = COALESCE(gs.boat_id, bs.boat_id)
+      WHERE p.status='ACTIVE'
+        ${resolvedTripRange}
+    )`;
+
+    const sourceRowsCteSql = `${scopedPresalesCteSql},
+      ticket_rows AS (
+        SELECT
+          sp.boat_id AS boat_id,
+          sp.boat_name AS boat_name,
+          sp.boat_type AS boat_type,
+          sp.trip_key AS trip_key,
+          sp.trip_date AS trip_date,
+          sp.trip_time AS trip_time,
+          sp.trip_capacity AS trip_capacity,
+          sp.trip_reference_price AS trip_reference_price,
+          CAST(COALESCE(t.price, 0) AS INTEGER) AS revenue,
+          1 AS tickets
+        FROM scoped_presales sp
+        JOIN tickets t ON t.presale_id = sp.presale_id
+        WHERE t.status='ACTIVE'
+      ),
+      presale_fallback_rows AS (
+        SELECT
+          sp.boat_id AS boat_id,
+          sp.boat_name AS boat_name,
+          sp.boat_type AS boat_type,
+          sp.trip_key AS trip_key,
+          sp.trip_date AS trip_date,
+          sp.trip_time AS trip_time,
+          sp.trip_capacity AS trip_capacity,
+          sp.trip_reference_price AS trip_reference_price,
+          sp.presale_revenue AS revenue,
+          sp.presale_tickets AS tickets
+        FROM scoped_presales sp
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM tickets t
+          WHERE t.presale_id = sp.presale_id
+        )
+      ),
+      source_rows AS (
+        SELECT * FROM ticket_rows
+        UNION ALL
+        SELECT * FROM presale_fallback_rows
+      )`;
 
     const boatsRows = db
       .prepare(
-        `SELECT
-           b.id AS boat_id,
-           b.name AS boat_name,
-           ${boatTypeCol ? `b.${boatTypeCol} AS boat_type,` : `NULL AS boat_type,`}
-           COALESCE(SUM(p.total_price),0) AS revenue,
-           ${ticketsAgg} AS tickets,
-           COUNT(DISTINCT COALESCE(p.slot_uid, p.boat_slot_id)) AS trips
-         FROM presales p
-         JOIN boat_slots bs ON bs.id = p.boat_slot_id
-         JOIN boats b ON b.id = bs.boat_id
-         WHERE p.status='ACTIVE'
-           ${whereRange}
-         GROUP BY b.id
-         ORDER BY revenue DESC, tickets DESC, trips DESC, b.id ASC`
+        `${sourceRowsCteSql},
+         boat_metrics AS (
+           SELECT
+             boat_id,
+             boat_name,
+             boat_type,
+             COALESCE(SUM(revenue), 0) AS revenue,
+             COALESCE(SUM(tickets), 0) AS tickets,
+             COUNT(DISTINCT trip_key) AS trips
+           FROM source_rows
+           GROUP BY boat_id
+         ),
+         capacity_metrics AS (
+           SELECT
+             boat_id,
+             COALESCE(SUM(trip_capacity), 0) AS capacity
+           FROM (
+             SELECT DISTINCT boat_id, trip_key, trip_capacity
+             FROM scoped_presales
+           )
+           GROUP BY boat_id
+         )
+         SELECT
+           bm.boat_id AS boat_id,
+           bm.boat_name AS boat_name,
+           bm.boat_type AS boat_type,
+           bm.revenue AS revenue,
+           bm.tickets AS tickets,
+           bm.trips AS trips,
+           COALESCE(cm.capacity, 0) AS capacity
+         FROM boat_metrics bm
+         LEFT JOIN capacity_metrics cm ON cm.boat_id = bm.boat_id
+         ORDER BY bm.revenue DESC, bm.tickets DESC, bm.trips DESC, bm.boat_id ASC`
       )
       .all();
 
-    const boats = (boatsRows || []).map((r) => ({
-      boat_id: Number(r.boat_id),
-      boat_name: r.boat_name,
-      boat_type: r.boat_type,
-      revenue: Number(r.revenue || 0),
-      tickets: Number(r.tickets || 0),
-      trips: Number(r.trips || 0),
-      source: 'presales',
-    }));
+    const tripStatsRows = db
+      .prepare(
+        `${sourceRowsCteSql}
+         SELECT
+           boat_id,
+           trip_key,
+           MAX(trip_date) AS trip_date,
+           MAX(trip_time) AS trip_time,
+           MAX(trip_capacity) AS trip_capacity,
+           MAX(trip_reference_price) AS trip_reference_price,
+           COALESCE(SUM(revenue), 0) AS revenue,
+           COALESCE(SUM(tickets), 0) AS tickets
+         FROM source_rows
+         GROUP BY boat_id, trip_key`
+      )
+      .all();
+
+    const activePresaleRows = db
+      .prepare(
+        `${scopedPresalesCteSql}
+         SELECT
+           boat_id,
+           payment_cash_amount,
+           payment_card_amount,
+           tickets_json
+         FROM scoped_presales`
+      )
+      .all();
+
+    const cancellationRows = db
+      .prepare(
+        `SELECT
+           b.id AS boat_id,
+           COUNT(*) AS cancel_count,
+           COALESCE(SUM(COALESCE(p.total_price, 0)), 0) AS cancel_amount
+         FROM presales p
+         LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+         LEFT JOIN generated_slots gs
+           ON p.slot_uid LIKE 'generated:%'
+          AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER)
+         JOIN boats b ON b.id = COALESCE(gs.boat_id, bs.boat_id)
+         WHERE p.status IN ('CANCELLED', 'REFUNDED')
+           ${resolvedTripRange}
+         GROUP BY b.id`
+      )
+      .all();
+
+    const refundRows = db
+      .prepare(
+        `SELECT
+           b.id AS boat_id,
+           COUNT(DISTINCT ml.presale_id) AS refund_count,
+           COALESCE(SUM(ABS(ml.amount)), 0) AS refund_amount
+         FROM money_ledger ml
+         JOIN presales p ON p.id = ml.presale_id
+         LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+         LEFT JOIN generated_slots gs
+           ON p.slot_uid LIKE 'generated:%'
+          AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER)
+         JOIN boats b ON b.id = COALESCE(gs.boat_id, bs.boat_id)
+         WHERE ml.status = 'POSTED'
+           AND ml.type = 'SALE_CANCEL_REVERSE'
+           ${refundTripRange}
+         GROUP BY b.id`
+      )
+      .all();
+
+    const getFillPercent = (tickets, capacity) => {
+      const sold = Number(tickets || 0);
+      const cap = Number(capacity || 0);
+      if (!(cap > 0)) return null;
+      return Math.max(0, Math.min(100, Math.round((sold / cap) * 1000) / 10));
+    };
+
+    const roundPercent = (value) => {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return null;
+      return Math.max(0, Math.min(100, Math.round(n * 10) / 10));
+    };
+
+    const parseTicketTypes = (raw) => {
+      if (raw === null || raw === undefined || raw === '') return null;
+      try {
+        const parsed = JSON.parse(raw);
+        const adult = Number(parsed?.adult ?? 0);
+        const teen = Number(parsed?.teen ?? 0);
+        const child = Number(parsed?.child ?? 0);
+        if (![adult, teen, child].every((v) => Number.isFinite(v) && Number.isInteger(v) && v >= 0)) {
+          return null;
+        }
+        return { adult, teen, child };
+      } catch {
+        return null;
+      }
+    };
+
+    const formatTripPoint = (row) => ({
+      tripKey: row.trip_key,
+      date: row.trip_date || null,
+      time: row.trip_time || null,
+      revenue: Number(row.revenue || 0),
+      tickets: Number(row.tickets || 0),
+      capacity: Number(row.trip_capacity || 0),
+      fillPercent: getFillPercent(row.tickets, row.trip_capacity),
+    });
+
+    const isBetterBestTrip = (candidate, current) => {
+      if (!current) return true;
+      if (candidate.revenue !== current.revenue) return candidate.revenue > current.revenue;
+      const candidateFill = Number(candidate.fillPercent ?? -1);
+      const currentFill = Number(current.fillPercent ?? -1);
+      if (candidateFill !== currentFill) return candidateFill > currentFill;
+      const candidateStamp = `${candidate.date || ''} ${candidate.time || ''}`;
+      const currentStamp = `${current.date || ''} ${current.time || ''}`;
+      return candidateStamp > currentStamp;
+    };
+
+    const isBetterWorstTrip = (candidate, current) => {
+      if (!current) return true;
+      if (candidate.revenue !== current.revenue) return candidate.revenue < current.revenue;
+      const candidateFill = Number(candidate.fillPercent ?? 101);
+      const currentFill = Number(current.fillPercent ?? 101);
+      if (candidateFill !== currentFill) return candidateFill < currentFill;
+      const candidateStamp = `${candidate.date || ''} ${candidate.time || ''}`;
+      const currentStamp = `${current.date || ''} ${current.time || ''}`;
+      return candidateStamp < currentStamp;
+    };
+
+    const tripStatsByBoat = new Map();
+    for (const row of tripStatsRows || []) {
+      const boatId = Number(row.boat_id || 0);
+      if (!tripStatsByBoat.has(boatId)) tripStatsByBoat.set(boatId, []);
+      tripStatsByBoat.get(boatId).push({
+        trip_key: row.trip_key,
+        trip_date: row.trip_date,
+        trip_time: row.trip_time,
+        trip_capacity: Number(row.trip_capacity || 0),
+        trip_reference_price: Number(row.trip_reference_price || 0),
+        revenue: Number(row.revenue || 0),
+        tickets: Number(row.tickets || 0),
+      });
+    }
+
+    const activePresaleStatsByBoat = new Map();
+    for (const row of activePresaleRows || []) {
+      const boatId = Number(row.boat_id || 0);
+      if (!activePresaleStatsByBoat.has(boatId)) {
+        activePresaleStatsByBoat.set(boatId, {
+          paymentMethods: { cash: 0, card: 0 },
+          ticketTypes: { adult: 0, teen: 0, child: 0 },
+          ticketTypesAvailable: true,
+        });
+      }
+      const stats = activePresaleStatsByBoat.get(boatId);
+      stats.paymentMethods.cash += Number(row.payment_cash_amount || 0);
+      stats.paymentMethods.card += Number(row.payment_card_amount || 0);
+      const ticketTypes = parseTicketTypes(row.tickets_json);
+      if (!ticketTypes) {
+        stats.ticketTypesAvailable = false;
+        continue;
+      }
+      stats.ticketTypes.adult += ticketTypes.adult;
+      stats.ticketTypes.teen += ticketTypes.teen;
+      stats.ticketTypes.child += ticketTypes.child;
+    }
+
+    const cancellationByBoat = new Map(
+      (cancellationRows || []).map((row) => [
+        Number(row.boat_id || 0),
+        {
+          count: Number(row.cancel_count || 0),
+          amount: Number(row.cancel_amount || 0),
+        },
+      ])
+    );
+
+    const refundsByBoat = new Map(
+      (refundRows || []).map((row) => [
+        Number(row.boat_id || 0),
+        {
+          count: Number(row.refund_count || 0),
+          amount: Number(row.refund_amount || 0),
+        },
+      ])
+    );
+
+    const boats = (boatsRows || []).map((r) => {
+      const boatId = Number(r.boat_id || 0);
+      const tickets = Number(r.tickets || 0);
+      const capacity = Number(r.capacity || 0);
+      const revenue = Number(r.revenue || 0);
+      const trips = Number(r.trips || 0);
+      const freeSeats = Math.max(0, capacity - tickets);
+      const tripRows = tripStatsByBoat.get(boatId) || [];
+      const activePresaleStats = activePresaleStatsByBoat.get(boatId) || {
+        paymentMethods: { cash: 0, card: 0 },
+        ticketTypes: { adult: 0, teen: 0, child: 0 },
+        ticketTypesAvailable: false,
+      };
+
+      let lostPotentialRevenue = 0;
+      let fullTripsCount = 0;
+      let bestTrip = null;
+      let worstTrip = null;
+      for (const tripRow of tripRows) {
+        const tripFreeSeats = Math.max(0, Number(tripRow.trip_capacity || 0) - Number(tripRow.tickets || 0));
+        lostPotentialRevenue += tripFreeSeats * Math.max(0, Number(tripRow.trip_reference_price || 0));
+        if (Number(tripRow.trip_capacity || 0) > 0 && Number(tripRow.tickets || 0) >= Number(tripRow.trip_capacity || 0)) {
+          fullTripsCount += 1;
+        }
+
+        const tripPoint = formatTripPoint(tripRow);
+        if (isBetterBestTrip(tripPoint, bestTrip)) bestTrip = tripPoint;
+        if (isBetterWorstTrip(tripPoint, worstTrip)) worstTrip = tripPoint;
+      }
+
+      const maxPossibleRevenue = revenue + lostPotentialRevenue;
+      const ticketTypes = activePresaleStats.ticketTypesAvailable
+        ? {
+            available: true,
+            adult: Number(activePresaleStats.ticketTypes.adult || 0),
+            teen: Number(activePresaleStats.ticketTypes.teen || 0),
+            child: Number(activePresaleStats.ticketTypes.child || 0),
+          }
+        : { available: false };
+
+      return {
+        boat_id: boatId,
+        boat_name: r.boat_name,
+        boat_type: r.boat_type,
+        revenue,
+        tickets,
+        trips,
+        capacity,
+        fillPercent: getFillPercent(tickets, capacity),
+        source: 'trip_date',
+        details: {
+          avgCheck: tickets > 0 ? Math.round(revenue / tickets) : null,
+          avgRevenuePerTrip: trips > 0 ? Math.round(revenue / trips) : null,
+          avgPassengersPerTrip: trips > 0 ? Math.round((tickets / trips) * 10) / 10 : null,
+          freeSeats,
+          lostPotential: {
+            seats: freeSeats,
+            revenue: lostPotentialRevenue,
+            maxRevenue: maxPossibleRevenue,
+          },
+          potentialRevenuePercent: maxPossibleRevenue > 0 ? roundPercent((revenue / maxPossibleRevenue) * 100) : null,
+          fullTripsCount,
+          bestTrip,
+          worstTrip,
+          cancellations: cancellationByBoat.get(boatId) || { count: 0, amount: 0 },
+          refunds: refundsByBoat.get(boatId) || { count: 0, amount: 0 },
+          ticketTypes,
+          paymentMethods: {
+            cash: Number(activePresaleStats.paymentMethods.cash || 0),
+            card: Number(activePresaleStats.paymentMethods.card || 0),
+          },
+        },
+      };
+    });
 
     const totals = boats.reduce(
       (acc, x) => {
         acc.revenue += Number(x.revenue || 0);
         acc.tickets += Number(x.tickets || 0);
         acc.trips += Number(x.trips || 0);
+        acc.capacity += Number(x.capacity || 0);
         return acc;
       },
-      { revenue: 0, tickets: 0, trips: 0 }
+      { revenue: 0, tickets: 0, trips: 0, capacity: 0 }
     );
 
-    // Fill percent (best-effort): if generated_slots has seats_left and we can estimate capacity per slot.
-    // If not possible safely, return 0 (UI shows 0%).
-    let fillPercent = 0;
-    try {
-      const gsSeatsLeftCol = pickFirstExisting('generated_slots', ['seats_left', 'seatsLeft', 'left'], null);
-      if (gsSeatsLeftCol) {
-        // estimate capacity per slot as sold + max(seats_left,0)
-        const row = db
-          .prepare(
-            `WITH sold AS (
-               SELECT p.slot_uid AS slot_uid,
-                      ${seatsCol ? `COALESCE(SUM(p.${seatsCol}),0)` : `COUNT(*)`} AS sold
-               FROM presales p
-               LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
-               WHERE p.status='ACTIVE'
-                 AND p.slot_uid LIKE 'generated:%'
-                 ${whereRange}
-               GROUP BY p.slot_uid
-             ),
-             cap AS (
-               SELECT sold.slot_uid AS slot_uid,
-                      sold.sold AS sold,
-                      (SELECT MAX(COALESCE(gs.${gsSeatsLeftCol},0),0)
-                       FROM generated_slots gs
-                       WHERE gs.id = CAST(substr(sold.slot_uid, 11) AS INTEGER)
-                      ) AS seats_left
-               FROM sold
-             )
-             SELECT
-               COALESCE(SUM(sold),0) AS sold_sum,
-               COALESCE(SUM(sold + seats_left),0) AS cap_sum
-             FROM cap`
-          )
-          .get();
-
-        const soldSum = Number(row?.sold_sum || 0);
-        const capSum = Number(row?.cap_sum || 0);
-        if (capSum > 0) {
-          fillPercent = Math.max(0, Math.min(100, Math.round((soldSum / capSum) * 100)));
-        }
-      }
-    } catch {
-      // ignore, keep 0
-    }
+    const fillPercent = getFillPercent(totals.tickets, totals.capacity);
+    const totalRevenue = Number(totals.revenue || 0);
+    const boatsWithShare = boats.map((boat) => ({
+      ...boat,
+      sharePercent: totalRevenue > 0 ? roundPercent((Number(boat.revenue || 0) / totalRevenue) * 100) : null,
+    }));
 
     return res.json({
       ok: true,
@@ -3584,7 +4489,7 @@ router.get('/boats', (req, res) => {
         preset,
         range: preset === 'all' ? null : { from: null, to: null },
         totals: { ...totals, fillPercent },
-        boats,
+        boats: boatsWithShare,
       },
       meta: { warnings },
     });
@@ -3600,7 +4505,7 @@ router.get('/boats', (req, res) => {
 router.get('/sellers/list', (req, res) => {
   try {
     // Get all sellers with their zone assignment
-    const rows = db.prepare(`
+    let rows = db.prepare(`
       SELECT id, username, is_active, zone
       FROM users
       WHERE role = 'seller'
@@ -3641,11 +4546,9 @@ router.get('/sellers', (req, res) => {
     const warnings = [];
     
     // Диапазон дат
-    let fromExpr, toExpr;
-    if (preset === 'all') {
-      fromExpr = "DATE('1970-01-01')";
-      toExpr = "DATE('now','localtime')";
-    } else {
+    let fromExpr = null;
+    let toExpr = null;
+    if (preset !== 'all') {
       const r = presetRange(preset);
       fromExpr = r.from;
       toExpr = r.to;
@@ -3654,7 +4557,7 @@ router.get('/sellers', (req, res) => {
     // Основной запрос: агрегация по seller_id
     // PAID = SELLER_SHIFT с типами SALE_*
     // PENDING = EXPECT_PAYMENT
-    const rows = db.prepare(`
+    let rows = db.prepare(`
       SELECT
         u.id AS seller_id,
         u.username AS seller_name,
@@ -3704,19 +4607,177 @@ router.get('/sellers', (req, res) => {
     `).all();
     
     // Обработка результатов
-    const items = (rows || []).map(r => {
-      const revenuePaid = Math.max(0, Number(r.revenue_paid_raw || 0) - Number(r.refunds_raw || 0));
-      const revenuePending = Number(r.revenue_pending_raw || 0);
-      const revenueForecast = revenuePaid + revenuePending;
+    const tripDayExpr = getTripDayExpr();
+    const seatsCol = pickFirstExisting('presales', ['number_of_seats', 'qty', 'seats'], 'number_of_seats');
+    const generatedTripDayExpr = hasColumn('generated_slots', 'trip_date') ? 'gs.trip_date' : 'NULL';
+    const boatSlotTripDayExpr = hasColumn('boat_slots', 'trip_date') ? 'bs.trip_date' : 'NULL';
+    const resolvedTripDayExpr = `COALESCE(${generatedTripDayExpr}, ${boatSlotTripDayExpr}, ${tripDayExpr})`;
+    const resolvedTripRange = fromExpr && toExpr ? `AND ${resolvedTripDayExpr} BETWEEN ${fromExpr} AND ${toExpr}` : '';
+    const paidAmountExpr = `CAST(MAX(
+      COALESCE(p.prepayment_amount, 0),
+      COALESCE(p.payment_cash_amount, 0) + COALESCE(p.payment_card_amount, 0),
+      0
+    ) AS INTEGER)`;
+    const scopedPresalesCteSql = `WITH scoped_presales AS (
+      SELECT
+        p.id AS presale_id,
+        p.seller_id AS seller_id,
+        COALESCE(u.username, 'Seller ' || p.seller_id) AS seller_name,
+        COALESCE(
+          p.slot_uid,
+          CASE
+            WHEN p.boat_slot_id IS NOT NULL THEN 'boat_slot:' || p.boat_slot_id
+            ELSE 'presale:' || p.id
+          END
+        ) AS trip_key,
+        ${resolvedTripDayExpr} AS trip_date,
+        CAST(COALESCE(p.${seatsCol}, 0) AS INTEGER) AS presale_tickets,
+        CAST(COALESCE(p.total_price, 0) AS INTEGER) AS presale_revenue,
+        ${paidAmountExpr} AS paid_amount_raw
+      FROM presales p
+      LEFT JOIN users u ON u.id = p.seller_id
+      LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+      LEFT JOIN generated_slots gs
+        ON p.slot_uid LIKE 'generated:%'
+       AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER)
+      WHERE p.status='ACTIVE'
+        AND p.seller_id IS NOT NULL
+        AND p.seller_id > 0
+        ${resolvedTripRange}
+    )`;
+    const sourceRowsCteSql = `${scopedPresalesCteSql},
+      ticket_rows AS (
+        SELECT
+          sp.presale_id AS presale_id,
+          sp.seller_id AS seller_id,
+          sp.seller_name AS seller_name,
+          sp.trip_key AS trip_key,
+          sp.trip_date AS trip_date,
+          CAST(COALESCE(t.price, 0) AS INTEGER) AS revenue,
+          1 AS tickets
+        FROM scoped_presales sp
+        JOIN tickets t ON t.presale_id = sp.presale_id
+        WHERE t.status='ACTIVE'
+      ),
+      presale_fallback_rows AS (
+        SELECT
+          sp.presale_id AS presale_id,
+          sp.seller_id AS seller_id,
+          sp.seller_name AS seller_name,
+          sp.trip_key AS trip_key,
+          sp.trip_date AS trip_date,
+          sp.presale_revenue AS revenue,
+          sp.presale_tickets AS tickets
+        FROM scoped_presales sp
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM tickets t
+          WHERE t.presale_id = sp.presale_id
+        )
+      ),
+      source_rows AS (
+        SELECT * FROM ticket_rows
+        UNION ALL
+        SELECT * FROM presale_fallback_rows
+      ),
+      presale_metrics AS (
+        SELECT
+          sp.presale_id AS presale_id,
+          sp.seller_id AS seller_id,
+          sp.seller_name AS seller_name,
+          sp.trip_key AS trip_key,
+          sp.trip_date AS trip_date,
+          COALESCE(SUM(sr.revenue), 0) AS revenue_forecast,
+          COALESCE(SUM(sr.tickets), 0) AS tickets_total,
+          MIN(sp.paid_amount_raw) AS paid_amount_raw
+        FROM scoped_presales sp
+        LEFT JOIN source_rows sr ON sr.presale_id = sp.presale_id
+        GROUP BY sp.presale_id, sp.seller_id, sp.seller_name, sp.trip_key, sp.trip_date
+      ),
+      seller_metrics AS (
+        SELECT
+          seller_id,
+          seller_name,
+          COALESCE(SUM(revenue_forecast), 0) AS revenue_forecast,
+          COALESCE(SUM(
+            CASE
+              WHEN paid_amount_raw < 0 THEN 0
+              WHEN paid_amount_raw > revenue_forecast THEN revenue_forecast
+              ELSE paid_amount_raw
+            END
+          ), 0) AS revenue_paid,
+          COALESCE(SUM(
+            CASE
+              WHEN revenue_forecast - CASE
+                WHEN paid_amount_raw < 0 THEN 0
+                WHEN paid_amount_raw > revenue_forecast THEN revenue_forecast
+                ELSE paid_amount_raw
+              END > 0
+              THEN revenue_forecast - CASE
+                WHEN paid_amount_raw < 0 THEN 0
+                WHEN paid_amount_raw > revenue_forecast THEN revenue_forecast
+                ELSE paid_amount_raw
+              END
+              ELSE 0
+            END
+          ), 0) AS revenue_pending,
+          COALESCE(SUM(tickets_total), 0) AS tickets_total,
+          COALESCE(SUM(
+            CASE
+              WHEN revenue_forecast > 0 AND revenue_forecast - CASE
+                WHEN paid_amount_raw < 0 THEN 0
+                WHEN paid_amount_raw > revenue_forecast THEN revenue_forecast
+                ELSE paid_amount_raw
+              END <= 0
+              THEN tickets_total
+              ELSE 0
+            END
+          ), 0) AS tickets_paid,
+          COALESCE(SUM(
+            CASE
+              WHEN revenue_forecast - CASE
+                WHEN paid_amount_raw < 0 THEN 0
+                WHEN paid_amount_raw > revenue_forecast THEN revenue_forecast
+                ELSE paid_amount_raw
+              END > 0
+              THEN tickets_total
+              ELSE 0
+            END
+          ), 0) AS tickets_pending,
+          COUNT(DISTINCT trip_date) AS shifts_count
+        FROM presale_metrics
+        GROUP BY seller_id, seller_name
+      )`;
+    rows = db.prepare(`
+      ${sourceRowsCteSql}
+      SELECT
+        seller_id,
+        seller_name,
+        revenue_paid,
+        revenue_pending,
+        revenue_forecast,
+        tickets_paid,
+        tickets_pending,
+        tickets_total,
+        shifts_count
+      FROM seller_metrics
+      WHERE revenue_forecast > 0 OR tickets_total > 0
+      ORDER BY revenue_forecast DESC, revenue_paid DESC, tickets_total DESC, seller_id ASC
+    `).all();
+
+    const items = (rows || []).map((r) => {
+      const revenuePaid = Number(r.revenue_paid || 0);
+      const revenuePending = Number(r.revenue_pending || 0);
+      const revenueForecast = Number(r.revenue_forecast || 0);
       
-      const ticketsPaid = Number(r.tickets_paid_raw || 0);
-      const ticketsPending = Number(r.tickets_pending_raw || 0);
-      const ticketsTotal = ticketsPaid + ticketsPending;
+      const ticketsPaid = Number(r.tickets_paid || 0);
+      const ticketsPending = Number(r.tickets_pending || 0);
+      const ticketsTotal = Number(r.tickets_total || 0);
       
-      const shiftsCount = Number(r.shifts_count_raw || 0);
+      const shiftsCount = Number(r.shifts_count || 0);
       
       // Средний чек (только если есть tickets_paid)
-      const avgCheckPaid = ticketsPaid > 0 ? Math.round(revenuePaid / ticketsPaid) : null;
+      const avgCheckPaid = ticketsTotal > 0 ? Math.round((revenueForecast / ticketsTotal) * 10) / 10 : null;
       
       return {
         seller_id: Number(r.seller_id),
@@ -3747,12 +4808,12 @@ router.get('/sellers', (req, res) => {
     }, { revenue_paid: 0, revenue_pending: 0, revenue_forecast: 0 });
     
     // Добавляем revenue_per_shift и share_percent
-    const totalRevenuePaid = totals.revenue_paid || 0;
+    const totalRevenueForecast = totals.revenue_forecast || 0;
     items.forEach(item => {
       // Выручка на смену
-      item.revenue_per_shift = item.shifts_count > 0 ? Math.round(item.revenue_paid / item.shifts_count) : null;
+      item.revenue_per_shift = item.shifts_count > 0 ? Math.round(item.revenue_forecast / item.shifts_count) : null;
       // Доля в общей выручке (0..1)
-      item.share_percent = totalRevenuePaid > 0 ? Math.round((item.revenue_paid / totalRevenuePaid) * 1000) / 1000 : null;
+      item.share_percent = totalRevenueForecast > 0 ? Math.round((item.revenue_forecast / totalRevenueForecast) * 1000) / 1000 : null;
     });
     
     return res.json({
@@ -4301,6 +5362,7 @@ function clampMin(v, min) {
 }
 
 const SEASON_MMDD_REGEX = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+const CANONICAL_SEASON_BOUNDARY_YEAR = '2026';
 
 function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key);
@@ -4317,6 +5379,14 @@ function normalizeSeasonMmddValue(raw, fieldName) {
   if (!value) return '';
   if (!SEASON_MMDD_REGEX.test(value)) {
     throw createValidationError(`Поле ${fieldName} должно быть в формате MM-DD (например, 05-01)`);
+  }
+  return value;
+}
+
+function normalizeSeasonPayoutSchemeValue(raw) {
+  const value = String(raw ?? '').trim().toLowerCase();
+  if (!SEASON_PAYOUT_SCHEMES.has(value)) {
+    throw createValidationError('Допустимые значения season_payout_scheme: all, top3, top5');
   }
   return value;
 }
@@ -4344,6 +5414,8 @@ function applySeasonBoundaryFields(body, normalized) {
 
   normalized.season_start_mmdd = start;
   normalized.season_end_mmdd = end;
+  normalized.seasonStart = `${CANONICAL_SEASON_BOUNDARY_YEAR}-${start}`;
+  normalized.seasonEnd = `${CANONICAL_SEASON_BOUNDARY_YEAR}-${end}`;
 }
 
 // Helper: build full normalized settings from input (STRICT: no merge, explicit field mapping)
@@ -4389,7 +5461,14 @@ function buildFullSettings(body, defaults) {
     if (body[k] !== undefined) normalized[k] = String(body[k]);
   });
 
-  // Optional display-only season boundaries (MM-DD). Does not affect season calculations yet.
+  if (body.season_payout_scheme !== undefined) {
+    normalized.season_payout_scheme = normalizeSeasonPayoutSchemeValue(body.season_payout_scheme);
+  }
+  if (body.seasonPayoutScheme !== undefined) {
+    normalized.season_payout_scheme = normalizeSeasonPayoutSchemeValue(body.seasonPayoutScheme);
+  }
+
+  // Optional legacy season boundaries (MM-DD). Season calculations prefer seasonStart/seasonEnd.
   applySeasonBoundaryFields(body, normalized);
   
   // === BOOLEAN FIELDS ===
@@ -4443,16 +5522,7 @@ function buildFullSettings(body, defaults) {
     normalized.season_withhold_percent_total = Number(body.season_withhold_percent_total);
   }
   
-  // Validate: individual_share + team_share = 1 (normalize if needed)
-  const indShare = normalized.individual_share ?? 0.60;
-  const teamShare = normalized.team_share ?? 0.40;
-  if (Math.abs(indShare + teamShare - 1) > 0.01) {
-    const total = indShare + teamShare;
-    if (total > 0) {
-      normalized.individual_share = indShare / total;
-      normalized.team_share = teamShare / total;
-    }
-  }
+  // Keep shares as separate owner settings; do not rewrite one from the other here.
   
   // === COEFFICIENT FIELDS: LEGACY -> FINAL MAPPING ===
   if (body.coefSpeed !== undefined) normalized.k_speed = clampMin(body.coefSpeed, 0.0001);
@@ -4504,6 +5574,7 @@ function addLegacyFields(settings) {
   result.viklifWithholdPercentTotalLegacy = (settings.viklif_withhold_percent_total ?? 0) * 100;
   result.weeklyWithholdPercentTotalLegacy = (settings.weekly_withhold_percent_total ?? 0.008) * 100;
   result.seasonWithholdPercentTotalLegacy = (settings.season_withhold_percent_total ?? 0.005) * 100;
+  result.seasonPayoutScheme = normalizeSeasonPayoutScheme(settings.season_payout_scheme);
 
   // Legacy aliases for weekly/season fund split (% values for UI compatibility)
   result.toWeeklyFundLegacy = (settings.weekly_percent ?? 0.01) * 100;
