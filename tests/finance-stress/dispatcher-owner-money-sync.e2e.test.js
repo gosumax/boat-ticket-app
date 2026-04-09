@@ -43,6 +43,7 @@ let ownerToken;
 let today;
 let tomorrow;
 let dayAfter;
+let paymentDay;
 
 // Slot UIDs
 let todaySlotUid;
@@ -267,8 +268,9 @@ beforeAll(async () => {
   today = seed.today;
   tomorrow = seed.tomorrow;
   dayAfter = seed.dayAfter;
+  paymentDay = seed._realToday;
   
-  console.log('[SETUP] Dates:', { today, tomorrow, dayAfter });
+  console.log('[SETUP] Dates:', { today, tomorrow, dayAfter, paymentDay });
   
   // Generate tokens for dispatcher and seller
   dispatcherToken = generateTestToken(seed.dispatcherId, 'test_dispatcher', 'dispatcher');
@@ -397,7 +399,7 @@ describe('S1-S6: Basic Operations', () => {
     expect(canon.length).toBeGreaterThan(0);
     
     // Verify owner summary - use explicit date range
-    const summaryRes = await getOwnerSummary(today, today);
+    const summaryRes = await getOwnerSummary(paymentDay, paymentDay);
     expect(summaryRes.status).toBe(200);
     const collected = summaryRes.body.data.totals.collected_total;
     expect(collected).toBe(presale.total_price);
@@ -428,9 +430,9 @@ describe('S1-S6: Basic Operations', () => {
     expect(ledger[0].type).toBe('SALE_ACCEPTED_CARD');
     
     // Verify owner summary - use explicit date range
-    const summaryRes = await getOwnerSummary(today, today);
+    const summaryRes = await getOwnerSummary(paymentDay, paymentDay);
     expect(summaryRes.status).toBe(200);
-    expect(summaryRes.body.data.totals.card).toBe(presale.total_price);
+    expect(summaryRes.body.data.totals.collected_card).toBe(presale.total_price);
     
     verifyInvariants('S3: after accept card');
   });
@@ -520,7 +522,7 @@ describe('S1-S6: Basic Operations', () => {
     expect(acceptRes.status).toBe(200);
     
     // Verify owner has collected amount
-    const summaryBefore = await getOwnerSummary(today, today);
+    const summaryBefore = await getOwnerSummary(paymentDay, paymentDay);
     const collectedBefore = summaryBefore.body.data.totals.collected_total;
     expect(collectedBefore).toBeGreaterThan(0);
     
@@ -548,7 +550,7 @@ describe('S1-S6: Basic Operations', () => {
     // Verify owner summary shows refund
     // Note: collected_total stays the same (doesn't include reverses)
     // But refund_total and net_total reflect the refund
-    const summaryAfter = await getOwnerSummary(today, today);
+    const summaryAfter = await getOwnerSummary(paymentDay, paymentDay);
     const totalsAfter = summaryAfter.body.data.totals;
     
     // Verify refund is tracked
@@ -890,7 +892,7 @@ describe('Инварианты I1-I6 (Cross-cutting)', () => {
     `).get();
     
     // Get owner summary with explicit dates
-    const summaryRes = await getOwnerSummary(today, today);
+    const summaryRes = await getOwnerSummary(paymentDay, paymentDay);
     
     expect(summaryRes.body.data.totals.collected_total).toBe(Number(ledger.total));
   });

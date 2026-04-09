@@ -1,5 +1,13 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import {
+  SellerHeroPanel,
+  SellerScreen,
+  SellerSurface,
+  SellerTopbar,
+  sellerContentClass,
+  sellerHelperTextClass,
+} from '../components/seller/sellerUi';
 
 const SellerMedia = () => {
   const navigate = useNavigate();
@@ -11,32 +19,26 @@ const SellerMedia = () => {
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-blue-600 text-white p-4 flex justify-between items-center shadow-md">
-        <button 
-          onClick={() => navigate(-1)}
-          className="text-white hover:text-blue-200 transition-colors"
-        >
-          ← Назад
-        </button>
-        <h1 className="text-xl font-bold">Фото|видео</h1>
-        <button 
-          onClick={handleLogout}
-          className="bg-blue-700 hover:bg-blue-800 text-white px-3 py-1 rounded font-medium transition-colors"
-        >
-          Выйти
-        </button>
-      </div>
+    <SellerScreen>
+      <SellerTopbar title="Фото|видео" subtitle="Материалы" onBack={() => navigate('/seller/home')} onLogout={handleLogout} />
 
-      {/* Content */}
-      <div className="flex-1 p-4 flex items-center justify-center">
-        <div className="text-center">
-          <h2 className="text-2xl font-bold text-gray-800 mb-4">Фото|видео</h2>
-          <p className="text-gray-600">Страница в разработке</p>
-        </div>
+      <div className={`${sellerContentClass} space-y-3`}>
+        <SellerHeroPanel>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-200">Материалы</div>
+          <div className="mt-3 text-[34px] font-semibold leading-none tracking-[-0.04em] text-white">Фото и видео</div>
+          <p className="mt-3 max-w-md text-sm leading-6 text-slate-200">
+            Здесь будут собраны материалы для работы и показа клиентам.
+          </p>
+        </SellerHeroPanel>
+
+        <SellerSurface>
+          <h2 className="text-lg font-semibold text-slate-900">Материалы скоро появятся</h2>
+          <p className={`mt-2 ${sellerHelperTextClass}`}>
+            Раздел наполняется. Чуть позже здесь появятся фото и видео.
+          </p>
+        </SellerSurface>
       </div>
-    </div>
+    </SellerScreen>
   );
 };
 

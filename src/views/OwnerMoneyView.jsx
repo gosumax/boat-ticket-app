@@ -59,12 +59,11 @@ async function ownerGet(url) {
 }
 
 export default function OwnerMoneyView() {
-  const { refreshAllMoneyData, registerRefreshCallback } = useOwnerData();
+  const { registerRefreshCallback } = useOwnerData();
   
   const [preset, setPreset] = useState("today");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const [money, setMoney] = useState({
     preset: "today",
@@ -98,39 +97,23 @@ export default function OwnerMoneyView() {
     }
   }, [preset]);
 
-  // Manual refresh handler (force refresh all money data)
-  const onManualRefresh = useCallback(async () => {
-    if (isRefreshing) return;
-    setIsRefreshing(true);
-    setBusy(true);
-    try {
-      await reload({ silent: true });
-      await refreshAllMoneyData({ silent: false, reason: 'manual-click' });
-    } finally {
-      setIsRefreshing(false);
-      setBusy(false);
-    }
-  }, [isRefreshing, reload, refreshAllMoneyData]);
-
   // Initial load
   useEffect(() => {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset]);
 
-  // Auto-polling for today only (20s), skip during manual refresh
+  // Auto-polling for today only (20s)
   useEffect(() => {
     if (preset !== "today") return;
-    if (isRefreshing) return;
 
     const poll = async () => {
-      if (isRefreshing) return;
       await reload({ silent: true });
     };
 
     const t = setInterval(poll, 20000);
     return () => clearInterval(t);
-  }, [preset, isRefreshing, reload]);
+  }, [preset, reload]);
 
   // Auto refresh on focus/visibility (no polling spam)
   useEffect(() => {
@@ -380,22 +363,11 @@ export default function OwnerMoneyView() {
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <div className="text-xl font-extrabold tracking-tight">Деньги</div>
-        <div className="flex items-center gap-2">
-          {manualOn && (
-            <div className="text-[11px] px-2 py-1 rounded-full border border-amber-500/50 text-amber-300 bg-amber-900/20">
-              manual
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={onManualRefresh}
-            className="rounded-2xl border border-neutral-800 bg-neutral-950/40 hover:bg-neutral-900/40 px-3 py-2 text-xs"
-            disabled={isRefreshing || busy}
-            title="Обновить"
-          >
-            {isRefreshing ? "Обновление..." : busy ? "..." : "Обновить"}
-          </button>
-        </div>
+        {manualOn && (
+          <div className="text-[11px] px-2 py-1 rounded-full border border-amber-500/50 text-amber-300 bg-amber-900/20">
+            manual
+          </div>
+        )}
       </div>
 
       <div className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-2 mb-2">

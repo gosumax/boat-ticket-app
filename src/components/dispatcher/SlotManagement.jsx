@@ -2,7 +2,10 @@ import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import apiClient from '../../utils/apiClient';
 import ConfirmCancelTripModal from './ConfirmCancelTripModal';
+import { dpAlert, dpButton, dpPill } from './dispatcherTheme';
 import ScheduleTemplates from './ScheduleTemplates';
+import DateFieldPicker from '../ui/DateFieldPicker';
+import TimeFieldPicker, { DISPATCHER_TIME_OPTIONS } from '../ui/TimeFieldPicker';
 
 import { normalizeDate, getTodayDate, getTomorrowDate } from '../../utils/dateUtils';
 
@@ -16,11 +19,13 @@ function formatDurationMinutes(minutes) {
   return `${m} мин`;
 }
 
-const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter, searchTerm, onTripCountsChange, shiftClosed }) => {
+const SlotManagement = ({ onTripCancelled, dateFilter, dateFrom, dateTo, typeFilter, statusFilter, searchTerm, onTripCountsChange, shiftClosed, onDateRangeChange }) => {
   // Add state for tabs
   const [activeTab, setActiveTab] = useState('slots'); // 'slots' or 'schedule'
 
   const { currentUser } = useAuth();
+  const defaultTripDate = useMemo(() => normalizeDate(dateFrom) || getTodayDate(), [dateFrom]);
+  const timeOptions = DISPATCHER_TIME_OPTIONS;
   const [slots, setSlots] = useState([]);
   const [boats, setBoats] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -35,6 +40,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
 
   // Trip form state
   const [formData, setFormData] = useState({
+    trip_date: defaultTripDate,
     boat_id: '',
     time: '',
     price_adult: '',
@@ -45,18 +51,6 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
     active: 1
   });
   
-  // Generate time options from 08:00 to 21:00 in 30-minute intervals
-  const timeOptions = useMemo(() => {
-    const options = [];
-    for (let hour = 8; hour <= 21; hour++) {
-      options.push(`${hour.toString().padStart(2, '0')}:00`);
-      if (hour < 21) { // Don't add 21:30 since we want to stop at 21:00
-        options.push(`${hour.toString().padStart(2, '0')}:30`);
-      }
-    }
-    return options;
-  }, []);
-  
   // Confirmation dialog state
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [slotToCancel, setSlotToCancel] = useState(null);
@@ -65,34 +59,30 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [slotToDelete, setSlotToDelete] = useState(null);
   
-  // State for time tooltip visibility
-  const [showTimeTooltip, setShowTimeTooltip] = useState(false);
-  
   // Filter slots based on props from parent
   const filteredSlots = useMemo(() => {
     let result = slots;
+    const normalizedDateFrom = normalizeDate(dateFrom);
+    const normalizedDateTo = normalizeDate(dateTo) || normalizedDateFrom;
     
-    // Date filter - regular slots don't have date fields, only time
-    if (dateFilter !== 'all') {
+    if (normalizedDateFrom && normalizedDateTo) {
+      result = result.filter(slot => {
+        const slotDate = normalizeDate(slot.trip_date);
+        if (!slotDate) return slot.source_type !== 'generated';
+        return slotDate >= normalizedDateFrom && slotDate <= normalizedDateTo;
+      });
+    } else if (dateFilter !== 'all') {
       if (dateFilter === 'today') {
-        const today = new Date().toISOString().split('T')[0];
+        const today = getTodayDate();
         result = result.filter(slot => {
-          // For generated slots, check trip_date field
-          if (slot.source_type === 'generated' && slot.trip_date) {
-            return slot.trip_date === today;
-          }
-          // For manual slots, we can't filter by date, so include them
-          return true;
+          const slotDate = normalizeDate(slot.trip_date);
+          return slotDate ? slotDate === today : slot.source_type !== 'generated';
         });
       } else if (dateFilter === 'tomorrow') {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const tomorrowStr = tomorrow.toISOString().split('T')[0];
+        const tomorrowStr = getTomorrowDate();
         result = result.filter(slot => {
-          if (slot.source_type === 'generated' && slot.trip_date) {
-            return slot.trip_date === tomorrowStr;
-          }
-          return true;
+          const slotDate = normalizeDate(slot.trip_date);
+          return slotDate ? slotDate === tomorrowStr : slot.source_type !== 'generated';
         });
       }
     }
@@ -144,7 +134,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
     }
     
     return result;
-  }, [slots, dateFilter, typeFilter, statusFilter, searchTerm]);
+  }, [slots, dateFilter, dateFrom, dateTo, typeFilter, statusFilter, searchTerm]);
   
   const totalSlots = slots.length;
   const shownSlots = filteredSlots.length;
@@ -161,7 +151,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
     loadSlotsAndBoats();
   }, []);
 
-  const loadSlotsAndBoats = async () => {
+  const loadSlotsAndBoats = async ({ throwOnError = false } = {}) => {
     setLoading(true);
     try {
       const [slotsData, boatsData] = await Promise.all([
@@ -170,8 +160,13 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
       ]);
       setSlots(slotsData);
       setBoats(boatsData);
+      return { slotsData, boatsData };
     } catch (error) {
       console.error('Error loading data:', error);
+      if (throwOnError) {
+        throw error;
+      }
+      return null;
     } finally {
       setLoading(false);
     }
@@ -200,6 +195,18 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
         ...prev,
         [name]: value
       }));
+    }
+  };
+
+  const handleTripDateChange = (nextValue) => {
+    const tripDate = normalizeDate(nextValue) || nextValue;
+    setFormData(prev => ({
+      ...prev,
+      trip_date: tripDate
+    }));
+
+    if (!editingSlot && tripDate && typeof onDateRangeChange === 'function') {
+      onDateRangeChange({ from: tripDate, to: tripDate });
     }
   };
 
@@ -238,7 +245,6 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
         setFormError('Все поля обязательны для заполнения');
         return;
       }
-      
       // Validate per-ticket-category prices
       if (priceAdult === null || priceAdult <= 0) {
         setFormError('Некорректная цена для взрослых');
@@ -263,8 +269,12 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
       }
     } else {
       // For creating, all fields including boat_id are required
-      if (!formData.boat_id || !formData.time || !formData.capacity || !formData.duration_minutes) {
+      if (!formData.trip_date || !formData.boat_id || !formData.time || !formData.capacity || !formData.duration_minutes) {
         setFormError('Все поля обязательны для заполнения');
+        return;
+      }
+      if (!normalizeDate(formData.trip_date)) {
+        setFormError('Выберите дату рейса');
         return;
       }
       
@@ -324,28 +334,41 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
         // Update existing slot (only time, capacity, duration_minutes, and prices - not boat or active)
         const updatedSlot = await apiClient.updateDispatcherSlot(editingSlot.id, payload);
         setSlots(prev => prev.map(slot => slot.id === updatedSlot.id ? updatedSlot : slot));
+        await loadSlotsAndBoats({ throwOnError: true });
         setSuccessMessage('Рейс обновлён');
       } else {
         // Create new slot
         const createPayload = {
           ...payload,
+          trip_date: normalizeDate(formData.trip_date),
           boat_id: parseInt(formData.boat_id),
           active: parseInt(formData.active)
         };
         
 
         const newSlot = await apiClient.createDispatcherSlot(createPayload);
-        setSlots(prev => [...prev, newSlot]);
+        const refreshedData = await loadSlotsAndBoats({ throwOnError: true });
+        const refreshedSlots = refreshedData?.slotsData || [];
+        const createdSlotUid = newSlot?.slot_uid || newSlot?.slotUid || (newSlot?.id ? `manual:${newSlot.id}` : null);
+        const createdTripDate = normalizeDate(formData.trip_date);
+        const createdVisible = refreshedSlots.some(slot => {
+          const matchesCreatedSlot = createdSlotUid
+            ? (slot.slot_uid === createdSlotUid || slot.slotUid === createdSlotUid)
+            : Number(slot.id) === Number(newSlot?.id) && slot.source_type === 'manual';
+          return matchesCreatedSlot && normalizeDate(slot.trip_date) === createdTripDate;
+        });
+
+        if (!createdVisible) {
+          throw new Error('Рейс создан, но не найден в списке выбранной даты');
+        }
+
         setSuccessMessage('Рейс создан');
       }
       
       // Reset form
-      setFormData({ boat_id: '', time: '', price_adult: '', price_teen: '', price_child: '', capacity: '', active: 1 });
+      setFormData({ trip_date: defaultTripDate, boat_id: '', time: '', price_adult: '', price_teen: '', price_child: '', capacity: '', duration_minutes: '', active: 1 });
       setShowForm(false);
       setEditingSlot(null);
-      
-      // Refresh the list
-      loadSlotsAndBoats();
     } catch (error) {
       console.error('[CREATE_SLOT_ERROR] Full error:', error);
       const serverMessage = error.responseBody?.error || error.message;
@@ -356,6 +379,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
   const handleEdit = (slot) => {
     setEditingSlot(slot);
     setFormData({
+      trip_date: normalizeDate(slot.trip_date) || defaultTripDate,
       boat_id: slot.boat_id.toString(),
       time: slot.time,
       price_adult: slot.price_adult ? slot.price_adult.toString() : '',
@@ -466,7 +490,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
 
   const handleCreateNew = () => {
     setEditingSlot(null);
-    setFormData({ boat_id: '', time: '', price_adult: '', price_teen: '', price_child: '', capacity: '', active: 1 });
+    setFormData({ trip_date: defaultTripDate, boat_id: '', time: '', price_adult: '', price_teen: '', price_child: '', capacity: '', duration_minutes: '', active: 1 });
     setShowForm(true);
   };
 
@@ -474,7 +498,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
   const resetForm = () => {
     setShowForm(false);
     setEditingSlot(null);
-    setFormData({ boat_id: '', time: '', price_adult: '', price_teen: '', price_child: '', capacity: '', duration_minutes: '', active: 1 });
+    setFormData({ trip_date: defaultTripDate, boat_id: '', time: '', price_adult: '', price_teen: '', price_child: '', capacity: '', duration_minutes: '', active: 1 });
     setFormError('');
   };
 
@@ -507,31 +531,41 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
       onTripCancelled();
     }
   };
+
+  const formPanelClass = 'dp-panel mb-6';
+  const formTitleClass = 'dp-section-title mb-4';
+  const fieldLabelClass = 'mb-1 block text-sm font-medium text-neutral-200';
+  const miniLabelClass = 'mb-1 block text-xs text-neutral-400';
+  const fieldClass =
+    'w-full px-4 py-3 text-sm';
+  const readOnlyFieldClass = 'rounded-[18px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-neutral-100';
+  const checkboxClass =
+    'h-4 w-4 rounded border-white/10 bg-[#07101d] text-blue-500 focus:ring-2 focus:ring-blue-500/30 focus:ring-offset-0';
   
 
 
   return (
     <>
       {/* Tab Navigation */}
-      <div className="border-b border-neutral-800 mb-4">
-        <nav className="flex space-x-8">
+      <div className="mb-4">
+        <nav className="dp-segmented">
           <button
             onClick={() => setActiveTab('slots')}
-            className={`pb-3 px-1 border-b-2 font-semibold text-sm transition-colors ${
-              activeTab === 'slots'
-                ? 'border-purple-500 text-purple-400'
-                : 'border-transparent text-neutral-400 hover:text-neutral-200'
-            }`}
+            className={dpButton({
+              variant: activeTab === 'slots' ? 'primary' : 'ghost',
+              active: activeTab === 'slots',
+              size: 'sm',
+            })}
           >
             Рейсы (даты)
           </button>
           <button
             onClick={() => setActiveTab('schedule')}
-            className={`pb-3 px-1 border-b-2 font-semibold text-sm transition-colors ${
-              activeTab === 'schedule'
-                ? 'border-purple-500 text-purple-400'
-                : 'border-transparent text-neutral-400 hover:text-neutral-200'
-            }`}
+            className={dpButton({
+              variant: activeTab === 'schedule' ? 'primary' : 'ghost',
+              active: activeTab === 'schedule',
+              size: 'sm',
+            })}
           >
             Расписание (шаблоны)
           </button>
@@ -543,21 +577,21 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
       {activeTab === 'slots' && (
         <div className="mt-6">
           {formError && (
-            <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg">
+            <div className={dpAlert('danger', 'mb-4')}>
               {formError}
             </div>
           )}
 
           {successMessage && (
-            <div className="mb-4 p-3 bg-green-100 text-green-700 rounded-lg">
+            <div className={dpAlert('success', 'mb-4')}>
               {successMessage}
             </div>
           )}
           
 
           {showForm && (
-            <div className="mb-6 bg-neutral-900 rounded-2xl -md p-3">
-              <h4 className="text-lg font-bold mb-4">
+              <div className={formPanelClass}>
+              <h4 className={formTitleClass}>
                 {editingSlot ? 'Редактировать рейс' : 'Создать новый рейс'}
               </h4>
               
@@ -565,55 +599,40 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                   {editingSlot ? (
                     <>
+                      <div>
+                        <label className={fieldLabelClass}>
+                          Дата рейса
+                        </label>
+                        <div className={readOnlyFieldClass}>
+                          {formData.trip_date || 'Дата не указана'}
+                        </div>
+                      </div>
+
                       {/* Show boat as read-only when editing */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                        <label className={fieldLabelClass}>
                           Лодка
                         </label>
-                        <div className="p-2 border border-gray-300 rounded-lg bg-gray-50">
+                        <div className={readOnlyFieldClass}>
                           {boats.find(b => b.id === parseInt(formData.boat_id))?.name || 'Неизвестная лодка'}
                         </div>
                       </div>
                       
-                      <div className="relative">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Время (ЧЧ:ММ)
-                        </label>
-                        <select
-                          name="time"
-                          value={formData.time}
-                          onChange={handleInputChange}
-                          className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
-                          required
-                          onMouseEnter={() => setShowTimeTooltip(true)}
-                          onMouseLeave={() => setShowTimeTooltip(false)}
-                          onFocus={() => setShowTimeTooltip(true)}
-                          onBlur={() => setShowTimeTooltip(false)}
-                        >
-                          <option value="">Выберите время</option>
-                          {timeOptions.map(time => (
-                            <option key={time} value={time}>{time}</option>
-                          ))}
-                        </select>
-                        
-                        {/* Time selection tooltip */}
-                        {showTimeTooltip && (
-                          <div className="absolute z-10 mt-1 w-48 bg-neutral-900 border border-neutral-800 rounded-lg -lg p-2 -left-4 top-full">
-                            <div className="text-xs font-medium text-gray-700 mb-1">Доступные слоты:</div>
-                            <div className="grid grid-cols-2 gap-1 max-h-40 overflow-y-auto">
-                              {timeOptions.map(time => (
-                                <div key={time} className="text-sm p-1 hover:bg-blue-100 rounded">
-                                  {time}
-                                </div>
-                              ))}
-                            </div>
-                            <div className="text-xs text-gray-500 mt-1 px-1">08:00 - 21:00</div>
-                          </div>
-                        )}
-                      </div>
+                      <TimeFieldPicker
+                        name="time"
+                        label="Время (ЧЧ:ММ)"
+                        value={formData.time}
+                        onChange={(nextValue) => setFormData(prev => ({ ...prev, time: nextValue }))}
+                        options={timeOptions}
+                        className="relative"
+                        triggerClassName={fieldClass}
+                        required
+                        sheetTitle="Выберите время рейса"
+                        sheetDescription="Доступные слоты: 08:00 - 21:00 с шагом 30 минут."
+                      />
                       
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                        <label className={fieldLabelClass}>
                           Вместимость
                         </label>
                         <input
@@ -622,13 +641,13 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                           value={formData.capacity}
                           onChange={handleInputChange}
                           min="1"
-                          className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                          className={fieldClass}
                           required
                         />
                       </div>
                       
                       <div className="col-span-full">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                        <label className={fieldLabelClass}>
                           Цены по категориям
                         </label>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
@@ -640,7 +659,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                               onChange={(e) => handlePriceChange('adult', e.target.value)}
                               min="0"
                               step="0.01"
-                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
+                              className={fieldClass}
                               required
                             />
                           </div>
@@ -653,7 +672,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                                 onChange={(e) => handlePriceChange('teen', e.target.value)}
                                 min="0"
                                 step="0.01"
-                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
+                                className={fieldClass}
                                 required
                               />
                             </div>
@@ -666,7 +685,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                               onChange={(e) => handlePriceChange('child', e.target.value)}
                               min="0"
                               step="0.01"
-                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
+                              className={fieldClass}
                               required
                             />
                           </div>
@@ -674,14 +693,14 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                       </div>
                       
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                        <label className={fieldLabelClass}>
                           Длительность (мин)
                         </label>
                         <select
                           name="duration_minutes"
                           value={formData.duration_minutes}
                           onChange={handleInputChange}
-                          className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                          className={fieldClass}
                           required
                         >
                           <option value="">Выберите длительность</option>
@@ -699,15 +718,29 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                     </>
                   ) : (
                     <>
+                      <DateFieldPicker
+                        label="Дата рейса"
+                        value={formData.trip_date}
+                        onChange={handleTripDateChange}
+                        tone="dark"
+                        size="md"
+                        inputName="trip_date"
+                        triggerClassName={fieldClass}
+                        labelClassName="normal-case tracking-normal text-sm font-medium text-neutral-200"
+                        sheetTitle="Выберите дату рейса"
+                        sheetDescription="Рейс будет создан и показан в списке на выбранную дату."
+                        required
+                      />
+
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                        <label className={fieldLabelClass}>
                           Лодка
                         </label>
                         <select
                           name="boat_id"
                           value={formData.boat_id}
                           onChange={handleInputChange}
-                          className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                          className={fieldClass}
                           required
                         >
                           <option value="">Выберите лодку</option>
@@ -719,45 +752,21 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                         </select>
                       </div>
                       
-                      <div className="relative">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Время (ЧЧ:ММ)
-                        </label>
-                        <select
-                          name="time"
-                          value={formData.time}
-                          onChange={handleInputChange}
-                          className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
-                          required
-                          onMouseEnter={() => setShowTimeTooltip(true)}
-                          onMouseLeave={() => setShowTimeTooltip(false)}
-                          onFocus={() => setShowTimeTooltip(true)}
-                          onBlur={() => setShowTimeTooltip(false)}
-                        >
-                          <option value="">Выберите время</option>
-                          {timeOptions.map(time => (
-                            <option key={time} value={time}>{time}</option>
-                          ))}
-                        </select>
-                        
-                        {/* Time selection tooltip */}
-                        {showTimeTooltip && (
-                          <div className="absolute z-10 mt-1 w-48 bg-neutral-900 border border-neutral-800 rounded-lg -lg p-2 -left-4 top-full">
-                            <div className="text-xs font-medium text-gray-700 mb-1">Доступные слоты:</div>
-                            <div className="grid grid-cols-2 gap-1 max-h-40 overflow-y-auto">
-                              {timeOptions.map(time => (
-                                <div key={time} className="text-sm p-1 hover:bg-blue-100 rounded">
-                                  {time}
-                                </div>
-                              ))}
-                            </div>
-                            <div className="text-xs text-gray-500 mt-1 px-1">08:00 - 21:00</div>
-                          </div>
-                        )}
-                      </div>
+                      <TimeFieldPicker
+                        name="time"
+                        label="Время (ЧЧ:ММ)"
+                        value={formData.time}
+                        onChange={(nextValue) => setFormData(prev => ({ ...prev, time: nextValue }))}
+                        options={timeOptions}
+                        className="relative"
+                        triggerClassName={fieldClass}
+                        required
+                        sheetTitle="Выберите время рейса"
+                        sheetDescription="Доступные слоты: 08:00 - 21:00 с шагом 30 минут."
+                      />
                       
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                        <label className={fieldLabelClass}>
                           Вместимость
                         </label>
                         <input
@@ -766,13 +775,13 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                           value={formData.capacity}
                           onChange={handleInputChange}
                           min="1"
-                          className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                          className={fieldClass}
                           required
                         />
                       </div>
                       
                       <div className="col-span-full">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                        <label className={fieldLabelClass}>
                           Цены по категориям
                         </label>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
@@ -784,7 +793,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                               onChange={(e) => handlePriceChange('adult', e.target.value)}
                               min="0"
                               step="0.01"
-                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
+                              className={fieldClass}
                               required
                             />
                           </div>
@@ -797,7 +806,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                                 onChange={(e) => handlePriceChange('teen', e.target.value)}
                                 min="0"
                                 step="0.01"
-                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
+                                className={fieldClass}
                                 required
                               />
                             </div>
@@ -810,7 +819,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                               onChange={(e) => handlePriceChange('child', e.target.value)}
                               min="0"
                               step="0.01"
-                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
+                              className={fieldClass}
                               required
                             />
                           </div>
@@ -818,14 +827,14 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                       </div>
                       
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                        <label className={fieldLabelClass}>
                           Длительность (мин)
                         </label>
                         <select
                           name="duration_minutes"
                           value={formData.duration_minutes}
                           onChange={handleInputChange}
-                          className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                          className={fieldClass}
                           required
                         >
                           <option value="">Выберите длительность</option>
@@ -852,9 +861,9 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                       id="active"
                       checked={formData.active}
                       onChange={(e) => setFormData(prev => ({ ...prev, active: e.target.checked ? 1 : 0 }))}
-                      className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                      className={checkboxClass}
                     />
-                    <label htmlFor="active" className="ml-2 block text-sm text-gray-700">
+                    <label htmlFor="active" className="ml-2 block text-sm text-neutral-200">
                       Активный
                     </label>
                   </div>
@@ -863,14 +872,14 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                 <div className="flex space-x-3">
                   <button
                     type="submit"
-                    className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-semibold hover:bg-blue-700 active:bg-blue-800 transition-colors"
+                    className={dpButton({ variant: 'primary' })}
                   >
                     {editingSlot ? 'Сохранить' : 'Создать'}
                   </button>
                   <button
                     type="button"
                     onClick={resetForm}
-                    className="bg-neutral-800/60 text-neutral-100 px-4 py-2 rounded-2xl font-semibold hover:bg-neutral-700/60 active:bg-neutral-700 transition-colors"
+                    className={dpButton({ variant: 'ghost' })}
                   >
                     Отмена
                   </button>
@@ -884,13 +893,16 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
           ) : (
             <div className="space-y-3">
               <div className="flex justify-between items-center">
-                <h4 className="font-medium text-gray-700">Все рейсы</h4>
+                <h4 className="font-medium text-neutral-200">Все рейсы</h4>
                 <div className="flex space-x-2">
                   <button
                     onClick={handleCreateNew}
                     disabled={shiftClosed}
                     title={shiftClosed ? 'Смена закрыта — действия запрещены' : ''}
-                    className={`${shiftClosed ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800'} px-4 py-2 rounded-2xl font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed`}
+                    className={dpButton({
+                      variant: shiftClosed ? 'ghost' : 'primary',
+                      disabled: shiftClosed,
+                    })}
                   >
                     Создать рейс
                   </button>
@@ -899,7 +911,10 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                     onClick={handleRemoveTripsForDeletedBoats}
                     disabled={shiftClosed}
                     title={shiftClosed ? 'Смена закрыта — действия запрещены' : 'Удалить все рейсы для удалённых лодок'}
-                    className={`${shiftClosed ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-700 active:bg-red-800'} px-4 py-2 rounded-2xl font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed`}
+                    className={dpButton({
+                      variant: shiftClosed ? 'ghost' : 'danger',
+                      disabled: shiftClosed,
+                    })}
                   >
                     Удалить рейсы для удалённых лодок
                   </button>
@@ -920,11 +935,11 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                 const durationText = durationMin ? formatDurationMinutes(durationMin) : '~1 час';
 
                 return (
-                <div key={slot.slot_uid} className="bg-neutral-900 rounded-2xl -md p-3 flex justify-between items-center">
+                <div key={slot.slot_uid} className="dp-card dp-card--interactive flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                   <div>
                     <div className="font-bold">{slot.boat_name}</div>
                     <div className="text-sm text-neutral-400">
-                      {(slot.source_type === 'generated' && slot.trip_date) ? `${slot.trip_date} • ` : ''}{slot.time} • Длительность: {durationText}
+                      {slot.trip_date ? `${slot.trip_date} • ` : ''}{slot.time} • Длительность: {durationText}
                     </div>
                     <div className="text-sm text-neutral-400">
                       Свободно: <span className="font-bold text-neutral-100">{seatsLeft ?? '—'}</span> • Занято: <span className="font-bold text-neutral-100">{occupiedSeats ?? '—'}</span>{capacity !== null ? ` / ${capacity}` : ''} • {slot.boat_type === 'speed' ? 'Скоростная' : (slot.boat_type === 'banana' ? 'Банан' : 'Прогулочная')}
@@ -933,12 +948,12 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                       ID: {slot.id} • {slot.is_active ? 'Активный' : 'Неактивный'} • {slot.source_type === 'generated' ? 'Сгенерированный' : 'Ручной'}
                     </div>
                     {!slot.boat_is_active && !slot.boat_missing && (
-                      <div className="text-xs text-orange-600 font-medium mt-1">
+                      <div className="mt-2 text-xs font-medium text-amber-300">
                         ⚠️ Недоступен для продажи (лодка неактивна)
                       </div>
                     )}
                     {slot.boat_missing && (
-                      <div className="text-xs text-red-600 font-medium mt-1">
+                      <div className="mt-2 text-xs font-medium text-rose-300">
                         ⚠️ Недоступен для продажи (лодка удалена)
                       </div>
                     )}
@@ -948,7 +963,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                       <button
                         disabled
                         title="Редактирование сгенерированных рейсов недоступно. Измените шаблон."
-                        className="bg-neutral-800/30 text-neutral-500 px-4 py-2 rounded-2xl text-sm font-semibold cursor-not-allowed"
+                        className={dpButton({ variant: 'ghost', disabled: true, size: 'sm' })}
                       >
                         Редактировать
                       </button>
@@ -957,7 +972,11 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                         onClick={() => handleEdit(slot)}
                         disabled={!slot.boat_is_active || slot.boat_missing || shiftClosed}
                         title={shiftClosed ? 'Смена закрыта — действия запрещены' : !slot.boat_is_active && !slot.boat_missing ? 'Редактирование недоступно: лодка неактивна' : slot.boat_missing ? 'Редактирование недоступно: лодка удалена' : ''}
-                        className={`${shiftClosed ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : (!slot.boat_is_active || slot.boat_missing) ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : 'bg-neutral-800/60 text-neutral-100 hover:bg-neutral-700/60 active:bg-neutral-700'} px-4 py-2 rounded-2xl text-sm font-semibold transition-colors`}
+                        className={dpButton({
+                          variant: shiftClosed || !slot.boat_is_active || slot.boat_missing ? 'ghost' : 'secondary',
+                          disabled: shiftClosed || !slot.boat_is_active || slot.boat_missing,
+                          size: 'sm',
+                        })}
                       >
                         Редактировать
                       </button>
@@ -967,7 +986,11 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                         onClick={() => handleCancelTrip(slot)}
                         disabled={!slot.boat_is_active || slot.boat_missing || shiftClosed}
                         title={shiftClosed ? 'Смена закрыта — действия запрещены' : !slot.boat_is_active && !slot.boat_missing ? 'Отмена недоступна: лодка неактивна' : slot.boat_missing ? 'Отмена недоступна: лодка удалена' : ''}
-                        className={`${shiftClosed ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : (!slot.boat_is_active || slot.boat_missing) ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : 'bg-amber-500 text-white hover:bg-amber-600 active:bg-amber-700'} px-4 py-2 rounded-2xl text-sm font-semibold transition-colors`}
+                        className={dpButton({
+                          variant: shiftClosed || !slot.boat_is_active || slot.boat_missing ? 'ghost' : 'warning',
+                          disabled: shiftClosed || !slot.boat_is_active || slot.boat_missing,
+                          size: 'sm',
+                        })}
                       >
                         Отменить рейс
                       </button>
@@ -976,7 +999,11 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                         onClick={() => handleActivate(slot)}
                         disabled={!slot.boat_is_active || slot.boat_missing || shiftClosed}
                         title={shiftClosed ? 'Смена закрыта — действия запрещены' : !slot.boat_is_active && !slot.boat_missing ? 'Активация недоступна: лодка неактивна' : slot.boat_missing ? 'Активация недоступна: лодка удалена' : ''}
-                        className={`${shiftClosed ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : (!slot.boat_is_active || slot.boat_missing) ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700 active:bg-green-800'} px-4 py-2 rounded-2xl text-sm font-semibold transition-colors`}
+                        className={dpButton({
+                          variant: shiftClosed || !slot.boat_is_active || slot.boat_missing ? 'ghost' : 'success',
+                          disabled: shiftClosed || !slot.boat_is_active || slot.boat_missing,
+                          size: 'sm',
+                        })}
                       >
                         Активировать
                       </button>
@@ -985,7 +1012,7 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                       <button
                         disabled
                         title="Удаление сгенерированных рейсов недоступно. Удалите шаблон."
-                        className="bg-neutral-800/30 text-neutral-500 px-4 py-2 rounded-2xl text-sm font-semibold cursor-not-allowed"
+                        className={dpButton({ variant: 'ghost', disabled: true, size: 'sm' })}
                       >
                         Удалить
                       </button>
@@ -994,7 +1021,11 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
                         onClick={() => handleDelete(slot)}
                         disabled={shiftClosed}
                         title={shiftClosed ? 'Смена закрыта — действия запрещены' : ''}
-                        className={`${shiftClosed ? 'bg-neutral-800/30 text-neutral-500 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-700 active:bg-red-800'} px-4 py-2 rounded-2xl text-sm font-semibold transition-colors`}
+                        className={dpButton({
+                          variant: shiftClosed ? 'ghost' : 'danger',
+                          disabled: shiftClosed,
+                          size: 'sm',
+                        })}
                       >
                         Удалить
                       </button>
@@ -1027,26 +1058,28 @@ const SlotManagement = ({ onTripCancelled, dateFilter, typeFilter, statusFilter,
       />
       
       {/* Delete confirmation modal */}
-      <div className={`fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-3 z-50 ${showDeleteDialog ? 'block' : 'hidden'}`}>
-        <div className="bg-neutral-900 rounded-2xl -lg max-w-md w-full p-3">
+      <div className={`dp-overlay z-50 ${showDeleteDialog ? 'block' : 'hidden'}`}>
+        <div className="flex min-h-screen items-center justify-center p-3">
+          <div className="dp-modal-card">
           <h3 className="text-lg font-bold text-neutral-100 mb-2">Подтверждение удаления</h3>
           <p className="text-neutral-400 mb-6">
             Вы уверены, что хотите удалить рейс <span className="font-semibold">{slotToDelete?.boat_name} в {slotToDelete?.time}</span>?<br />
             Это действие нельзя отменить.
           </p>
-          <div className="flex justify-end space-x-3">
+          <div className="mt-5 flex justify-end gap-3">
             <button
               onClick={cancelDeleteSlot}
-              className="bg-neutral-800/60 text-neutral-100 px-4 py-2 rounded-2xl font-semibold hover:bg-neutral-700/60 active:bg-neutral-700 transition-colors"
+              className={dpButton({ variant: 'ghost' })}
             >
               Отмена
             </button>
             <button
               onClick={confirmDeleteSlot}
-              className="bg-red-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-red-700 active:bg-red-800 transition-colors"
+              className={dpButton({ variant: 'danger' })}
             >
               Удалить
             </button>
+          </div>
           </div>
         </div>
       </div>

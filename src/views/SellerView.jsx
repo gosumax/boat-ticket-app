@@ -1,14 +1,20 @@
-import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import SelectBoatType from '../components/seller/SelectBoatType';
 import SelectTrip from '../components/seller/SelectTrip';
 import SelectSeats from '../components/seller/SelectSeats';
 import ConfirmationScreen from '../components/seller/ConfirmationScreen';
 import SalesHistory from '../components/seller/SalesHistory';
-import apiClient from '../utils/apiClient';
+import Toast from '../components/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useOwnerData } from '../contexts/OwnerDataContext';
-import Toast from '../components/Toast';
+import {
+  SellerScreen,
+  SellerStepper,
+  SellerTopbar,
+  sellerContentClass,
+} from '../components/seller/sellerUi';
+import apiClient from '../utils/apiClient';
 
 function todayISO() {
   const d = new Date();
@@ -18,9 +24,7 @@ function todayISO() {
   return `${y}-${m}-${day}`;
 }
 
-
 function isTripSellable(trip, cutoffMinutes = 10) {
-  // Hide trips starting in <= cutoffMinutes or already started.
   try {
     const dateStr = trip?.trip_date;
     const timeStr = trip?.time;
@@ -28,9 +32,22 @@ function isTripSellable(trip, cutoffMinutes = 10) {
     const start = new Date(`${dateStr}T${timeStr}:00`);
     if (Number.isNaN(start.getTime())) return true;
     const cutoffMs = cutoffMinutes * 60 * 1000;
-    return Date.now() < (start.getTime() - cutoffMs);
+    return Date.now() < start.getTime() - cutoffMs;
   } catch {
     return true;
+  }
+}
+
+function getBoatTypeLabel(type) {
+  switch (String(type || '').trim().toLowerCase()) {
+    case 'speed':
+      return 'Скоростной катер';
+    case 'cruise':
+      return 'Прогулка';
+    case 'banana':
+      return 'Банан';
+    default:
+      return 'Новый предзаказ';
   }
 }
 
@@ -40,78 +57,76 @@ const SellerView = () => {
   const { refreshOwnerData } = useOwnerData();
 
   const [currentStep, setCurrentStep] = useState(1);
-
   const [boats, setBoats] = useState([]);
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(false);
-
   const [selectedType, setSelectedType] = useState(null);
   const [selectedTrip, setSelectedTrip] = useState(null);
   const [numberOfSeats, setNumberOfSeats] = useState(1);
-
-  // Date filter for trips (YYYY-MM-DD)
   const [selectedDate, setSelectedDate] = useState(todayISO);
-
-  // Sales history modal/view
   const [showSalesHistory, setShowSalesHistory] = useState(false);
-
-  // Presale / customer
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [prepaymentStr, setPrepaymentStr] = useState('');
   const [ticketInfo, setTicketInfo] = useState(null);
-  
-  // Prepayment payment method (same logic as dispatcher)
-  const [prepaymentMethod, setPrepaymentMethod] = useState(null); // 'cash' | 'card' | 'mixed'
+  const [prepaymentMethod, setPrepaymentMethod] = useState(null);
   const [prepaymentCashStr, setPrepaymentCashStr] = useState('');
   const [prepaymentCardStr, setPrepaymentCardStr] = useState('');
   const [prepaymentMethodError, setPrepaymentMethodError] = useState('');
-
-  // UI toast
   const [toast, setToast] = useState(null);
 
-  // Polling: prevent overlapping requests
   const isLoadingTripsRef = useRef(false);
 
-  const steps = useMemo(() => ([
-    { id: 0, label: 'Продать' },
-    { id: 1, label: 'Тип' },
-    { id: 2, label: 'Рейс' },
-    { id: 3, label: 'Места' },
-    { id: 4, label: 'Подтвердить' },
-  ]), []);
+  const wizardSteps = useMemo(
+    () => [
+      { id: 1, label: 'Тип лодки' },
+      { id: 2, label: 'Рейс' },
+      { id: 3, label: 'Клиент и оплата' },
+      { id: 4, label: 'Готово' },
+    ],
+    [],
+  );
+
+  const headerSubtitle = useMemo(() => {
+    if (currentStep === 1) return 'Выбор типа лодки';
+    if (currentStep === 2) {
+      return selectedType ? getBoatTypeLabel(selectedType) : 'Выбор рейса';
+    }
+    if (currentStep === 3) {
+      if (selectedTrip?.boat_name && selectedTrip?.time) {
+        return `${selectedTrip.boat_name} · ${selectedTrip.time}`;
+      }
+      return 'Клиент, предоплата и способ оплаты';
+    }
+    return 'Оформление продажи';
+  }, [currentStep, selectedTrip, selectedType]);
 
   const handleLogout = () => {
     logout();
     navigate('/login', { replace: true });
   };
 
-  // Back logic: MUST also reset related state so step doesn't "snap back"
   const handleBack = () => {
-    setCurrentStep(prev => {
+    setCurrentStep((prev) => {
       if (prev <= 0) return 0;
 
       if (prev === 1) {
-        // Type -> Sell
         setSelectedType(null);
         return 0;
       }
 
       if (prev === 2) {
-        // Trip -> Type
         setSelectedTrip(null);
         setTrips([]);
         return 1;
       }
 
       if (prev === 3) {
-        // Seats -> Trip
         setNumberOfSeats(1);
         return 2;
       }
 
       if (prev === 4) {
-        // Confirm -> Seats
         return 3;
       }
 
@@ -119,31 +134,39 @@ const SellerView = () => {
     });
   };
 
-  const handleSellTicket = () => {
-    // start flow
-    setSelectedType(null);
-    setSelectedTrip(null);
-    setTrips([]);
-    setNumberOfSeats(1);
-    setCustomerName('');
-    setCustomerPhone('');
-    setTicketInfo(null);
-    setPrepaymentStr('');
-    setPrepaymentMethod(null);
-    setPrepaymentCashStr('');
-    setPrepaymentCardStr('');
-    setPrepaymentMethodError('');
-    setSelectedDate(todayISO());
-    setCurrentStep(1);
+  const handleStepperStepClick = (targetStep) => {
+    const target = Number(targetStep);
+    if (!Number.isFinite(target) || target >= currentStep) return;
+
+    if (target <= 1) {
+      setSelectedTrip(null);
+      setTrips([]);
+      setNumberOfSeats(1);
+      setTicketInfo(null);
+      setCurrentStep(1);
+      return;
+    }
+
+    if (target === 2) {
+      setNumberOfSeats(1);
+      setTicketInfo(null);
+      setCurrentStep(2);
+      return;
+    }
+
+    if (target === 3) {
+      setTicketInfo(null);
+      setCurrentStep(3);
+    }
   };
 
   const handleSelectBoatType = (type) => {
     if (!type) {
-      // back from Type screen
       setSelectedType(null);
       navigate('/seller/home');
       return;
     }
+
     setSelectedType(type);
     setSelectedTrip(null);
     setTrips([]);
@@ -155,11 +178,6 @@ const SellerView = () => {
     setCurrentStep(3);
   };
 
-  const handleSeatsConfirm = (seats) => {
-    setNumberOfSeats(seats);
-    setCurrentStep(4);
-  };
-
   const handleCreatePresale = async (payload) => {
     try {
       setLoading(true);
@@ -167,13 +185,12 @@ const SellerView = () => {
       const presale = res?.presale || res;
       setTicketInfo(presale);
       setToast({ type: 'success', message: 'Предзаказ создан' });
-      
-      // Notify owner dashboard to refresh data after presale creation
+
       try {
         refreshOwnerData();
-      } catch (e) {}
-      
-      // stay on confirmation screen (same step, UI is within step 4 component)
+      } catch {
+        // best-effort refresh only
+      }
     } catch (err) {
       console.error('Create presale error:', err);
       setToast({ type: 'error', message: 'Не удалось создать предзаказ' });
@@ -182,29 +199,26 @@ const SellerView = () => {
     }
   };
 
-  // Load boats (optional, but keep as in your logs)
   useEffect(() => {
     const loadBoats = async () => {
       try {
         const res = await (apiClient.get ? apiClient.get('/boats/active') : Promise.resolve([]));
         const activeBoats = res?.data ?? res;
         setBoats(activeBoats || []);
-      } catch (e) {
-        console.error('Error loading boats:', e);
+      } catch (error) {
+        console.error('Error loading boats:', error);
       }
     };
+
     loadBoats();
   }, []);
 
-  // Load trips whenever type/date changes AND we are on trip step (or later)
-  // Also polls every 5s when on trip selection screen (step 2) to auto-refresh seats
   useEffect(() => {
-    const loadTrips = async (opts = {}) => {
+    const loadTrips = async () => {
       if (!selectedType) return;
       if (currentStep < 2) return;
-      
-      // Prevent overlapping requests
       if (isLoadingTripsRef.current) return;
+
       isLoadingTripsRef.current = true;
 
       try {
@@ -212,13 +226,11 @@ const SellerView = () => {
         const res = await apiClient.getBoatSlotsByType(selectedType);
         const slots = res?.slots || res || [];
         const arr = Array.isArray(slots) ? slots : [];
-        // Filter by selectedDate if backend provides trip_date
-        const byDate = arr.filter(t => !t?.trip_date || t.trip_date === selectedDate);
-        const sellable = byDate.filter(t => isTripSellable(t, 10));
+        const byDate = arr.filter((trip) => !trip?.trip_date || trip.trip_date === selectedDate);
+        const sellable = byDate.filter((trip) => isTripSellable(trip, 10));
         setTrips(sellable);
-      } catch (e) {
-        console.error('Error loading trips:', e);
-        // Keep previous trips on error to avoid flicker
+      } catch (error) {
+        console.error('Error loading trips:', error);
       } finally {
         setLoading(false);
         isLoadingTripsRef.current = false;
@@ -227,7 +239,6 @@ const SellerView = () => {
 
     loadTrips();
 
-    // Polling: refresh every 5s when on trip selection screen
     if (currentStep === 2 && selectedType) {
       const intervalId = setInterval(() => {
         loadTrips();
@@ -237,29 +248,9 @@ const SellerView = () => {
         clearInterval(intervalId);
       };
     }
+
+    return undefined;
   }, [selectedType, selectedDate, currentStep]);
-
-  // Show sales history overlay
-  if (showSalesHistory) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="bg-blue-600 text-white p-4 flex justify-between items-center shadow-md">
-          <div className="w-16"></div>
-          <h1 className="text-xl font-bold">Продавец</h1>
-          <button
-            onClick={handleLogout}
-            className="bg-blue-700 hover:bg-blue-800 text-white px-3 py-1 rounded font-medium transition-colors"
-          >
-            Выйти
-          </button>
-        </div>
-
-        <div className="p-4 max-w-md mx-auto">
-          <SalesHistory onBack={() => setShowSalesHistory(false)} />
-        </div>
-      </div>
-    );
-  }
 
   const renderStep = () => {
     switch (currentStep) {
@@ -270,7 +261,7 @@ const SellerView = () => {
             onSelect={handleSelectBoatType}
             onBack={() => {
               setSelectedType(null);
-              setCurrentStep(0);
+              navigate('/seller/home');
             }}
           />
         );
@@ -293,40 +284,40 @@ const SellerView = () => {
             trip={selectedTrip}
             onBack={handleBack}
             onConfirm={async () => {
-              // Build payload from parent-held state (SelectSeats pushes updates via setters)
               const prepay = Math.max(0, parseInt(prepaymentStr || '0', 10) || 0);
-              
-              // Validate prepayment payment method
+
               if (prepay > 0) {
                 if (!prepaymentMethod) {
                   setPrepaymentMethodError('Выберите способ оплаты предоплаты');
                   return;
                 }
+
                 if (prepaymentMethod === 'mixed') {
                   const cash = Math.round(Number(prepaymentCashStr || 0));
                   const card = Math.round(Number(prepaymentCardStr || 0));
+
                   if (cash + card !== prepay) {
                     setPrepaymentMethodError('Сумма Нал + Карта должна быть равна предоплате');
                     return;
                   }
+
                   if (cash === 0 || card === 0) {
                     setPrepaymentMethodError('Для комбо укажите суммы и для налички, и для карты');
                     return;
                   }
                 }
+
                 setPrepaymentMethodError('');
               }
-              
-              // Build payload
+
               const payload = {
                 slotUid: selectedTrip?.slot_uid,
                 customerName,
                 customerPhone,
                 numberOfSeats,
-                prepaymentAmount: prepay
+                prepaymentAmount: prepay,
               };
-              
-              // Add payment method for prepayment
+
               if (prepay > 0) {
                 if (prepaymentMethod === 'cash') {
                   payload.payment_method = 'CASH';
@@ -340,8 +331,6 @@ const SellerView = () => {
               }
 
               await handleCreatePresale(payload);
-
-              // Success -> go to confirmation
               setCurrentStep(4);
             }}
             numberOfSeats={numberOfSeats}
@@ -360,8 +349,10 @@ const SellerView = () => {
             setPrepaymentCardStr={setPrepaymentCardStr}
             prepaymentMethodError={prepaymentMethodError}
             setPrepaymentMethodError={setPrepaymentMethodError}
+            isSubmitting={loading}
           />
         );
+
       case 4:
         return (
           <ConfirmationScreen
@@ -385,60 +376,79 @@ const SellerView = () => {
             }}
           />
         );
-default:
+
+      default:
         navigate('/seller/home');
         return null;
-}
+    }
   };
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-blue-600 text-white p-4 flex justify-between items-center shadow-md">
-        <div className="w-16"></div>
-        <h1 className="text-xl font-bold">Продавец</h1>
-        <button
-          onClick={handleLogout}
-          className="bg-blue-700 hover:bg-blue-800 text-white px-3 py-1 rounded font-medium transition-colors"
-        >
-          Выйти
-        </button>
-      </div>
+  if (showSalesHistory) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="bg-blue-600 text-white p-4 flex justify-between items-center shadow-md">
+          <div className="w-16" />
+          <h1 className="text-xl font-bold">Продавец</h1>
+          <button
+            onClick={handleLogout}
+            className="bg-blue-700 hover:bg-blue-800 text-white px-3 py-1 rounded font-medium transition-colors"
+          >
+            Выйти
+          </button>
+        </div>
 
-      {/* Stepper */}
-      <div className="bg-white border-b border-gray-200">
-        <div className="max-w-md mx-auto px-4 py-3">
-          <div className="flex justify-between text-xs text-gray-600 mb-2">
-            {steps.map(s => (
-              <div key={s.id} className={currentStep === s.id ? 'text-blue-700 font-semibold' : ''}>
-                {s.label}
-              </div>
-            ))}
-          </div>
-          <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-            <div
-              className="h-2 bg-blue-600 rounded-full transition-all"
-              style={{ width: `${(Math.min(currentStep, 4) / 4) * 100}%` }}
-            />
-          </div>
+        <div className="p-4 max-w-md mx-auto">
+          <SalesHistory onBack={() => setShowSalesHistory(false)} />
         </div>
       </div>
+    );
+  }
 
-      {/* Content */}
-      <div className="p-4 max-w-md mx-auto">
+  if (currentStep === 4) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="bg-blue-600 text-white p-4 flex justify-between items-center shadow-md">
+          <div className="w-16" />
+          <h1 className="text-xl font-bold">Продавец</h1>
+          <button
+            onClick={handleLogout}
+            className="bg-blue-700 hover:bg-blue-800 text-white px-3 py-1 rounded font-medium transition-colors"
+          >
+            Выйти
+          </button>
+        </div>
+
+        <div className="bg-white border-b border-gray-200">
+          <div className="max-w-md mx-auto px-4 py-3">
+            <SellerStepper steps={wizardSteps} currentStep={currentStep} onStepClick={handleStepperStepClick} />
+          </div>
+        </div>
+
+        <div className="p-4 max-w-md mx-auto">
+          {renderStep()}
+        </div>
+
+        {toast ? <Toast type={toast.type} message={toast.message} onClose={() => setToast(null)} /> : null}
+      </div>
+    );
+  }
+
+  return (
+    <SellerScreen>
+      <SellerTopbar
+        title="Продажа билета"
+        subtitle={headerSubtitle}
+        onBack={currentStep <= 1 ? () => navigate('/seller/home') : handleBack}
+        onLogout={handleLogout}
+      />
+
+      <div className={`${sellerContentClass} space-y-3`}>
+        <SellerStepper steps={wizardSteps} currentStep={currentStep} onStepClick={handleStepperStepClick} />
         {renderStep()}
       </div>
 
-      {/* Toast */}
-      {toast && (
-        <Toast
-          type={toast.type}
-          message={toast.message}
-          onClose={() => setToast(null)}
-        />
-      )}
-
-    </div>
+      {toast ? <Toast type={toast.type} message={toast.message} onClose={() => setToast(null)} /> : null}
+    </SellerScreen>
   );
 };
 

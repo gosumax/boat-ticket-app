@@ -62,12 +62,128 @@ const getDayNamesFromMask = (weekdaysMask) => {
   return days.join(', ');
 };
 
+const tableHasColumn = (tableName, columnName) => {
+  return db.prepare(`PRAGMA table_info(${tableName})`).all().some(column => column.name === columnName);
+};
+
+const firstWeekdayFromMask = (weekdaysMask) => {
+  const mask = Number(weekdaysMask) || 0;
+  for (let index = 0; index < 7; index += 1) {
+    if ((mask & (1 << index)) !== 0) {
+      return index + 1;
+    }
+  }
+  return 1;
+};
+
+const getTemplateIdsForItem = (item) => {
+  const ids = [Number(item?.schedule_template_id), Number(item?.id)]
+    .filter(id => Number.isInteger(id) && id > 0);
+  return [...new Set(ids)];
+};
+
+const syncScheduleTemplateFromItem = (item, options = {}) => {
+  if (!item) return null;
+
+  const itemId = Number(item.id);
+  const linkColumnExists = tableHasColumn('schedule_template_items', 'schedule_template_id');
+  const linkedId = Number(item.schedule_template_id);
+  const preferredId = Number.isInteger(linkedId) && linkedId > 0 ? linkedId : itemId;
+  const boatId = options.boatId !== undefined ? options.boatId : item.boat_id;
+  const weekday = options.weekday || firstWeekdayFromMask(item.weekdays_mask);
+  let template = db.prepare('SELECT id FROM schedule_templates WHERE id = ?').get(preferredId);
+  let templateId = template?.id || null;
+
+  if (!templateId) {
+    try {
+      const insertWithId = db.prepare(`
+        INSERT INTO schedule_templates (
+          id, weekday, time, product_type, boat_id, boat_type, capacity,
+          price_adult, price_child, price_teen, duration_minutes, is_active
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      insertWithId.run(
+        preferredId,
+        weekday,
+        item.departure_time,
+        item.type,
+        boatId || null,
+        item.boat_type || item.type || null,
+        item.capacity,
+        item.price_adult,
+        item.price_child,
+        item.price_teen || null,
+        item.duration_minutes,
+        item.is_active
+      );
+      templateId = preferredId;
+    } catch (error) {
+      const insert = db.prepare(`
+        INSERT INTO schedule_templates (
+          weekday, time, product_type, boat_id, boat_type, capacity,
+          price_adult, price_child, price_teen, duration_minutes, is_active
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const result = insert.run(
+        weekday,
+        item.departure_time,
+        item.type,
+        boatId || null,
+        item.boat_type || item.type || null,
+        item.capacity,
+        item.price_adult,
+        item.price_child,
+        item.price_teen || null,
+        item.duration_minutes,
+        item.is_active
+      );
+      templateId = result.lastInsertRowid;
+    }
+  }
+
+  db.prepare(`
+    UPDATE schedule_templates
+    SET weekday = ?,
+        time = ?,
+        product_type = ?,
+        boat_id = ?,
+        boat_type = ?,
+        capacity = ?,
+        price_adult = ?,
+        price_child = ?,
+        price_teen = ?,
+        duration_minutes = ?,
+        is_active = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    weekday,
+    item.departure_time,
+    item.type,
+    boatId || null,
+    item.boat_type || item.type || null,
+    item.capacity,
+    item.price_adult,
+    item.price_child,
+    item.price_teen || null,
+    item.duration_minutes,
+    item.is_active,
+    templateId
+  );
+
+  if (linkColumnExists) {
+    db.prepare('UPDATE schedule_template_items SET schedule_template_id = ? WHERE id = ?').run(templateId, itemId);
+  }
+
+  return templateId;
+};
+
 // Get all schedule template items
 router.get('/schedule-template-items', authenticateToken, canDispatchManageSlots, (req, res) => {
   try {
     const items = db.prepare(`
       SELECT 
-        sti.id, sti.name, sti.boat_id, sti.boat_type, sti.type, sti.departure_time, 
+        sti.id, sti.schedule_template_id, sti.name, sti.boat_id, sti.boat_type, sti.type, sti.departure_time,
         sti.duration_minutes, sti.capacity, sti.price_adult, sti.price_child, sti.price_teen, 
         sti.weekdays_mask, sti.is_active, sti.created_at, sti.updated_at,
         b.name as boat_name
@@ -100,7 +216,7 @@ router.get('/schedule-template-items/:id', authenticateToken, canDispatchManageS
     
     const item = db.prepare(`
       SELECT 
-        sti.id, sti.name, sti.boat_id, sti.boat_type, sti.type, sti.departure_time, 
+        sti.id, sti.schedule_template_id, sti.name, sti.boat_id, sti.boat_type, sti.type, sti.departure_time,
         sti.duration_minutes, sti.capacity, sti.price_adult, sti.price_child, sti.price_teen, 
         sti.weekdays_mask, sti.is_active, sti.created_at, sti.updated_at,
         b.name as boat_name
@@ -264,7 +380,7 @@ router.post('/schedule-template-items', authenticateToken, canDispatchManageSlot
     // Get the created item
     const newItem = db.prepare(`
       SELECT 
-        sti.id, sti.name, sti.boat_id, sti.boat_type, sti.type, sti.departure_time, 
+        sti.id, sti.schedule_template_id, sti.name, sti.boat_id, sti.boat_type, sti.type, sti.departure_time,
         sti.duration_minutes, sti.capacity, sti.price_adult, sti.price_child, sti.price_teen, 
         sti.weekdays_mask, sti.is_active, sti.created_at, sti.updated_at,
         b.name as boat_name
@@ -273,6 +389,8 @@ router.post('/schedule-template-items', authenticateToken, canDispatchManageSlot
       WHERE sti.id = ?
     `).get(result.lastInsertRowid);
     
+    newItem.schedule_template_id = syncScheduleTemplateFromItem(newItem);
+
     // Add formatted weekdays
     newItem.weekdays_formatted = getDayNamesFromMask(newItem.weekdays_mask);
     
@@ -446,7 +564,7 @@ router.patch('/schedule-template-items/:id', authenticateToken, canDispatchManag
     // Get the updated item
     const updatedItem = db.prepare(`
       SELECT 
-        sti.id, sti.name, sti.boat_id, sti.boat_type, sti.type, sti.departure_time, 
+        sti.id, sti.schedule_template_id, sti.name, sti.boat_id, sti.boat_type, sti.type, sti.departure_time,
         sti.duration_minutes, sti.capacity, sti.price_adult, sti.price_child, sti.price_teen, 
         sti.weekdays_mask, sti.is_active, sti.created_at, sti.updated_at,
         b.name as boat_name
@@ -455,6 +573,8 @@ router.patch('/schedule-template-items/:id', authenticateToken, canDispatchManag
       WHERE sti.id = ?
     `).get(itemId);
     
+    updatedItem.schedule_template_id = syncScheduleTemplateFromItem(updatedItem);
+
     // Add formatted weekdays
     updatedItem.weekdays_formatted = getDayNamesFromMask(updatedItem.weekdays_mask);
     
@@ -476,10 +596,12 @@ router.delete('/schedule-template-items/:id', authenticateToken, canDispatchMana
     }
     
     // Check if item exists
-    const item = db.prepare('SELECT id FROM schedule_template_items WHERE id = ?').get(itemId);
+    const item = db.prepare('SELECT id, schedule_template_id FROM schedule_template_items WHERE id = ?').get(itemId);
     if (!item) {
       return res.status(404).json({ ok: false, code: 'NOT_FOUND', message: 'Template item not found' });
     }
+    const templateIds = getTemplateIdsForItem(item);
+    const templateIdPlaceholders = templateIds.map(() => '?').join(', ');
     
     // Accept both current and legacy query flags.
     const deleteFutureTrips =
@@ -489,8 +611,8 @@ router.delete('/schedule-template-items/:id', authenticateToken, canDispatchMana
     
     // Check for any bad trips (with invalid prices/capacity) that depend on this template
     const badTrips = db.prepare(
-      'SELECT COUNT(*) as count FROM generated_slots WHERE schedule_template_id = ? AND (price_adult <= 0 OR capacity <= 0 OR duration_minutes <= 0)'
-    ).get(itemId);
+      `SELECT COUNT(*) as count FROM generated_slots WHERE schedule_template_id IN (${templateIdPlaceholders}) AND (price_adult <= 0 OR capacity <= 0 OR duration_minutes <= 0)`
+    ).get(...templateIds);
     
     if (badTrips.count > 0) {
       return res.status(409).json({ 
@@ -504,8 +626,8 @@ router.delete('/schedule-template-items/:id', authenticateToken, canDispatchMana
       // Delete future trips generated from this template
       // Only delete trips with dates from today onwards
       const today = new Date().toISOString().split('T')[0];
-      const deleteStmt = db.prepare('DELETE FROM generated_slots WHERE schedule_template_id = ? AND trip_date >= ?');
-      deleteResult = deleteStmt.run(itemId, today);
+      const deleteStmt = db.prepare(`DELETE FROM generated_slots WHERE schedule_template_id IN (${templateIdPlaceholders}) AND trip_date >= ?`);
+      deleteResult = deleteStmt.run(...templateIds, today);
       
       console.log(`[SCHEDULE_TEMPLATE_DELETE] Deleted ${deleteResult.changes} future trips for template ${itemId}`);
     } else {
@@ -514,9 +636,9 @@ router.delete('/schedule-template-items/:id', authenticateToken, canDispatchMana
         `SELECT COUNT(*) as count 
          FROM generated_slots gs 
          JOIN tickets t ON gs.id = t.boat_slot_id 
-         WHERE gs.schedule_template_id = ? 
+         WHERE gs.schedule_template_id IN (${templateIdPlaceholders})
          AND t.status IN ('ACTIVE', 'USED')`
-      ).get(itemId);
+      ).get(...templateIds);
       
       if (activeTickets.count > 0) {
         return res.status(409).json({ 
@@ -615,18 +737,48 @@ router.post('/schedule-template-items/generate', authenticateToken, canDispatchM
       const matchingItems = items.filter(item => (item.weekdays_mask & dayBit) !== 0);
       
       for (const item of matchingItems) {
+        const tripDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(d); // Format as YYYY-MM-DD in Moscow timezone
+        const targetBoat = item.boat_id
+          ? { id: Number(item.boat_id), is_active: Number(item.boat_is_active) }
+          : db.prepare('SELECT id, is_active FROM boats WHERE type = ? AND is_active = 1 ORDER BY id LIMIT 1').get(item.type);
+
+        if (!targetBoat?.id) {
+          skippedSlots.push({
+            date: tripDate,
+            time: item.departure_time,
+            boat_id: item.boat_id || null,
+            template_item_id: item.id,
+            reason: 'no_active_boat'
+          });
+          continue;
+        }
+
+        if (Number(targetBoat.is_active) !== 1) {
+          skippedSlots.push({
+            date: tripDate,
+            time: item.departure_time,
+            boat_id: targetBoat.id,
+            template_item_id: item.id,
+            reason: 'boat_inactive'
+          });
+          continue;
+        }
+
+        const targetBoatId = Number(targetBoat.id);
+        const scheduleTemplateId = syncScheduleTemplateFromItem(item, { weekday: dayOfWeek, boatId: targetBoatId });
+        const itemTemplateIds = getTemplateIdsForItem({ ...item, schedule_template_id: scheduleTemplateId });
+
         // Check if a slot already exists for this date and time for the same boat
         // Use Moscow timezone for date calculation
-        const tripDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(d); // Format as YYYY-MM-DD in Moscow timezone
         const existingSlot = db.prepare(`
           SELECT id, schedule_template_id FROM generated_slots 
           WHERE trip_date = ? AND time = ? AND boat_id = ?
-        `).get(tripDate, item.departure_time, item.boat_id);
+        `).get(tripDate, item.departure_time, targetBoatId);
         
         if (existingSlot) {
           // Determine the reason for skipping
           let reason = 'already_exists';
-          if (existingSlot.schedule_template_id === item.id) {
+          if (itemTemplateIds.includes(Number(existingSlot.schedule_template_id))) {
             reason = 'exists_same_template';
           } else if (existingSlot.schedule_template_id === null || existingSlot.schedule_template_id === 0) {
             reason = 'exists_manual_trip'; // Could be a manually created trip
@@ -638,23 +790,10 @@ router.post('/schedule-template-items/generate', authenticateToken, canDispatchM
           skippedSlots.push({
             date: tripDate,
             time: item.departure_time,
-            boat_id: item.boat_id,
+            boat_id: targetBoatId,
             template_item_id: item.id,
             existing_template_id: existingSlot.schedule_template_id,
             reason: reason
-          });
-          continue;
-        }
-        
-        // Check if the boat is active before creating the slot
-        if (!item.boat_is_active || item.boat_is_active === 0) {
-          // Skip creating the slot if the boat is inactive
-          skippedSlots.push({
-            date: tripDate,
-            time: item.departure_time,
-            boat_id: item.boat_id,
-            template_item_id: item.id,
-            reason: 'boat_inactive'
           });
           continue;
         }
@@ -668,9 +807,9 @@ router.post('/schedule-template-items/generate', authenticateToken, canDispatchM
               seller_cutoff_minutes, dispatcher_cutoff_minutes
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
-            item.schedule_template_id, // FK to schedule_templates.id
+            scheduleTemplateId, // FK to schedule_templates.id
             tripDate,
-            item.boat_id,
+            targetBoatId,
             item.departure_time,
             item.capacity,
             item.capacity, // seats_left starts as capacity
@@ -704,12 +843,12 @@ router.post('/schedule-template-items/generate', authenticateToken, canDispatchM
             const existingSlot = db.prepare(`
               SELECT id, schedule_template_id FROM generated_slots 
               WHERE trip_date = ? AND time = ? AND boat_id = ?
-            `).get(tripDate, item.departure_time, item.boat_id);
+            `).get(tripDate, item.departure_time, targetBoatId);
             
             if (existingSlot) {
               // Determine the reason for skipping
               let reason = 'already_exists';
-              if (existingSlot.schedule_template_id === item.id) {
+              if (itemTemplateIds.includes(Number(existingSlot.schedule_template_id))) {
                 reason = 'exists_same_template';
               } else if (existingSlot.schedule_template_id === null || existingSlot.schedule_template_id === 0) {
                 reason = 'exists_manual_trip'; // Could be a manually created trip
@@ -721,7 +860,7 @@ router.post('/schedule-template-items/generate', authenticateToken, canDispatchM
               skippedSlots.push({
                 date: tripDate,
                 time: item.departure_time,
-                boat_id: item.boat_id,
+                boat_id: targetBoatId,
                 template_item_id: item.id,
                 existing_template_id: existingSlot.schedule_template_id,
                 reason: reason
@@ -752,7 +891,8 @@ router.post('/schedule-template-items/generate', authenticateToken, canDispatchM
         exists_same_template: skipReasons.exists_same_template || 0,
         exists_manual_trip: skipReasons.exists_manual_trip || 0,
         exists_other_template: skipReasons.exists_other_template || 0,
-        boat_inactive: skipReasons.boat_inactive || 0
+        boat_inactive: skipReasons.boat_inactive || 0,
+        no_active_boat: skipReasons.no_active_boat || 0
       },
       generated_slots: generatedSlots,
       skipped_slots: skippedSlots

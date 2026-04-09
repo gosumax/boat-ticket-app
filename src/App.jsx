@@ -18,8 +18,6 @@ import DispatcherShiftClose from './views/DispatcherShiftClose';
 import OwnerView from './views/OwnerView';
 import OwnerMoneyView from './views/OwnerMoneyView';
 
-import DebugButton from './components/DebugButton';
-
 // Role redirect
 const RoleHomeRedirect = () => {
   const { currentUser, loadingAuth } = useAuth();
@@ -130,7 +128,6 @@ function App() {
         />
       </Routes>
 
-      <DebugButton />
     </OwnerDataProvider>
   );
 }

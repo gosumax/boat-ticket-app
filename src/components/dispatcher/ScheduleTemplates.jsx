@@ -1,7 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import apiClient from '../../utils/apiClient';
+import DateFieldPicker from '../ui/DateFieldPicker';
+import TimeFieldPicker, { DISPATCHER_TIME_OPTIONS } from '../ui/TimeFieldPicker';
+import { dpAlert, dpButton, dpPill } from './dispatcherTheme';
 
 const ScheduleTemplates = ({ onGenerationComplete }) => {
+  const timeOptions = DISPATCHER_TIME_OPTIONS;
   const [items, setItems] = useState([]);
   const [boats, setBoats] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -158,6 +162,11 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
       setFormError('Все поля обязательны для заполнения');
       return;
     }
+
+    if (!timeOptions.includes(itemFormData.departure_time)) {
+      setFormError('Выберите время из списка');
+      return;
+    }
     
     // If a specific boat is selected, validate that it's active
     if (itemFormData.boat_id) {
@@ -222,12 +231,14 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
 
       if (editingItem) {
         // Update existing item
-        const updatedItem = await apiClient.updateScheduleTemplateItem(editingItem.id, payload);
+        const updateResponse = await apiClient.updateScheduleTemplateItem(editingItem.id, payload);
+        const updatedItem = updateResponse?.item || updateResponse;
         setItems(prev => prev.map(t => t.id === updatedItem.id ? updatedItem : t));
         setSuccessMessage('Шаблон обновлён');
       } else {
         // Create new item
-        const newItem = await apiClient.createScheduleTemplateItem(payload);
+        const createResponse = await apiClient.createScheduleTemplateItem(payload);
+        const newItem = createResponse?.item || createResponse;
         setItems(prev => [...prev, newItem]);
         setSuccessMessage('Шаблон создан');
       }
@@ -355,6 +366,9 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
 
     try {
       const result = await apiClient.generateSlotsFromTemplateItems(payload);
+      if (result?.ok === false) {
+        throw new Error(result.message || result.error || 'Генерация рейсов не выполнена');
+      }
       setSuccessMessage(`Сгенерировано ${result.generated} рейсов, пропущено ${result.skipped} рейсов`);
       setShowGenerationForm(false);
       setGenerationForm({ date_from: '', date_to: '' });
@@ -399,13 +413,13 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
   return (
     <div className="mt-6 text-neutral-100">
       {formError && (
-        <div className="mb-4 p-3 rounded-2xl border border-red-900 bg-red-950/40 text-red-200">
+        <div className={dpAlert('danger', 'mb-4')}>
           {formError}
         </div>
       )}
 
       {successMessage && (
-        <div className="mb-4 p-3 rounded-2xl border border-emerald-900 bg-emerald-950/40 text-emerald-200">
+        <div className={dpAlert('success', 'mb-4')}>
           {successMessage}
         </div>
       )}
@@ -426,13 +440,13 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
               }
               setShowGenerationForm(!showGenerationForm);
             }}
-            className="bg-purple-600 text-white px-4 py-2 rounded-2xl font-semibold hover:bg-purple-700 active:bg-purple-800 transition-colors"
+            className={dpButton({ variant: showGenerationForm ? 'warning' : 'secondary' })}
           >
             Сгенерировать рейсы
           </button>
           <button
             onClick={handleCreateNewTemplate}
-            className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-semibold hover:bg-blue-700 active:bg-blue-800 transition-colors"
+            className={dpButton({ variant: 'primary' })}
           >
             Добавить шаблон
           </button>
@@ -441,34 +455,31 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
 
       {/* Generation Form */}
       {showGenerationForm && (
-        <div className="mb-6 bg-neutral-950/40 border border-neutral-800 rounded-2xl p-6">
+        <div className="dp-panel mb-6">
           <h4 className="text-lg font-bold mb-4 text-neutral-100">Генерация рейсов по шаблонам</h4>
           <form onSubmit={handleGenerateSlots}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
-                <label className="block text-sm font-semibold text-neutral-300 mb-1">
-                  Дата начала (необязательно)
-                </label>
-                <input
-                  type="date"
-                  name="date_from"
+                <DateFieldPicker
+                  label="Дата начала"
                   value={generationForm.date_from}
-                  onChange={(e) => setGenerationForm(prev => ({ ...prev, date_from: e.target.value }))}
-                  className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
-                  placeholder="По умолчанию: сегодня"
+                  onChange={(nextValue) => setGenerationForm(prev => ({ ...prev, date_from: nextValue }))}
+                  inputName="date_from"
+                  tone="dark"
+                  sheetTitle="Дата начала генерации"
+                  sheetDescription="Выберите день, с которого нужно сгенерировать рейсы."
                 />
               </div>
               <div>
-                <label className="block text-sm font-semibold text-neutral-300 mb-1">
-                  Дата окончания (необязательно)
-                </label>
-                <input
-                  type="date"
-                  name="date_to"
+                <DateFieldPicker
+                  label="Дата окончания"
                   value={generationForm.date_to}
-                  onChange={(e) => setGenerationForm(prev => ({ ...prev, date_to: e.target.value }))}
-                  className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
-                  placeholder="По умолчанию: сегодня + 30 дней"
+                  onChange={(nextValue) => setGenerationForm(prev => ({ ...prev, date_to: nextValue }))}
+                  inputName="date_to"
+                  tone="dark"
+                  min={generationForm.date_from}
+                  sheetTitle="Дата окончания генерации"
+                  sheetDescription="Выберите день, до которого нужно сгенерировать рейсы."
                 />
               </div>
             </div>
@@ -478,14 +489,14 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
             <div className="flex space-x-3">
               <button
                 type="submit"
-                className="bg-purple-600 text-white px-4 py-2 rounded-2xl font-semibold hover:bg-purple-700 active:bg-purple-800 transition-colors"
+                className={dpButton({ variant: 'warning' })}
               >
                 Сгенерировать
               </button>
               <button
                 type="button"
                 onClick={() => setShowGenerationForm(false)}
-                className="bg-neutral-800/60 text-neutral-100 px-4 py-2 rounded-2xl font-semibold hover:bg-neutral-800 active:bg-neutral-700 transition-colors"
+                className={dpButton({ variant: 'ghost' })}
               >
                 Отмена
               </button>
@@ -496,7 +507,7 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
 
       {/* Template Form */}
       {showForm && (
-        <div className="mb-6 bg-neutral-950/40 border border-neutral-800 rounded-2xl p-6">
+        <div className="dp-panel mb-6">
           <h4 className="text-lg font-bold mb-4 text-neutral-100">
             {editingItem ? 'Редактировать шаблон' : 'Создать шаблон расписания'}
           </h4>
@@ -516,19 +527,18 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
                 />
               </div>
               
-              <div>
-                <label className="block text-sm font-semibold text-neutral-300 mb-1">
-                  Время (ЧЧ:ММ)
-                </label>
-                <input
-                  type="time"
-                  name="departure_time"
-                  value={itemFormData.departure_time}
-                  onChange={handleInputChange}
-                  className="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
-                  required
-                />
-              </div>
+              <TimeFieldPicker
+                name="departure_time"
+                label="Время (ЧЧ:ММ)"
+                value={itemFormData.departure_time}
+                onChange={(nextValue) => setItemFormData(prev => ({ ...prev, departure_time: nextValue }))}
+                options={timeOptions}
+                labelClassName="font-semibold text-neutral-300"
+                triggerClassName="w-full p-2 border border-neutral-800 rounded-2xl bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-600/40 focus:border-blue-600/40"
+                required
+                sheetTitle="Выберите время шаблона"
+                sheetDescription="Доступные слоты: 08:00 - 21:00 с шагом 30 минут."
+              />
               
               <div>
                 <label className="block text-sm font-semibold text-neutral-300 mb-1">
@@ -684,14 +694,14 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
             <div className="flex space-x-3">
               <button
                 type="submit"
-                className="bg-blue-600 text-white px-4 py-2 rounded-2xl font-semibold hover:bg-blue-700 active:bg-blue-800 transition-colors"
+                className={dpButton({ variant: 'primary' })}
               >
                 {editingItem ? 'Сохранить' : 'Создать'}
               </button>
               <button
                 type="button"
                 onClick={resetForm}
-                className="bg-neutral-800/60 text-neutral-100 px-4 py-2 rounded-2xl font-semibold hover:bg-neutral-800 active:bg-neutral-700 transition-colors"
+                className={dpButton({ variant: 'ghost' })}
               >
                 Отмена
               </button>
@@ -720,13 +730,13 @@ const ScheduleTemplates = ({ onGenerationComplete }) => {
               <div className="flex space-x-2">
                 <button
                   onClick={() => handleEdit(item)}
-                  className="bg-blue-600 text-white px-4 py-2 rounded-2xl text-sm font-semibold hover:bg-blue-700 active:bg-blue-800 transition-colors"
+                  className={dpButton({ variant: 'secondary', size: 'sm' })}
                 >
                   Редактировать
                 </button>
                 <button
                   onClick={() => handleDelete(item.id)}
-                  className="bg-red-600 text-white px-4 py-2 rounded-2xl text-sm font-semibold hover:bg-red-700 active:bg-red-800 transition-colors"
+                  className={dpButton({ variant: 'danger', size: 'sm' })}
                 >
                   Удалить
                 </button>

@@ -3187,12 +3187,650 @@ router.get('/motivation/day', (req, res) => {
   }
 });
 
+export function buildOwnerWeeklyMotivationReadModel({ week } = {}) {
+  let weekId = week;
+  if (!weekId) {
+    weekId = getCurrentIsoWeekIdLocal();
+  }
+
+  const weekRange = getIsoWeekRangeLocal(weekId);
+  if (!weekRange) {
+    const error = new Error('Invalid week format. Use YYYY-Www (e.g., 2026-W07)');
+    error.status = 400;
+    throw error;
+  }
+
+  weekId = weekRange.week_id;
+  const dateFrom = weekRange.dateFrom;
+  const dateTo = weekRange.dateTo;
+
+  const settings = resolveOwnerSettings(db);
+  const k_speed = Number(settings.k_speed ?? 1.2);
+  const k_cruise = Number(settings.k_cruise ?? 3.0);
+  const k_zone_hedgehog = Number(settings.k_zone_hedgehog ?? 1.3);
+  const k_zone_center = Number(settings.k_zone_center ?? 1.0);
+  const k_zone_sanatorium = Number(settings.k_zone_sanatorium ?? 0.8);
+  const k_zone_stationary = Number(settings.k_zone_stationary ?? 0.7);
+  const k_banana_hedgehog = Number(settings.k_banana_hedgehog ?? 2.7);
+  const k_banana_center = Number(settings.k_banana_center ?? 2.2);
+  const k_banana_sanatorium = Number(settings.k_banana_sanatorium ?? 1.2);
+  const k_banana_stationary = Number(settings.k_banana_stationary ?? 1.0);
+  const weekly_percent = Number(settings.weekly_percent ?? 0.01);
+
+  const getZoneK = (zone) => {
+    if (zone === 'hedgehog') return k_zone_hedgehog;
+    if (zone === 'center') return k_zone_center;
+    if (zone === 'sanatorium') return k_zone_sanatorium;
+    if (zone === 'stationary') return k_zone_stationary;
+    return 1.0;
+  };
+
+  const getBananaK = (zone) => {
+    if (zone === 'hedgehog') return k_banana_hedgehog;
+    if (zone === 'center') return k_banana_center;
+    if (zone === 'sanatorium') return k_banana_sanatorium;
+    if (zone === 'stationary') return k_banana_stationary;
+    return 1.0;
+  };
+  const normalizeZone = (zone) => {
+    const value = String(zone || '').trim().toLowerCase();
+    return ['hedgehog', 'center', 'sanatorium', 'stationary'].includes(value) ? value : null;
+  };
+  const resolvePointsZone = (boatType, zoneAtSale, sellerZone) => {
+    const saleZone = normalizeZone(zoneAtSale);
+    if (saleZone) return saleZone;
+    if (boatType === 'banana') return normalizeZone(sellerZone) || 'center';
+    return 'center';
+  };
+
+  const canonicalRows = getWeeklyCanonicalPresaleRows(dateFrom, dateTo);
+  const useCanonicalForecast = canonicalRows.length > 0;
+  const weeklyPointsMap = new Map();
+  let revenue_total_week = 0;
+
+  if (useCanonicalForecast) {
+    for (const row of canonicalRows) {
+      const sellerId = Number(row.seller_id);
+      const boatType = String(row.boat_type || '').toLowerCase();
+      const revenueForecast = roundToKopecks(Number(row.revenue_forecast || 0));
+      if (!Number.isFinite(sellerId) || sellerId <= 0) continue;
+      if (!['speed', 'cruise', 'banana'].includes(boatType)) continue;
+
+      let entry = weeklyPointsMap.get(sellerId);
+      if (!entry) {
+        entry = {
+          user_id: sellerId,
+          name: row.seller_name || `Seller ${sellerId}`,
+          zone: normalizeZone(row.seller_zone),
+          revenue_total_week: 0,
+          points_week_base: 0,
+        };
+        weeklyPointsMap.set(sellerId, entry);
+      }
+
+      const effectiveZone = resolvePointsZone(boatType, row.zone_at_sale, row.seller_zone);
+      const revenueInK = revenueForecast / 1000;
+      let pointsBase = 0;
+
+      if (boatType === 'speed') {
+        pointsBase = revenueInK * k_speed * getZoneK(effectiveZone);
+      } else if (boatType === 'cruise') {
+        pointsBase = revenueInK * k_cruise * getZoneK(effectiveZone);
+      } else if (boatType === 'banana') {
+        pointsBase = revenueInK * getBananaK(effectiveZone);
+      }
+
+      entry.revenue_total_week = roundToKopecks(entry.revenue_total_week + revenueForecast);
+      entry.points_week_base += pointsBase;
+    }
+
+    revenue_total_week = roundToKopecks(
+      canonicalRows.reduce((sum, row) => sum + Number(row.revenue_forecast || 0), 0)
+    );
+  } else {
+    const fallbackRows = db.prepare(`
+      SELECT
+        ml.seller_id AS seller_id,
+        COALESCE(u.username, 'Seller ' || ml.seller_id) AS seller_name,
+        u.zone AS seller_zone,
+        COALESCE(SUM(CASE
+          WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED')
+          THEN ml.amount ELSE 0
+        END), 0) AS revenue_gross,
+        COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
+      FROM money_ledger ml
+      JOIN users u ON u.id = ml.seller_id
+      WHERE ml.status = 'POSTED'
+        AND ml.kind = 'SELLER_SHIFT'
+        AND u.role = 'seller'
+        AND COALESCE(u.is_active, 1) = 1
+        AND DATE(ml.business_day) BETWEEN ? AND ?
+      GROUP BY ml.seller_id, seller_name, seller_zone
+    `).all(dateFrom, dateTo);
+
+    for (const row of fallbackRows) {
+      const sellerId = Number(row.seller_id);
+      const revenueNet = Math.max(
+        0,
+        Number(row.revenue_gross || 0) - Number(row.refunds || 0)
+      );
+      if (!Number.isFinite(sellerId) || sellerId <= 0 || revenueNet <= 0) continue;
+
+      weeklyPointsMap.set(sellerId, {
+        user_id: sellerId,
+        name: row.seller_name || `Seller ${sellerId}`,
+        zone: normalizeZone(row.seller_zone),
+        revenue_total_week: roundToKopecks(revenueNet),
+        points_week_base: roundToKopecks(revenueNet / 1000),
+      });
+    }
+
+    revenue_total_week = roundToKopecks(
+      [...weeklyPointsMap.values()].reduce((sum, row) => sum + Number(row.revenue_total_week || 0), 0)
+    );
+  }
+
+  const sellers = [];
+  for (const [sellerId, entry] of weeklyPointsMap) {
+    const state = getSellerState(sellerId);
+    const streakDays = state?.calibrated ? (state.streak_days || 0) : 0;
+    const kStreak = getStreakMultiplier(streakDays);
+    const pointsWeekTotal = Math.round(entry.points_week_base * kStreak * 100) / 100;
+
+    sellers.push({
+      ...entry,
+      streak_days: streakDays,
+      k_streak: kStreak,
+      points_week_total: pointsWeekTotal
+    });
+  }
+
+  sellers.sort((a, b) => {
+    if (b.points_week_total !== a.points_week_total) return b.points_week_total - a.points_week_total;
+    if (b.revenue_total_week !== a.revenue_total_week) return b.revenue_total_week - a.revenue_total_week;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+
+  sellers.forEach((s, i) => { s.rank = i + 1; });
+
+  const top3 = sellers.slice(0, 3);
+
+  const weeklyWithholdByDay = getFundLedgerByDay('WITHHOLD_WEEKLY', dateFrom, dateTo);
+  const weekly_pool_total_ledger = roundToKopecks(
+    weeklyWithholdByDay.reduce((sum, row) => sum + Number(row.day_total || 0), 0)
+  );
+
+  const weekly_pool_total = Math.floor(revenue_total_week * weekly_percent);
+  const weekly_pool_total_daily_sum = weekly_pool_total_ledger;
+  const weekly_pool_diff = roundToKopecks(weekly_pool_total_ledger - weekly_pool_total_daily_sum);
+
+  const weeklyPoolDuplicateDays = weeklyWithholdByDay
+    .filter((row) => Number(row.entry_count || 0) > 1)
+    .map((row) => ({
+      business_day: row.business_day,
+      entry_count: Number(row.entry_count || 0),
+      ledger_day_total: roundToKopecks(Number(row.day_total || 0)),
+    }));
+  const weeklyPoolRecalcDiagnostics = getWithholdRecalcDiagnostics(weeklyWithholdByDay, 'weekly_amount');
+  const weeklyConsistencyWarnings = [];
+  if (weeklyPoolDuplicateDays.length > 0) {
+    weeklyConsistencyWarnings.push(`duplicate WITHHOLD_WEEKLY entries on ${weeklyPoolDuplicateDays.length} day(s)`);
+  }
+  if (weeklyPoolRecalcDiagnostics.driftDays.length > 0) {
+    weeklyConsistencyWarnings.push(`recalculation drift on ${weeklyPoolRecalcDiagnostics.driftDays.length} day(s)`);
+  }
+  if (weeklyPoolRecalcDiagnostics.errors.length > 0) {
+    weeklyConsistencyWarnings.push(`recalculation errors on ${weeklyPoolRecalcDiagnostics.errors.length} day(s)`);
+  }
+  const weekly_pool_is_consistent =
+    isMoneyEqual(weekly_pool_total_ledger, weekly_pool_total_daily_sum) &&
+    weeklyConsistencyWarnings.length === 0;
+
+  let weekly_distribution = { first: 0.5, second: 0.3, third: 0.2 };
+  if (sellers.length === 1) {
+    weekly_distribution = { first: 1.0, second: 0, third: 0 };
+  } else if (sellers.length === 2) {
+    weekly_distribution = { first: 0.6, second: 0.4, third: 0 };
+  }
+
+  sellers.forEach((s, idx) => {
+    let weekly_payout = 0;
+    if (idx === 0) {
+      weekly_payout = roundDownTo50(weekly_pool_total * weekly_distribution.first);
+    } else if (idx === 1) {
+      weekly_payout = roundDownTo50(weekly_pool_total * weekly_distribution.second);
+    } else if (idx === 2) {
+      weekly_payout = roundDownTo50(weekly_pool_total * weekly_distribution.third);
+    }
+    s.weekly_payout = weekly_payout;
+  });
+
+  const weekly_pool_total_current = weekly_pool_total;
+  const weekly_distribution_current = { first: 0.5, second: 0.3, third: 0.2 };
+  const weeklyCurrentSplit = calcCurrentWeeklyTop3Split(weekly_pool_total_current, weekly_distribution_current);
+
+  sellers.forEach((s, idx) => {
+    let weeklyPayoutCurrent = 0;
+    if (idx === 0) {
+      weeklyPayoutCurrent = weeklyCurrentSplit.first;
+    } else if (idx === 1) {
+      weeklyPayoutCurrent = weeklyCurrentSplit.second;
+    } else if (idx === 2) {
+      weeklyPayoutCurrent = weeklyCurrentSplit.third;
+    }
+    s.weekly_payout_current = weeklyPayoutCurrent;
+  });
+
+  const sellersWithCalibration = enrichOwnerRowsWithCalibration(sellers, {
+    sellerIdKey: 'user_id',
+    businessDay: dateTo,
+  });
+
+  return {
+    ok: true,
+    data: {
+      week_id: weekId,
+      date_from: dateFrom,
+      date_to: dateTo,
+      revenue_total_week,
+      weekly_percent,
+      weekly_pool_total,
+      weekly_pool_total_ledger,
+      weekly_pool_total_daily_sum,
+      weekly_pool_diff,
+      weekly_pool_is_consistent,
+      weekly_pool_total_current,
+      weekly_distribution,
+      weekly_distribution_current,
+      sellers: sellersWithCalibration,
+      top3,
+      top3_current: sellersWithCalibration.slice(0, 3).map(s => ({
+        user_id: s.user_id,
+        name: s.name,
+        rank: s.rank,
+        points_week_total: s.points_week_total,
+        revenue_total_week: s.revenue_total_week,
+        weekly_payout_current: s.weekly_payout_current
+      }))
+    },
+    meta: {
+      points_rule: useCanonicalForecast
+        ? 'v3_weekly_seller_only_canonical_zone_at_sale_banana_user_zone_streak_multiplier'
+        : 'seller_only_ledger_fallback_revenue_proxy_streak_multiplier',
+      streak_mode: 'current_state_multiplier',
+      ranking_source: useCanonicalForecast
+        ? 'seller_only_weekly_canonical_presales'
+        : 'seller_only_ledger_fallback',
+      fund_source: useCanonicalForecast
+        ? 'canonical_weekly_revenue_x_weekly_percent'
+        : 'seller_only_ledger_revenue_x_weekly_percent',
+      payout_schedule: 'sunday_top3_by_points',
+      owner_calibration_visibility_source: 'seller_calibration_state_sidecar',
+      consistency_diagnostics: {
+        warnings: weeklyConsistencyWarnings,
+        duplicate_withhold_days: weeklyPoolDuplicateDays,
+        recalculation_drift_days: weeklyPoolRecalcDiagnostics.driftDays,
+        recalculation_errors: weeklyPoolRecalcDiagnostics.errors,
+      }
+    }
+  };
+}
+
+export function buildOwnerSeasonMotivationReadModel({ seasonId } = {}) {
+  let resolvedSeasonId = seasonId;
+  if (!resolvedSeasonId) {
+    const now = new Date();
+    resolvedSeasonId = String(now.getFullYear());
+  }
+
+  if (!/^\d{4}$/.test(resolvedSeasonId)) {
+    const error = new Error('Invalid season_id format. Use YYYY (e.g., 2026)');
+    error.status = 400;
+    throw error;
+  }
+
+  const settings = resolveOwnerSettings(db);
+  const season_percent = Number(settings.season_percent ?? 0.02);
+  const seasonPayoutScheme = normalizeSeasonPayoutScheme(settings.season_payout_scheme);
+  const seasonRange = resolveSeasonDateRange(resolvedSeasonId, settings);
+  const seasonFrom = seasonRange.seasonFrom;
+  const seasonTo = seasonRange.seasonTo;
+
+  const endSepFrom = `${resolvedSeasonId}-09-24`;
+  const endSepTo = `${resolvedSeasonId}-09-30`;
+  const sepFrom = `${resolvedSeasonId}-09-01`;
+  const sepTo = `${resolvedSeasonId}-09-30`;
+
+  const MIN_WORKED_DAYS_SEASON = 75;
+  const MIN_WORKED_DAYS_SEP = 20;
+  const END_SEP_WINDOW_DAYS = 7;
+
+  const sellersRows = db.prepare(`
+    SELECT id, username, zone FROM users WHERE role = 'seller' AND is_active = 1
+  `).all();
+  const activeSellersById = new Map(
+    (sellersRows || []).map((seller) => [Number(seller.id), seller])
+  );
+  const canonicalSeasonSnapshot = buildCanonicalSeasonSnapshot(seasonFrom, seasonTo, {
+    sepFrom,
+    sepTo,
+    endSepFrom,
+    endSepTo,
+  });
+  const canonicalSeasonParticipants = canonicalSeasonSnapshot.sellers
+    .map((seller) => {
+      const sellerId = Number(seller.user_id);
+      const activeSeller = activeSellersById.get(sellerId);
+      if (!activeSeller) return null;
+
+      const worked_days_season = Number(seller.worked_days_season || 0);
+      const worked_days_sep = Number(seller.worked_days_sep || 0);
+      const worked_days_end_sep = Number(seller.worked_days_end_sep || 0);
+
+      return {
+        user_id: sellerId,
+        name: seller.name || activeSeller.username || `Seller ${sellerId}`,
+        zone: seller.zone ?? activeSeller.zone ?? null,
+        revenue_total: roundToKopecks(Number(seller.revenue_total || 0)),
+        points_total: roundToKopecks(Number(seller.points_total || 0)),
+        worked_days_season,
+        worked_days_sep,
+        worked_days_end_sep,
+        is_eligible:
+          worked_days_season >= MIN_WORKED_DAYS_SEASON &&
+          worked_days_sep >= MIN_WORKED_DAYS_SEP &&
+          worked_days_end_sep >= 1
+            ? 1
+            : 0,
+        season_payout: 0,
+        season_payout_recipient: 0,
+        season_share: 0,
+      };
+    })
+    .filter((seller) => (
+      seller &&
+      (
+        Number(seller.revenue_total || 0) > 0 ||
+        Number(seller.points_total || 0) > 0 ||
+        Number(seller.worked_days_season || 0) > 0
+      )
+    ));
+  const useCanonicalSeasonRanking = canonicalSeasonParticipants.some((seller) => (
+    Number(seller?.points_total || 0) > 0
+  ));
+
+  const canonicalSeasonStats = db.prepare(`
+    SELECT seller_id,
+           COALESCE(SUM(revenue_day), 0) AS revenue_total,
+           COALESCE(SUM(points_day_total), 0) AS points_total
+    FROM seller_day_stats
+    WHERE DATE(business_day) BETWEEN ? AND ?
+    GROUP BY seller_id
+  `).all(seasonFrom, seasonTo);
+
+  const hasCanonicalSeasonPoints = canonicalSeasonStats.some((row) => (
+    Number(row?.points_total || 0) > 0
+  ));
+
+  let seasonStats = canonicalSeasonStats;
+  let season_stats_source = 'seller_day_stats';
+  if (!hasCanonicalSeasonPoints && seasonRange.isDefaultRange) {
+    seasonStats = db.prepare(`
+      SELECT seller_id, revenue_total, points_total
+      FROM seller_season_stats
+      WHERE season_id = ?
+    `).all(resolvedSeasonId);
+    season_stats_source = 'seller_season_stats_fallback';
+  }
+
+  const statsMap = new Map();
+  for (const stat of (seasonStats || [])) {
+    statsMap.set(Number(stat.seller_id), {
+      revenue_total: Number(stat.revenue_total || 0),
+      points_total: Number(stat.points_total || 0)
+    });
+  }
+
+  const eligibilityMap = new Map();
+  for (const seller of (sellersRows || [])) {
+    const sellerId = Number(seller.id);
+
+    const workedDaysSeasonRow = db.prepare(`
+      SELECT COUNT(*) AS cnt FROM seller_day_stats
+      WHERE seller_id = ? AND business_day BETWEEN ? AND ? AND revenue_day > 0
+    `).get(sellerId, seasonFrom, seasonTo);
+    const worked_days_season = Number(workedDaysSeasonRow?.cnt || 0);
+
+    const workedDaysSepRow = db.prepare(`
+      SELECT COUNT(*) AS cnt FROM seller_day_stats
+      WHERE seller_id = ? AND business_day BETWEEN ? AND ? AND revenue_day > 0
+    `).get(sellerId, sepFrom, sepTo);
+    const worked_days_sep = Number(workedDaysSepRow?.cnt || 0);
+
+    const workedDaysEndSepRow = db.prepare(`
+      SELECT COUNT(*) AS cnt FROM seller_day_stats
+      WHERE seller_id = ? AND business_day BETWEEN ? AND ? AND revenue_day > 0
+    `).get(sellerId, endSepFrom, endSepTo);
+    const worked_days_end_sep = Number(workedDaysEndSepRow?.cnt || 0);
+
+    const is_eligible = (worked_days_season >= MIN_WORKED_DAYS_SEASON) &&
+                        (worked_days_sep >= MIN_WORKED_DAYS_SEP) &&
+                        (worked_days_end_sep >= 1) ? 1 : 0;
+
+    eligibilityMap.set(sellerId, {
+      worked_days_season,
+      worked_days_sep,
+      worked_days_end_sep,
+      is_eligible
+    });
+  }
+
+  const seasonRevenueRow = db.prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED') THEN ml.amount ELSE 0 END), 0) AS revenue_gross,
+      COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
+    FROM money_ledger ml
+    WHERE ml.status = 'POSTED'
+      AND ml.kind = 'SELLER_SHIFT'
+      AND DATE(ml.business_day) BETWEEN ? AND ?
+  `).get(seasonFrom, seasonTo);
+
+  const revenue_total_season = Math.max(0, Number(seasonRevenueRow?.revenue_gross || 0) - Number(seasonRevenueRow?.refunds || 0));
+
+  const seasonPoolLedgerRow = db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) AS season_pool_total_ledger
+    FROM money_ledger
+    WHERE kind = 'FUND' AND type IN (${SEASON_FUND_TYPES_SQL}) AND status = 'POSTED'
+      AND DATE(business_day) BETWEEN ? AND ?
+  `).get(seasonFrom, seasonTo);
+  const season_pool_total_ledger = roundToKopecks(Number(seasonPoolLedgerRow?.season_pool_total_ledger || 0));
+
+  const season_pool_total = Math.floor(revenue_total_season * season_percent);
+  const seasonWithholdByDay = getFundLedgerByDay('WITHHOLD_SEASON', seasonFrom, seasonTo);
+
+  const seasonPoolManualTransferRow = db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) AS total
+    FROM money_ledger
+    WHERE kind = 'FUND' AND type = 'SEASON_PREPAY_DELETE' AND status = 'POSTED'
+      AND DATE(business_day) BETWEEN ? AND ?
+  `).get(seasonFrom, seasonTo);
+  const season_pool_manual_transfer_total = roundToKopecks(Number(seasonPoolManualTransferRow?.total || 0));
+
+  const seasonWithholdLedgerTotal = roundToKopecks(
+    seasonWithholdByDay.reduce((sum, row) => sum + Number(row.day_total || 0), 0)
+  );
+  const useCanonicalSeasonFunds =
+    Number(canonicalSeasonSnapshot.seasonFromRevenueTotal || 0) > 0 ||
+    Number(canonicalSeasonSnapshot.roundingToSeasonTotal || 0) > 0 ||
+    canonicalSeasonParticipants.length > 0;
+  const seasonPoolDuplicateDays = seasonWithholdByDay
+    .filter((row) => Number(row.entry_count || 0) > 1)
+    .map((row) => ({
+      business_day: row.business_day,
+      entry_count: Number(row.entry_count || 0),
+      ledger_day_total: roundToKopecks(Number(row.day_total || 0)),
+    }));
+  const seasonPoolRecalcDiagnostics = getWithholdRecalcDiagnostics(seasonWithholdByDay, 'season_amount');
+  const useCanonicalSeasonFundBreakdown =
+    useCanonicalSeasonFunds &&
+    seasonPoolRecalcDiagnostics.driftDays.length === 0 &&
+    canonicalSeasonSnapshot.errors.length === 0;
+  const seasonRecalcErrors = useCanonicalSeasonFundBreakdown
+    ? canonicalSeasonSnapshot.errors
+    : seasonPoolRecalcDiagnostics.errors;
+  const fallbackSeasonRoundingTotal = roundToKopecks(Number(seasonPoolRecalcDiagnostics.roundingToSeasonTotal || 0));
+  const season_pool_rounding_total = useCanonicalSeasonFundBreakdown
+    ? roundToKopecks(Number(canonicalSeasonSnapshot.roundingToSeasonTotal || 0))
+    : fallbackSeasonRoundingTotal;
+  const season_pool_from_revenue_total = useCanonicalSeasonFundBreakdown
+    ? roundToKopecks(Number(canonicalSeasonSnapshot.seasonFromRevenueTotal || 0))
+    : roundToKopecks(Math.max(0, seasonWithholdLedgerTotal - season_pool_rounding_total));
+  const season_pool_total_daily_sum = roundToKopecks(seasonWithholdLedgerTotal + season_pool_manual_transfer_total);
+  const season_pool_dispatcher_decision_total = season_pool_manual_transfer_total;
+  const season_payout_fund_total = roundToKopecks(
+    season_pool_from_revenue_total +
+    season_pool_rounding_total +
+    season_pool_dispatcher_decision_total
+  );
+
+  const season_pool_diff = roundToKopecks(season_pool_total_ledger - season_pool_total_daily_sum);
+  const seasonConsistencyWarnings = [];
+  if (seasonPoolDuplicateDays.length > 0) {
+    seasonConsistencyWarnings.push(`duplicate WITHHOLD_SEASON entries on ${seasonPoolDuplicateDays.length} day(s)`);
+  }
+  if (seasonPoolRecalcDiagnostics.driftDays.length > 0) {
+    seasonConsistencyWarnings.push(`recalculation drift on ${seasonPoolRecalcDiagnostics.driftDays.length} day(s)`);
+  }
+  if (seasonRecalcErrors.length > 0) {
+    seasonConsistencyWarnings.push(`recalculation errors on ${seasonRecalcErrors.length} day(s)`);
+  }
+  const season_pool_is_consistent =
+    isMoneyEqual(season_pool_total_ledger, season_pool_total_daily_sum) &&
+    seasonConsistencyWarnings.length === 0;
+  const season_pool_total_current = season_pool_from_revenue_total;
+
+  const sellers = useCanonicalSeasonRanking
+    ? canonicalSeasonParticipants.map((seller) => ({ ...seller }))
+    : (sellersRows || []).map((r) => {
+      const sellerId = Number(r.id);
+      const stats = statsMap.get(sellerId) || { revenue_total: 0, points_total: 0 };
+      const eligibility = eligibilityMap.get(sellerId) || { worked_days_season: 0, worked_days_sep: 0, worked_days_end_sep: 0, is_eligible: 0 };
+      return {
+        user_id: sellerId,
+        name: r.username,
+        zone: r.zone,
+        revenue_total: stats.revenue_total,
+        points_total: stats.points_total,
+        worked_days_season: eligibility.worked_days_season,
+        worked_days_sep: eligibility.worked_days_sep,
+        worked_days_end_sep: eligibility.worked_days_end_sep,
+        is_eligible: eligibility.is_eligible,
+        season_payout: 0,
+        season_payout_recipient: 0,
+        season_share: 0
+      };
+    }).filter((seller) => (
+      Number(seller.revenue_total || 0) > 0 ||
+      Number(seller.points_total || 0) > 0 ||
+      Number(seller.worked_days_season || 0) > 0
+    ));
+
+  sellers.sort((a, b) => {
+    if (b.points_total !== a.points_total) return b.points_total - a.points_total;
+    if (b.revenue_total !== a.revenue_total) return b.revenue_total - a.revenue_total;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+
+  sellers.forEach((s, i) => { s.rank = i + 1; });
+
+  const eligibleSellers = sellers.filter((seller) => seller.is_eligible === 1);
+  const eligible_count = eligibleSellers.length;
+  const sum_points_eligible = eligibleSellers.reduce((sum, seller) => sum + Number(seller.points_total || 0), 0);
+
+  const seasonPayoutRecipients = selectSeasonPayoutRecipients(sellers, seasonPayoutScheme);
+  const { payoutMap, shareMap, allocatedTotal: season_payouts_sum } = allocateSeasonPayouts(
+    season_payout_fund_total,
+    seasonPayoutRecipients,
+    seasonPayoutScheme
+  );
+
+  for (const seller of sellers) {
+    const sellerId = Number(seller.user_id || 0);
+    seller.season_payout = roundToKopecks(Number(payoutMap.get(sellerId) || 0));
+    seller.season_share = Number(shareMap.get(sellerId) || 0);
+    seller.season_payout_recipient = payoutMap.has(sellerId) ? 1 : 0;
+  }
+
+  const season_payout_recipient_count = seasonPayoutRecipients.length;
+  const season_payouts_remainder = roundToKopecks(season_payout_fund_total - season_payouts_sum);
+  const top3 = sellers.slice(0, 3);
+
+  return {
+    ok: true,
+    data: {
+      season_id: resolvedSeasonId,
+      season_from: seasonFrom,
+      season_to: seasonTo,
+      revenue_total_season,
+      season_percent,
+      season_pool_total,
+      season_pool_total_ledger,
+      season_payout_fund_total,
+      season_payout_scheme: seasonPayoutScheme,
+      season_pool_total_daily_sum,
+      season_pool_diff,
+      season_pool_is_consistent,
+      season_pool_total_current,
+      season_pool_from_revenue_total,
+      season_pool_rounding_total,
+      season_pool_dispatcher_decision_total,
+      season_pool_manual_transfer_total,
+      eligible_count,
+      sum_points_eligible,
+      season_payout_recipient_count,
+      season_payouts_sum,
+      season_payouts_remainder,
+      sellers,
+      top3
+    },
+    meta: {
+      season_payout_mode: getSeasonPayoutModeLabel(seasonPayoutScheme),
+      season_payout_scheme: seasonPayoutScheme,
+      season_payout_fund_source: 'season_pool_from_revenue_total+season_pool_rounding_total+season_pool_dispatcher_decision_total',
+      eligibility_rules: {
+        min_worked_days_season: MIN_WORKED_DAYS_SEASON,
+        min_worked_days_sep: MIN_WORKED_DAYS_SEP,
+        end_sep_window_days: END_SEP_WINDOW_DAYS
+      },
+      rounding: 'weighted_split_to_kopecks_remainder_by_recipient_order',
+      season_rule: seasonRange.isDefaultRange ? 'calendar_year_jan01_dec31' : 'owner_settings_inclusive',
+      season_rule_source: seasonRange.source,
+      season_stats_source: useCanonicalSeasonRanking
+        ? 'seller_only_motivation_day_canonical'
+        : season_stats_source,
+      seller_ranking_scope: 'seller_participants_only',
+      season_boundaries_mmdd: {
+        start: seasonRange.startMmdd,
+        end: seasonRange.endMmdd,
+      },
+      consistency_diagnostics: {
+        warnings: seasonConsistencyWarnings,
+        duplicate_withhold_days: seasonPoolDuplicateDays,
+        recalculation_drift_days: seasonPoolRecalcDiagnostics.driftDays,
+        recalculation_errors: seasonRecalcErrors,
+      }
+    }
+  };
+}
+
 // =====================
 // GET /api/owner/motivation/weekly?week=YYYY-Www
 // Weekly leaderboard by points (sellers only, no payouts)
 // =====================
 router.get('/motivation/weekly', (req, res) => {
   try {
+    return res.json(buildOwnerWeeklyMotivationReadModel({ week: req.query.week }));
+
     // Parse week parameter or use current week
     let weekId = req.query.week;
     if (!weekId) {
@@ -3496,8 +4134,11 @@ router.get('/motivation/weekly', (req, res) => {
       }
     });
   } catch (e) {
-    console.error('[owner/motivation/weekly] Error:', e);
-    return res.status(500).json({ ok: false, error: e?.message || 'weekly motivation calculation failed' });
+    const status = Number(e?.status || 500);
+    if (status >= 500) {
+      console.error('[owner/motivation/weekly] Error:', e);
+    }
+    return res.status(status).json({ ok: false, error: e?.message || 'weekly motivation calculation failed' });
   }
 });
 
@@ -3507,6 +4148,8 @@ router.get('/motivation/weekly', (req, res) => {
 // =====================
 router.get('/motivation/season', (req, res) => {
   try {
+    return res.json(buildOwnerSeasonMotivationReadModel({ seasonId: req.query.season_id }));
+
     // Parse season_id parameter or use current year
     let seasonId = req.query.season_id;
     if (!seasonId) {
@@ -3877,8 +4520,11 @@ router.get('/motivation/season', (req, res) => {
       }
     });
   } catch (e) {
-    console.error('[owner/motivation/season] Error:', e);
-    return res.status(500).json({ ok: false, error: e?.message || 'season motivation calculation failed' });
+    const status = Number(e?.status || 500);
+    if (status >= 500) {
+      console.error('[owner/motivation/season] Error:', e);
+    }
+    return res.status(status).json({ ok: false, error: e?.message || 'season motivation calculation failed' });
   }
 });
 

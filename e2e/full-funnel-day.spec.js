@@ -165,6 +165,7 @@ test.describe('E2E Full Funnel Day', () => {
     const dispatcherToken = await getTokenFromStorage(page);
     expect(dispatcherToken).toBeTruthy();
 
+    await page.getByTestId('dispatcher-filter-toggle').click();
     const dateInputs = page.locator('input[type="date"]');
     await dateInputs.nth(0).fill(E2E_TARGET_DATE);
     await dateInputs.nth(1).fill(E2E_TARGET_DATE);

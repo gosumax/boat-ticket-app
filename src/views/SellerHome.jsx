@@ -1,5 +1,97 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import {
+  SellerScreen,
+  SellerSurface,
+  SellerTopbar,
+  sellerChoiceCardClass,
+  sellerContentClass,
+  sellerHelperTextClass,
+} from '../components/seller/sellerUi';
+
+const MENU_CARD_TONES = {
+  sell: {
+    backgroundImage: 'linear-gradient(135deg,#3f0a0a 0%,#7f1d1d 38%,#b91c1c 70%,#5f1111 100%)',
+    boxShadow: '0 30px 60px -28px rgba(185,28,28,0.86), 0 0 32px -12px rgba(248,113,113,0.72)',
+    description: 'text-rose-50/90',
+    button: 'bg-white text-rose-950 shadow-[0_14px_28px_-18px_rgba(255,255,255,0.85)] group-hover:bg-rose-50',
+  },
+  earnings: {
+    backgroundImage: 'linear-gradient(135deg,#052e16 0%,#047857 46%,#22c55e 100%)',
+    boxShadow: '0 30px 60px -28px rgba(5,150,105,0.86), 0 0 32px -12px rgba(74,222,128,0.58)',
+    description: 'text-emerald-50/90',
+    button: 'bg-white text-emerald-950 shadow-[0_14px_28px_-18px_rgba(255,255,255,0.85)] group-hover:bg-emerald-50',
+  },
+  media: {
+    backgroundImage: 'linear-gradient(135deg,#2e1065 0%,#6d28d9 48%,#a855f7 100%)',
+    boxShadow: '0 30px 60px -28px rgba(109,40,217,0.86), 0 0 32px -12px rgba(168,85,247,0.62)',
+    description: 'text-violet-50/90',
+    button: 'bg-white text-violet-950 shadow-[0_14px_28px_-18px_rgba(255,255,255,0.85)] group-hover:bg-violet-50',
+  },
+};
+
+function MenuCard({ title, description, accent, onClick, testId, featured = false, tone = null }) {
+  const cardTone = MENU_CARD_TONES[tone || (featured ? 'sell' : '')];
+  const isAccent = Boolean(cardTone);
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-testid={testId}
+      className={sellerChoiceCardClass({
+        className: `group relative flex min-h-[138px] flex-col overflow-hidden p-5 ${
+          featured
+            ? 'border-transparent min-h-[154px] p-6 sm:min-h-0 sm:p-5'
+            : 'sm:min-h-0 sm:p-4'
+        }`,
+      })}
+      style={
+        cardTone
+          ? {
+              backgroundImage: cardTone.backgroundImage,
+              boxShadow: cardTone.boxShadow,
+            }
+          : undefined
+      }
+    >
+      <div
+        className="absolute inset-x-0 top-0 h-1.5 rounded-t-[26px]"
+        style={{ background: accent }}
+        aria-hidden="true"
+      />
+      <div className="flex h-full items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div
+            className={`${
+              isAccent
+                ? `${featured ? 'text-xl sm:text-lg' : 'text-lg sm:text-base'} text-white`
+                : 'text-lg text-slate-950 sm:text-base'
+            } font-semibold`}
+          >
+            {title}
+          </div>
+          <p
+            className={`mt-3 text-[15px] leading-6 sm:mt-2 sm:text-sm sm:leading-5 ${
+              isAccent ? cardTone.description : 'text-slate-500'
+            }`}
+          >
+            {description}
+          </p>
+        </div>
+        <span
+          className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors sm:px-2.5 sm:py-1 sm:text-xs ${
+            isAccent
+              ? cardTone.button
+              : 'bg-slate-100 text-slate-600 group-hover:bg-slate-950 group-hover:text-white'
+          }`}
+        >
+          Открыть
+        </span>
+      </div>
+    </button>
+  );
+}
 
 const SellerHome = () => {
   const navigate = useNavigate();
@@ -11,60 +103,45 @@ const SellerHome = () => {
   };
 
   return (
-    <div className="flex flex-col items-center min-h-screen bg-gradient-to-b from-blue-50 to-blue-100 p-4" data-testid="seller-home-screen">
-      <div className="w-full max-w-md flex justify-end mb-8">
-        <button
-          onClick={handleLogout}
-          data-testid="seller-home-logout"
-          className="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-medium transition-colors"
-        >
-          Выйти
-        </button>
+    <SellerScreen data-testid="seller-home-screen">
+      <SellerTopbar title="Продавец" subtitle="Рабочее место" onLogout={handleLogout} />
+
+      <div className={`${sellerContentClass} flex min-h-[calc(100svh-73px)] flex-col space-y-3 sm:min-h-0`}>
+        <SellerSurface className="flex min-h-[62svh] flex-col p-5 sm:min-h-0 sm:flex-none sm:p-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Главное меню</h2>
+            <p className={`mt-1 ${sellerHelperTextClass}`}>Выберите нужный раздел.</p>
+          </div>
+
+          <div className="mt-4 flex flex-col gap-3.5 space-y-0 sm:mt-4 sm:block sm:space-y-3">
+            <MenuCard
+              title="Продать билет"
+              description="Открыть оформление продажи и выбрать рейс."
+              accent="linear-gradient(90deg,#fecaca 0%,#fb7185 38%,#ef4444 100%)"
+              onClick={() => navigate('/seller?start=type')}
+              testId="seller-home-sell-btn"
+              featured
+            />
+            <MenuCard
+              title="Мои продажи"
+              description="Посмотреть продажи, начисления и детали по билетам."
+              accent="linear-gradient(135deg,#0f172a 0%,#0f766e 100%)"
+              onClick={() => navigate('/seller/earnings')}
+              testId="seller-home-earnings-btn"
+              tone="earnings"
+            />
+            <MenuCard
+              title="Фото|видео"
+              description="Материалы для работы и показа клиентам."
+              accent="linear-gradient(135deg,#0f172a 0%,#7c3aed 100%)"
+              onClick={() => navigate('/seller/media')}
+              testId="seller-home-media-btn"
+              tone="media"
+            />
+          </div>
+        </SellerSurface>
       </div>
-
-      <div className="text-center mb-8">
-        <h1 className="text-4xl font-bold text-blue-800 mb-2">⛵ Морские билеты</h1>
-        <p className="text-lg text-blue-600">Продавец</p>
-      </div>
-
-      <div className="w-full max-w-sm space-y-4">
-        <button
-          onClick={() => navigate('/seller?start=type')}
-          data-testid="seller-home-sell-btn"
-          className="w-full py-5 text-xl font-medium rounded-xl bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 transition-all shadow-lg"
-        >
-          Продать билет
-        </button>
-
-        <button
-          onClick={() => navigate('/dispatcher')}
-          data-testid="seller-home-schedule-btn"
-          className="w-full py-5 text-xl font-medium rounded-xl bg-green-600 text-white hover:bg-green-700 active:bg-green-800 transition-all shadow-lg"
-        >
-          Расписание
-        </button>
-
-        <button
-          onClick={() => navigate('/seller/earnings')}
-          data-testid="seller-home-earnings-btn"
-          className="w-full py-5 text-xl font-medium rounded-xl bg-yellow-600 text-white hover:bg-yellow-700 active:bg-yellow-800 transition-all shadow-lg"
-        >
-          Мои продажи
-        </button>
-
-        <button
-          onClick={() => navigate('/seller/media')}
-          data-testid="seller-home-media-btn"
-          className="w-full py-5 text-xl font-medium rounded-xl bg-purple-600 text-white hover:bg-purple-700 active:bg-purple-800 transition-all shadow-lg"
-        >
-          Фото|видео
-        </button>
-      </div>
-
-      <div className="mt-16 text-center">
-        <p className="text-blue-700 text-sm">Система продаж билетов v1.0</p>
-      </div>
-    </div>
+    </SellerScreen>
   );
 };
 

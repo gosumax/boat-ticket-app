@@ -109,6 +109,7 @@ test.describe('A. Dispatcher Presale Creation', () => {
     ).toBeVisible({ timeout: 10000 });
 
     await page.getByTestId('tab-selling').click();
+    await page.getByTestId('dispatcher-filter-toggle').click();
 
     const dateInputs = page.locator('input[type="date"]');
     await dateInputs.nth(0).fill(E2E_TARGET_DATE);

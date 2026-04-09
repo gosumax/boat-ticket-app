@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { formatRUB } from '../../utils/currency';
 import apiClient from '../../utils/apiClient';
+import { formatSaleCreatedAt } from '../../utils/sellerDashboard';
 
 function pickFirst(...vals) {
   for (const v of vals) {
@@ -11,13 +12,7 @@ function pickFirst(...vals) {
 
 function toRuDateTime(value) {
   if (!value) return '';
-  try {
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return String(value);
-    return d.toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', year: 'numeric', month: '2-digit', day: '2-digit' });
-  } catch {
-    return String(value);
-  }
+  return formatSaleCreatedAt(value);
 }
 
 const ConfirmationScreen = ({

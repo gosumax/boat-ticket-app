@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
+import { X } from 'lucide-react';
 import { formatRUB } from '../../utils/currency';
 import { getSlotAvailable } from '../../utils/slotAvailability';
 import apiClient from '../../utils/apiClient';
 import { useOwnerData } from '../../contexts/OwnerDataContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { dpButton } from './dispatcherTheme';
 
 const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots }) => {
   const { refreshOwnerData } = useOwnerData();
@@ -60,6 +62,10 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
                 category === 'child' ? (trip.price_child || trip.price || 0) : 0;
       return total + (ticketCategories[category] * price);
     }, 0)
+    : 0;
+  const rawAvailableSeats = seatsLeft ?? getSlotAvailable(trip);
+  const availableSeats = Number.isFinite(Number(rawAvailableSeats))
+    ? Math.max(0, Number(rawAvailableSeats))
     : 0;
 
   // Phone validation (RU mobile)
@@ -120,6 +126,16 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
     // If user already picked a method, keep it; just clear error on any positive amount
     setPrepaymentMethodError('');
   }, [prepaymentAmount]);
+
+  useEffect(() => {
+    if (!errors.submit) return undefined;
+
+    const timer = setTimeout(() => {
+      setErrors(prev => (prev.submit === errors.submit ? { ...prev, submit: '' } : prev));
+    }, 3000);
+
+    return () => clearTimeout(timer);
+  }, [errors.submit]);
   
   // Load sellers list for dispatcher role
   useEffect(() => {
@@ -301,7 +317,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       // Call the success callback immediately to update parent state
       // The parent component should refresh the trip data to get updated availability from backend
       if (onSaleSuccess) {
-        onSaleSuccess(presale);
+        onSaleSuccess(presale, categoryTotalSeats);
       }
       
       // Refresh all slot data since this action affects availability
@@ -368,17 +384,38 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
 
   return (
     <div
-  className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm overflow-hidden" style={{ paddingTop: 20, paddingBottom: 20, paddingLeft: "clamp(16px, 5vw, 24px)", paddingRight: "clamp(16px, 5vw, 24px)" }}>
-      <div className="min-h-screen flex items-start justify-center p-1 pb-10">
-        <div className="w-full max-w-[1200px] min-h-[95vh] max-h-[100vh] overflow-y-auto rounded-2xl border border-neutral-800 bg-neutral-950 pt-1 transform scale-[1] origin-top">
+  className="dp-overlay z-50 overflow-hidden" style={{ paddingTop: 20, paddingBottom: 20, paddingLeft: "clamp(16px, 5vw, 24px)", paddingRight: "clamp(16px, 5vw, 24px)" }}>
+      {errors.submit && (
+        <div className="pointer-events-none fixed left-3 right-3 top-[calc(env(safe-area-inset-top)+16px)] z-[90] flex justify-center">
+          <div
+            role="alert"
+            className="pointer-events-auto flex w-full max-w-[560px] items-start justify-between gap-3 rounded-lg border border-red-300/25 bg-[rgba(39,12,18,0.96)] px-4 py-3 text-red-50 shadow-[0_24px_70px_-36px_rgba(0,0,0,0.95)] backdrop-blur-xl"
+          >
+            <div className="min-w-0">
+              <div className="text-xs font-bold uppercase tracking-wide text-red-200/80">Не удалось оформить</div>
+              <div className="mt-1 text-sm font-semibold leading-snug">{errors.submit}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setErrors(prev => ({ ...prev, submit: '' }))}
+              className="shrink-0 rounded-lg border border-white/10 bg-white/[0.06] p-1.5 text-red-50 hover:bg-white/[0.12]"
+              aria-label="Закрыть ошибку"
+            >
+              <X size={16} strokeWidth={2} />
+            </button>
+          </div>
+        </div>
+      )}
+      <div className="min-h-screen flex items-start justify-center p-1 pb-[calc(env(safe-area-inset-bottom)+112px)]">
+        <div className="dp-sheet w-full max-w-[1200px] min-h-[95vh] max-h-[100vh] overflow-y-auto pt-1 pb-[calc(env(safe-area-inset-bottom)+28px)] transform scale-[1] origin-top">
 
 <div className="flex justify-between items-center mb-1">
         <h2 className="text-2xl font-bold text-neutral-100"></h2>
         <button 
           onClick={onBack}
-          className="text-gray-500 hover:text-neutral-200"
+          className={dpButton({ variant: 'ghost', size: 'sm' })}
         >
-          ✕
+          <X size={16} strokeWidth={2} />
         </button>
       </div>
       
@@ -459,9 +496,12 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
       {/* Ticket Categories Section */}
       <div className="mt-[20px] bg-neutral-900 rounded-xl shadow-lg p-1 mb-1 border border-neutral-800">
         <h3 className="font-bold text-lg mb-1">Категории билетов</h3>
-        <p className="text-sm text-gray-500 mb-1 text-center">
-          Максимум {getSlotAvailable(trip)} мест доступно
-        </p>
+        <div className="mb-2 rounded-lg border border-emerald-300/20 bg-emerald-400/[0.08] px-3 py-2 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+          <div className="text-[11px] font-bold uppercase tracking-wide text-emerald-200/80">Доступно к продаже</div>
+          <div className="mt-1 text-sm font-semibold text-neutral-100">
+            Максимум <span className="mx-1 align-middle text-2xl font-black leading-none text-emerald-200">{availableSeats}</span> мест доступно
+          </div>
+        </div>
         <div className="mt-[5px] space-y-2">
           {allowedCategories.map((category) => {
             const label = category === 'adult' ? 'Взрослый' : 
@@ -732,40 +772,35 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
         </div>
       </div>
       
-      {errors.submit && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-2 py-1 rounded mb-3 text-center">
-          {errors.submit}
-        </div>
-      )}
-      
       {successMessage && (
         <div className="bg-green-100 border border-green-400 text-green-700 px-2 py-1 rounded mb-3 text-center">
           {successMessage}
         </div>
       )}
       
-      <div className="flex space-x-3">
+      <div className="sticky bottom-0 z-20 -mx-2 mt-4 border-t border-white/5 bg-[rgba(8,12,22,0.94)] px-2 pt-3 pb-[calc(env(safe-area-inset-bottom)+18px)] backdrop-blur-xl">
+        <div className="grid grid-cols-2 gap-3">
         <button
           onClick={onBack}
           data-testid="presale-back-btn"
-          className="flex-1 py-2 bg-gray-300 text-neutral-900 font-medium rounded-lg hover:bg-gray-400 active:bg-gray-500 transition-colors"
+          className="w-full py-2 bg-gray-300 text-neutral-900 font-medium rounded-lg hover:bg-gray-400 active:bg-gray-500 transition-colors"
         >
           Назад
         </button>
-        <div className="flex-1">
+        <div>
           <button
             onClick={handleSubmit}
             disabled={!isFormValid || isSubmitting}
             data-testid="presale-create-btn"
             className={`w-full py-4 font-medium rounded-lg transition-colors ${
               isFormValid
-                ? (categoryTotalSeats <= getSlotAvailable(trip)
+                ? (categoryTotalSeats <= availableSeats
                    ? 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800'
                    : 'bg-yellow-500 text-white hover:bg-yellow-600 active:bg-yellow-700')
                 : 'bg-gray-400 text-gray-200 cursor-not-allowed'
             }`}
           >
-            {isSubmitting ? 'Создание...' : `Создать предзаказ${categoryTotalSeats > getSlotAvailable(trip) ? ' (проверка мест)' : ''}`}
+            {isSubmitting ? 'Создание...' : `Создать предзаказ${categoryTotalSeats > availableSeats ? ' (проверка мест)' : ''}`}
           </button>
           {!isFormValid && (
             <div className="text-xs text-gray-500 mt-1 text-center">
@@ -778,6 +813,7 @@ const QuickSaleForm = ({ trip, onBack, onSaleSuccess, seatsLeft, refreshAllSlots
           )}
         </div>
       </div>
+        </div>
         </div>
       </div>
     </div>

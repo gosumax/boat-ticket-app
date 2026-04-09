@@ -16,7 +16,7 @@ export function normalizeSeller(s) {
   const sellerNameRaw = s.seller_name ?? s.sellerName ?? s.name ?? '';
   const seller_name = (() => {
     const text = String(sellerNameRaw || '').trim();
-    if (!text || /^\d+$/.test(text)) return `Seller #${Number(seller_id) || 0}`;
+    if (!text) return `Seller #${Number(seller_id) || 0}`;
     return text;
   })();
   const role = s.role ? String(s.role).toLowerCase() : null;

@@ -14,6 +14,7 @@ import apiClient from "../utils/apiClient.js";
 import { buildOwnerMotivationDayViewModel } from "../utils/ownerMotivationDayViewModel.js";
 import { formatMotivationPoints } from "../utils/ownerMotivationPoints.js";
 import { getSeasonConfigUiState } from "../utils/seasonBoundaries.js";
+import DateFieldPicker from "../components/ui/DateFieldPicker.jsx";
 
 function formatRUB(v) {
   const n = Number(v || 0);
@@ -378,16 +379,16 @@ function DayView() {
 
   return (
     <>
-      {/* Date picker */}
       <div className="rounded-xl border border-white/10 bg-white/5 p-3">
         <div className="flex items-center justify-between gap-3">
           <div className="flex-1">
-            <div className="text-[11px] text-neutral-500 mb-1">День (business_day)</div>
-            <input
-              type="date"
+            <DateFieldPicker
+              label="День"
               value={day}
-              onChange={(e) => setDay(e.target.value)}
-              className="w-full rounded-lg bg-neutral-900/60 border border-white/10 px-3 py-2 text-sm"
+              onChange={setDay}
+              tone="dark"
+              sheetTitle="День мотивации"
+              sheetDescription="Выберите business day для просмотра мотивации."
             />
           </div>
           <div className="text-right shrink-0">

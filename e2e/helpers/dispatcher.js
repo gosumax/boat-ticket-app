@@ -95,8 +95,10 @@ export async function createPresaleUI(page, options) {
   await expect(sellBtn).toBeEnabled({ timeout: 5000 });
   await sellBtn.click();
 
-  // Wait for form to appear
-  const submitBtn = page.getByTestId('presale-create-btn').last();
+  // The sale form must mount exactly once. Duplicated overlays were causing a black screen.
+  const submitButtons = page.getByTestId('presale-create-btn');
+  await expect(submitButtons).toHaveCount(1, { timeout: 5000 });
+  const submitBtn = submitButtons.first();
   await expect(submitBtn).toBeVisible({ timeout: 5000 });
 
   // Scope to the active form (last instance) to avoid strict mode violations

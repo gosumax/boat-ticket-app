@@ -1,8 +1,11 @@
 ﻿import { useState, useEffect, useMemo, Fragment } from 'react';
 import apiClient from '../utils/apiClient';
+import { CheckCircle2, ChevronDown, ChevronUp, CircleDot, RefreshCw } from 'lucide-react';
+import { dpAlert, dpButton, dpMetric, dpPill } from '../components/dispatcher/dispatcherTheme';
 import { formatRUB } from '../utils/currency';
 import normalizeSummary from '../utils/normalizeSummary';
 import { useAuth } from '../contexts/AuthContext';
+import '../styles/dispatcherPremium.css';
 
 const COMMISSION_PERCENT = 13; // Temporary commission rate
 
@@ -720,10 +723,10 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
     : '';
   if (loading) {
     return (
-      <div className="min-h-screen bg-neutral-950">
-        <div className="p-3">
-          <div className="max-w-4xl mx-auto">
-            <div className="text-center py-8">Загрузка...</div>
+      <div className="dispatcher-premium">
+        <div className="dp-shell">
+          <div className="mx-auto max-w-4xl">
+            <div className="dp-empty py-10">Загрузка...</div>
           </div>
         </div>
       </div>
@@ -732,17 +735,20 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
 
   if (!dailySummary) {
     return (
-      <div className="min-h-screen bg-neutral-950">
-        <div className="p-3">
-          <div className="max-w-4xl mx-auto">
-            <div className="bg-neutral-900 rounded-2xl p-4 text-center">
-              <div className="text-red-300 mb-3">Не удалось загрузить данные смены.</div>
+      <div className="dispatcher-premium">
+        <div className="dp-shell">
+          <div className="mx-auto max-w-4xl">
+            <div className="dp-panel text-center">
+              <div className={dpAlert('danger', 'mb-4 justify-center text-center')}>
+                Не удалось загрузить данные смены.
+              </div>
               <button
                 type="button"
                 onClick={() => refreshSummary()}
                 disabled={reloading}
-                className="px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-neutral-200 hover:bg-neutral-900 disabled:opacity-60"
+                className={dpButton({ variant: 'secondary', disabled: reloading })}
               >
+                {reloading ? <RefreshCw className="h-4 w-4 animate-spin" /> : null}
                 {reloading ? 'Обновление...' : 'Повторить'}
               </button>
             </div>
@@ -753,30 +759,33 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950">
-      <div className="p-3">
-        <div className="max-w-4xl lg:max-w-5xl xl:max-w-6xl mx-auto space-y-6">
+    <div className="dispatcher-premium">
+      <div className="dp-shell">
+        <div className="mx-auto max-w-4xl space-y-6 lg:max-w-5xl xl:max-w-6xl">
           {/* Daily Summary Card */}
-          <div className="bg-neutral-900 rounded-2xl  p-3">
+          <div className="dp-panel">
             {/* Shift status header */}
-            <div className="flex items-center justify-between mb-3">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-xl font-bold text-neutral-100">ИТОГО ЗА ДЕНЬ</h2>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => refreshSummary()}
                   disabled={reloading}
-                  className="px-2 py-1 rounded-lg border border-neutral-700 bg-neutral-950 text-neutral-300 text-sm hover:bg-neutral-900 disabled:opacity-60"
+                  className={dpButton({ variant: 'ghost', size: 'sm', disabled: reloading })}
                 >
+                  <RefreshCw className={`h-4 w-4 ${reloading ? 'animate-spin' : ''}`} />
                   {reloading ? 'Обновление...' : 'Обновить'}
                 </button>
                 {shiftClosed ? (
-                  <span className="px-2 py-1 bg-green-900/50 text-green-300 rounded-lg text-sm">
-                    ✓ Закрыта ({shiftSourceLabel})
+                  <span className={dpPill('success')}>
+                    <CheckCircle2 className="h-4 w-4" />
+                    Закрыта ({shiftSourceLabel})
                   </span>
                 ) : (
-                  <span className="px-2 py-1 bg-yellow-900/50 text-yellow-300 rounded-lg text-sm">
-                    ○ Открыта ({shiftSourceLabel})
+                  <span className={dpPill('warning')}>
+                    <CircleDot className="h-4 w-4" />
+                    Открыта ({shiftSourceLabel})
                   </span>
                 )}
               </div>
@@ -784,31 +793,31 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
             
             {/* Closed shift message */}
             {shiftClosed && closedAt && (
-              <div className="mb-3 p-2 bg-green-950/50 border border-green-900/50 rounded-lg text-sm text-green-300 text-center">
+              <div className={dpAlert('success', 'mb-3 justify-center text-center')}>
                 Смена закрыта в {closedAt}{closedBy ? ` (id: ${closedBy})` : ''}. Операции запрещены.
               </div>
             )}
             {loadError ? (
-              <div className="mb-3 p-2 bg-red-950/40 border border-red-900/50 rounded-lg text-sm text-red-300 text-center">
+              <div className={dpAlert('danger', 'mb-3 justify-center text-center')}>
                 Ошибка загрузки смены: {loadError}
               </div>
             ) : null}
             
-            <div className="bg-neutral-950/50 border border-neutral-800 p-4 rounded-lg" data-testid="shiftclose-summary">
+            <div className="dp-panel dp-panel--subtle" data-testid="shiftclose-summary">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-center">
-                <div className="rounded-lg bg-neutral-900 px-3 py-3">
+                <div className={dpMetric('success')}>
                   <div className="text-neutral-400 text-sm">Наличными получено</div>
                   <div data-testid="shiftclose-cash-received" className="text-2xl font-bold text-green-400">
                     {formatRUBExact(collectedLive.cash)}
                   </div>
                 </div>
-                <div className="rounded-lg bg-neutral-900 px-3 py-3">
+                <div className={dpMetric('info')}>
                   <div className="text-neutral-400 text-sm">Терминал получено</div>
                   <div data-testid="shiftclose-card-received" className="text-2xl font-bold text-blue-400">
                     {formatRUBExact(collectedLive.card)}
                   </div>
                 </div>
-                <div className="rounded-lg bg-neutral-900 px-3 py-3">
+                <div className={dpMetric('success')}>
                   <div className="text-neutral-400 text-sm">Итого получено</div>
                   <div data-testid="shiftclose-total-received" className="text-2xl font-bold text-emerald-400">
                     {formatRUBExact(collectedLive.total)}
@@ -957,21 +966,21 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
           {/* По продавцам - wider on desktop */}
           <div className="lg:-mx-4 xl:-mx-8" data-testid="shiftclose-sellers-section">
             <div className="lg:px-4 xl:px-8">
-              <div className="bg-neutral-900 rounded-2xl p-3 lg:p-4">
+              <div className="dp-panel">
                 <div className="flex items-start justify-between gap-3 mb-2">
               <div>
                 <h2 className="text-xl font-bold text-neutral-100">По продавцам</h2>
                 {/* Trip completion warning */}
                 {!allTripsFinished && !shiftClosed && (
-                  <div className="mt-1 text-sm text-red-400">
+                  <div className={dpAlert('danger', 'mt-3 text-sm')}>
                     Есть незавершённые рейсы: {openTripsCount}. Операции заблокированы.
                   </div>
                 )}
                 <div className="mt-1 text-sm">
                   {debtSummary.count > 0 ? (
-                    <span className="text-red-400">● Должны деньги: {debtSummary.count} / {formatRUB(debtSummary.total)}</span>
+                    <span className={dpPill('danger')}>Должны деньги: {debtSummary.count} / {formatRUB(debtSummary.total)}</span>
                   ) : (
-                    <span className="text-green-400">● Все продавцы закрыты</span>
+                    <span className={dpPill('success')}>Все продавцы закрыты</span>
                   )}
                 </div>
               </div>
@@ -980,14 +989,14 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                 <button
                   type="button"
                   onClick={fillAllDrafts}
-                  className="px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-800 text-neutral-200 hover:bg-neutral-900"
+                  className={dpButton({ variant: 'secondary', size: 'sm' })}
                 >
                   Заполнить всё
                 </button>
               </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full">
+            <div className="dp-table-wrap overflow-x-auto">
+              <table className="dp-table">
                 <thead>
                   <tr className="border-b">
                     <th className="text-left py-2 text-neutral-400 font-medium">Продавец</th>
@@ -1101,27 +1110,29 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                           : st === 'PARTIAL'
                           ? 'Частично'
                           : 'Долг';
-                      const stClass =
-                        st === 'DISPATCHER'
-                          ? 'bg-blue-900/40 text-blue-300 border-blue-800'
-                          : st === 'CLOSED'
-                          ? 'bg-green-900/40 text-green-300 border-green-800'
-                          : st === 'PARTIAL'
-                          ? 'bg-yellow-900/40 text-yellow-300 border-yellow-800'
-                          : 'bg-red-900/40 text-red-300 border-red-800';
-
                       const cashRem = Number(s.cashRemaining || 0);
                       const termRem = Number(s.terminalDebt || 0);
                       const totalRem = Number(s.totalDue ?? (cashRem + termRem));
+                      const stTone =
+                        st === 'DISPATCHER'
+                          ? 'info'
+                          : st === 'CLOSED'
+                          ? 'success'
+                          : st === 'PARTIAL'
+                          ? 'warning'
+                          : 'danger';
+                      const canApplyCash = !shiftClosed && allTripsFinished && (cashRem > 0 || Number(depositDrafts?.[s.id]?.cash || 0) > 0);
+                      const canApplyTerminal = !shiftClosed && allTripsFinished && (termRem > 0 || Number(depositDrafts?.[s.id]?.terminal || 0) > 0);
+                      const canApplySalary = !shiftClosed && allTripsFinished && Number(salaryDraftBySellerId?.[s.id] || 0) > 0;
                       const canExpand = true;
                       const isOpen = expandedSellerId === s.id;
 
                       return (
                         <Fragment key={`${s.role || 'seller'}-${s.id}`}>
-                          <tr className="border-b hover:bg-neutral-950" data-testid={`shiftclose-seller-row-${s.id}`}>
+                          <tr data-testid={`shiftclose-seller-row-${s.id}`}>
                             <td className="py-3">{s.name}</td>
                             <td className="py-3">
-                              <span data-testid={`shiftclose-seller-status-${s.id}`} className={`inline-flex items-center px-2 py-1 rounded-md border text-xs ${stClass}`}>{stLabel}</span>
+                              <span data-testid={`shiftclose-seller-status-${s.id}`} className={dpPill(stTone)}>{stLabel}</span>
                             </td>
                             <td data-testid={`shiftclose-seller-cash-remaining-${s.id}`} className={`text-right py-3 ${isDispatcherRow ? 'text-neutral-500' : cashRem > 0 ? 'text-red-300 font-semibold' : 'text-neutral-200'}`}>
                               {isDispatcherRow ? '-' : formatRUB(cashRem)}
@@ -1154,11 +1165,11 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                                 <button
                                   type="button"
                                   onClick={() => setExpandedSellerId((prev) => (prev === s.id ? null : s.id))}
-                                  className="inline-flex items-center justify-center w-10 h-9 rounded-lg border border-neutral-800 bg-neutral-950 text-neutral-200 hover:bg-neutral-900"
+                                  className={dpButton({ variant: 'ghost', size: 'sm' })}
                                   aria-label="Показать детали"
                                   title="Показать детали"
                                 >
-                                  {isOpen ? '▴' : '▾'}
+                                  {isOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                                 </button>
                               ) : (
                                 <span className="text-neutral-500">-</span>
@@ -1169,7 +1180,7 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                           {isOpen && canExpand && (
                             <tr className="border-b">
                               <td colSpan={7} className="py-3">
-                                <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-3">
+                                <div className="dp-panel dp-panel--subtle">
                                   <div className="text-sm text-neutral-300 font-semibold mb-3">
                                     {isDispatcherRow ? `${s.name} - детали диспетчера` : `${s.name} - детали`}
                                   </div>
@@ -1249,12 +1260,12 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                                             <button
                                               type="button"
                                               onClick={() => applyCashDeposit(s.id)}
-                                              disabled={shiftClosed || !allTripsFinished || (cashRem <= 0 && Number(depositDrafts?.[s.id]?.cash || 0) <= 0)}
-                                              className={`px-3 py-2 rounded-lg border ${
-                                                !shiftClosed && allTripsFinished && (cashRem > 0 || Number(depositDrafts?.[s.id]?.cash || 0) > 0)
-                                                  ? 'bg-neutral-900 border-neutral-700 text-neutral-100 hover:bg-neutral-800'
-                                                  : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
-                                              }`}
+                                              disabled={!canApplyCash}
+                                              className={dpButton({
+                                                variant: canApplyCash ? 'secondary' : 'ghost',
+                                                size: 'sm',
+                                                disabled: !canApplyCash,
+                                              })}
                                             >
                                               Сдать нал
                                             </button>
@@ -1288,12 +1299,12 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                                             <button
                                               type="button"
                                               onClick={() => applyTerminalClose(s.id)}
-                                              disabled={shiftClosed || !allTripsFinished || (termRem <= 0 && Number(depositDrafts?.[s.id]?.terminal || 0) <= 0)}
-                                              className={`px-3 py-2 rounded-lg border ${
-                                                !shiftClosed && allTripsFinished && (termRem > 0 || Number(depositDrafts?.[s.id]?.terminal || 0) > 0)
-                                                  ? 'bg-neutral-900 border-neutral-700 text-neutral-100 hover:bg-neutral-800'
-                                                  : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
-                                              }`}
+                                              disabled={!canApplyTerminal}
+                                              className={dpButton({
+                                                variant: canApplyTerminal ? 'secondary' : 'ghost',
+                                                size: 'sm',
+                                                disabled: !canApplyTerminal,
+                                              })}
                                             >
                                               Закрыть терминал
                                             </button>
@@ -1387,12 +1398,12 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                                         <button
                                           type="button"
                                           onClick={() => applySalaryPayoutForSeller(s.id)}
-                                          disabled={shiftClosed || !allTripsFinished || Number(salaryDraftBySellerId?.[s.id] || 0) <= 0}
-                                          className={`px-3 py-2 rounded-lg border whitespace-nowrap ${
-                                            !shiftClosed && allTripsFinished && Number(salaryDraftBySellerId?.[s.id] || 0) > 0
-                                              ? 'bg-orange-700 border-orange-600 text-white hover:bg-orange-600'
-                                              : 'bg-neutral-950 border-neutral-800 text-neutral-600 cursor-not-allowed'
-                                          }`}
+                                          disabled={!canApplySalary}
+                                          className={dpButton({
+                                            variant: canApplySalary ? 'warning' : 'ghost',
+                                            size: 'sm',
+                                            disabled: !canApplySalary,
+                                          })}
                                         >
                                           Выдать ЗП
                                         </button>
@@ -1416,14 +1427,17 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
           </div>
           
           {shiftClosed ? (
-            <div className="bg-green-950/30 border border-green-900/50 rounded-2xl p-3 mt-6">
-              <h3 className="text-lg font-semibold text-green-300 mb-3">Статус смены</h3>
-              <p className="text-green-400 font-medium">Смена закрыта</p>
+            <div className={dpAlert('success', 'mt-6 items-center justify-between')}>
+              <div>
+                <h3 className="mb-1 text-lg font-semibold text-green-200">Статус смены</h3>
+                <p className="font-medium text-green-100">Смена закрыта</p>
+              </div>
+              <CheckCircle2 className="h-5 w-5 shrink-0" />
             </div>
           ) : (
             <>
               {/* Confirmation Checks */}
-              <div className="bg-neutral-900/40 border border-neutral-800 rounded-2xl p-4 mt-6">
+              <div className="dp-panel dp-panel--subtle mt-6">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-lg font-semibold text-neutral-200">Подтверждение закрытия смены</h3>
                   <span className="text-sm text-neutral-400">
@@ -1466,7 +1480,9 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
               
               {/* Action Buttons */}
               {closeBlockReason ? (
-                <div className="text-sm text-red-400 text-center mt-3">Нельзя закрыть смену: {closeBlockReason}</div>
+                <div className={dpAlert('danger', 'mt-3 justify-center text-center')}>
+                  Нельзя закрыть смену: {closeBlockReason}
+                </div>
               ) : null}
 
               <div className="flex flex-col sm:flex-row gap-3 pt-4">
@@ -1474,7 +1490,12 @@ const DispatcherShiftClose = ({ setShiftClosed: setGlobalShiftClosed }) => {
                   onClick={handleShiftClose}
                   disabled={!canCloseShift}
                   title={closeBlockReason || ''}
-                  className={`flex-1 py-3 px-4 rounded-lg font-medium transition-colors ${canCloseShift ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
+                  className={dpButton({
+                    variant: canCloseShift ? 'danger' : 'ghost',
+                    disabled: !canCloseShift,
+                    block: true,
+                    size: 'lg',
+                  })}
                 >
                   Закрыть смену
                 </button>

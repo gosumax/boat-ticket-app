@@ -1,5 +1,23 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertTriangle,
+  Anchor,
+  CalendarDays,
+  Clock3,
+  Gauge,
+  SearchX,
+  Users,
+} from 'lucide-react';
 import apiClient from '../../utils/apiClient';
+import {
+  dpAlert,
+  dpBadge,
+  dpIconWrap,
+  dpMetric,
+  dpPill,
+  dpProgressTone,
+  dpTypeTone,
+} from './dispatcherTheme';
 import PassengerList from './PassengerList';
 
 function safeNum(v, fallback = 0) {
@@ -38,19 +56,10 @@ function typeLabel(type) {
   return 'Рейс';
 }
 
-function typePill(type) {
-  const t = normalizeType(type);
-  if (t === 'banana') return 'bg-fuchsia-600/15 border-fuchsia-700/40 text-fuchsia-200';
-  if (t === 'speed') return 'bg-sky-600/15 border-sky-700/40 text-sky-200';
-  if (t === 'cruise') return 'bg-emerald-600/15 border-emerald-700/40 text-emerald-200';
-  return 'bg-neutral-700/20 border-neutral-700/40 text-neutral-200';
-}
-
 function parseTripDateTime(trip) {
   const d = trip?.trip_date ? String(trip.trip_date) : '';
   const t = trip?.time ? String(trip.time) : '';
   if (!d || !t) return null;
-  // local time (no timezone suffix)
   const dt = new Date(`${d}T${t}:00`);
   if (!Number.isFinite(dt.getTime())) return null;
   return dt;
@@ -68,6 +77,13 @@ function isActiveFlag(trip) {
   return Boolean(Number(v));
 }
 
+function getLoadTone(left, pct) {
+  if (left <= 1 || pct >= 90) return 'danger';
+  if (left <= 3 || pct >= 70) return 'warning';
+  if (pct >= 45) return 'info';
+  return 'success';
+}
+
 const TripListView = ({
   dateFrom,
   dateTo,
@@ -76,21 +92,20 @@ const TripListView = ({
   searchTerm = '',
   onTripCountsChange,
   shiftClosed,
-  isActive = true
+  isActive = true,
 }) => {
   const [slots, setSlots] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
-  const [selectedTrip, setSelectedTrip] = useState(null); // drilldown disabled
+  const [selectedTrip, setSelectedTrip] = useState(null);
   const inFlightRef = useRef(false);
 
   const loadSlots = useCallback(async (opts = {}) => {
     const silent = !!opts.silent;
-    
-    // Prevent overlapping requests
+
     if (inFlightRef.current) return;
     inFlightRef.current = true;
-    
+
     if (!silent) setLoading(true);
     setErr(null);
     try {
@@ -99,7 +114,6 @@ const TripListView = ({
       setSlots(Array.isArray(arr) ? arr : []);
     } catch (e) {
       setErr(e?.message || 'Ошибка загрузки рейсов');
-      // Keep previous slots on error to avoid flicker
     } finally {
       if (!silent) setLoading(false);
       inFlightRef.current = false;
@@ -113,17 +127,14 @@ const TripListView = ({
     return () => window.removeEventListener('dispatcher:refresh', handler);
   }, [loadSlots]);
 
-  // Polling: auto-refresh every 5s when component is active (trips tab visible)
   useEffect(() => {
-    if (!isActive) return;
-    
+    if (!isActive) return undefined;
+
     const intervalId = setInterval(() => {
       loadSlots({ silent: true });
     }, 5000);
 
-    return () => {
-      clearInterval(intervalId);
-    };
+    return () => clearInterval(intervalId);
   }, [loadSlots, isActive]);
 
   const filtered = useMemo(() => {
@@ -131,12 +142,9 @@ const TripListView = ({
 
     return (Array.isArray(slots) ? slots : [])
       .filter((s) => {
-        if (!s) return false;
+        if (!s || !s.trip_date) return false;
 
-        
-        // hide any slots without a concrete trip_date (templates/invalid rows)
-        if (!s.trip_date) return false;
-if (dateFrom && dateTo) {
+        if (dateFrom && dateTo) {
           const d = s.trip_date ? String(s.trip_date) : '';
           if (d && (d < String(dateFrom) || d > String(dateTo))) return false;
         }
@@ -147,11 +155,9 @@ if (dateFrom && dateTo) {
           const doneByTime = isFinishedTrip(s);
 
           if (statusFilter === 'active') {
-            // "Активные" = продаются сейчас: не ушёл по времени + активен (не отменён)
             if (doneByStatus || doneByTime) return false;
             if (!isActiveFlag(s)) return false;
           } else if (statusFilter === 'completed') {
-            // "Завершённые" = уже ушёл (по времени) или явно помечен как completed
             if (!(doneByStatus || doneByTime)) return false;
           }
         }
@@ -186,7 +192,7 @@ if (dateFrom && dateTo) {
 
   if (selectedTrip) {
     return (
-      <div className="bg-neutral-950">
+      <div className="bg-transparent">
         <PassengerList
           trip={selectedTrip}
           onBack={() => setSelectedTrip(null)}
@@ -199,73 +205,110 @@ if (dateFrom && dateTo) {
   }
 
   return (
-    <div className="bg-neutral-950">
+    <div className="bg-transparent">
       {err && (
-        <div className="mb-4 rounded-xl border border-red-900 bg-red-950/40 px-4 py-3 text-red-200">
-          {err}
+        <div className={dpAlert('danger', 'mb-4')}>
+          <AlertTriangle size={18} strokeWidth={2} className="mt-0.5 shrink-0" />
+          <div>{err}</div>
         </div>
       )}
 
       {loading ? (
-        <div className="text-neutral-400">Загрузка...</div>
+        <div className="dp-empty">Загрузка рейсов…</div>
       ) : filtered.length === 0 ? (
-        <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-6 text-center text-neutral-400">
-          Рейсов нет
+        <div className="dp-empty">
+          <div className="dp-empty__icon">
+            <SearchX size={22} strokeWidth={2} />
+          </div>
+          <div className="text-base font-semibold text-neutral-100">Рейсов не найдено</div>
+          <div className="mt-2 text-sm text-neutral-500">
+            Попробуйте изменить дату, тип рейса или строку поиска.
+          </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
           {filtered.map((trip) => {
             const key = String(trip?.slot_uid ?? trip?.id ?? '');
             const left = seatLeft(trip);
             const cap = safeNum(trip?.capacity ?? trip?.boat_capacity ?? trip?.boatCapacity ?? 0, 0);
             const sold = cap > 0 ? Math.max(0, cap - left) : 0;
             const pct = cap > 0 ? Math.min(100, Math.round((sold / cap) * 100)) : 0;
-            const filled = Math.max(0, Math.min(cap, sold));
-            const warn = Number.isFinite(left) && left <= 2 ? 'text-amber-200' : 'text-emerald-200';
+            const tone = getLoadTone(left, pct);
+            const toneAccent =
+              tone === 'danger'
+                ? 'shadow-[0_0_0_1px_rgba(244,114,182,0.12)]'
+                : tone === 'warning'
+                  ? 'shadow-[0_0_0_1px_rgba(251,191,36,0.12)]'
+                  : tone === 'info'
+                    ? 'shadow-[0_0_0_1px_rgba(96,165,250,0.12)]'
+                    : 'shadow-[0_0_0_1px_rgba(74,222,128,0.12)]';
 
             return (
               <div
                 key={key}
                 data-testid={`trip-card-${trip.slot_uid || trip.slotUid || key}`}
-                className={`relative text-left rounded-2xl border border-neutral-800 bg-neutral-900 p-3 pointer-events-none ${filled <= 4 ? "ring-2 ring-red-500/40 shadow-[0_0_18px_rgba(239,68,68,0.25)]" : filled <= 9 ? "ring-2 ring-amber-400/40 shadow-[0_0_18px_rgba(251,191,36,0.25)]" : "ring-2 ring-emerald-500/40 shadow-[0_0_18px_rgba(16,185,129,0.28)]"}`}
+                className={`dp-card dp-card--interactive ${toneAccent}`}
               >
-                <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div className="text-base font-bold truncate text-neutral-100" style={{ fontSize: "130%" }}>
-                        {trip.boat_name || 'Рейс'}
+                    <div className="flex items-center gap-3">
+                      <div className={dpIconWrap(dpTypeTone(trip.boat_type))}>
+                        <Anchor size={18} strokeWidth={2} />
                       </div>
-</div>
-                    <div className="mt-1 text-sm text-neutral-400 flex flex-wrap gap-x-2 gap-y-1" style={{ fontSize: "130%" }}>
-                      <span>🕒 {trip.time || '—'}</span>
-                      <span className="text-neutral-700">•</span>
-                      <span>📅 {formatDateLabel(trip, dateFrom)}</span>
+                      <div className="min-w-0">
+                        <div className="truncate text-lg font-bold text-neutral-50">
+                          {trip.boat_name || 'Рейс'}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-neutral-400">
+                          <span className="inline-flex items-center gap-1.5">
+                            <Clock3 size={14} strokeWidth={2} />
+                            {trip.time || '—'}
+                          </span>
+                          <span className="inline-flex items-center gap-1.5">
+                            <CalendarDays size={14} strokeWidth={2} />
+                            {formatDateLabel(trip, dateFrom)}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  <div className={`shrink-0 px-2.5 py-1 rounded-xl border text-xs font-bold ${typePill(trip.boat_type)}`}>
-                    {typeLabel(trip.boat_type)}
+                  <div className={dpPill(dpTypeTone(trip.boat_type))}>{typeLabel(trip.boat_type)}</div>
+                </div>
+
+                <div className="mt-4 dp-grid-meta">
+                  <div className={dpMetric(tone)}>
+                    <div className="dp-metric__label">Свободно</div>
+                    <div className="dp-metric__value">{left}</div>
+                  </div>
+                  <div className={dpMetric('neutral')}>
+                    <div className="dp-metric__label">Вместимость</div>
+                    <div className="dp-metric__value text-neutral-100">{cap || '—'}</div>
                   </div>
                 </div>
 
-                <div className="mt-4 grid grid-cols-2 gap-2">
-                  <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2">
-                    <div className="text-xs text-neutral-500">Свободно</div>
-                    <div className={`text-2xl font-black ${warn}`}>{left}</div>
+                <div className="mt-4 rounded-[20px] border border-white/5 bg-white/[0.03] p-3">
+                  <div className="mb-2 flex items-center justify-between gap-3 text-sm text-neutral-400">
+                    <span className="inline-flex items-center gap-2">
+                      <Gauge size={14} strokeWidth={2} />
+                      Заполнение
+                    </span>
+                    <span className={dpBadge(tone)}>{pct}%</span>
                   </div>
-                  <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2">
-                    <div className="text-xs text-neutral-500">Вместимость</div>
-                    <div className="text-2xl font-black text-neutral-100">{cap || '—'}</div>
+                  <div className="dp-progress">
+                    <div
+                      className={dpProgressTone(tone)}
+                      style={{ width: `${pct}%` }}
+                    />
                   </div>
-                </div>
-
-                <div className="mt-4">
-                  <div className="h-2 w-full rounded-full bg-neutral-800 overflow-hidden">
-                    <div className="h-full bg-blue-600" style={{ width: `${pct}%` }} />
-                  </div>
-                  <div className="mt-2 flex items-center justify-between text-xs text-neutral-500">
-                    <span>Заполнено</span>
-                    <span className="text-neutral-200 font-semibold">{pct}%</span>
+                  <div className="mt-3 flex items-center justify-between gap-3 text-sm text-neutral-400">
+                    <span className="inline-flex items-center gap-2">
+                      <Users size={14} strokeWidth={2} />
+                      Занято мест
+                    </span>
+                    <span className="font-semibold text-neutral-100">
+                      {sold} / {cap || '—'}
+                    </span>
                   </div>
                 </div>
               </div>

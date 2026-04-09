@@ -9,6 +9,7 @@ import OwnerSettingsView from "./OwnerSettingsView";
 import OwnerLoadView from "../components/owner/OwnerLoadView.jsx";
 import OwnerExportView from "./OwnerExportView";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import DateFieldPicker from "../components/ui/DateFieldPicker.jsx";
 
 /**
  * OwnerView.jsx
@@ -109,27 +110,66 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 
       {compareMode === 'revenue' ? (
         <div className="rounded-2xl border border-neutral-800 p-3 space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-neutral-500 w-20">Период A:</span>
-            <input type="date" value={fromA} onChange={e => setFromA(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
-            <span className="text-xs text-neutral-500">-</span>
-            <input type="date" value={toA} onChange={e => setToA(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <DateFieldPicker
+              label="Период A: с"
+              value={fromA}
+              onChange={setFromA}
+              tone="dark"
+              sheetTitle="Период A: начало"
+              sheetDescription="Выберите начало первого периода."
+            />
+            <DateFieldPicker
+              label="Период A: по"
+              value={toA}
+              onChange={setToA}
+              tone="dark"
+              min={fromA}
+              sheetTitle="Период A: конец"
+              sheetDescription="Выберите конец первого периода."
+            />
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-neutral-500 w-20">Период B:</span>
-            <input type="date" value={fromB} onChange={e => setFromB(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
-            <span className="text-xs text-neutral-500">-</span>
-            <input type="date" value={toB} onChange={e => setToB(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <DateFieldPicker
+              label="Период B: с"
+              value={fromB}
+              onChange={setFromB}
+              tone="dark"
+              sheetTitle="Период B: начало"
+              sheetDescription="Выберите начало второго периода."
+            />
+            <DateFieldPicker
+              label="Период B: по"
+              value={toB}
+              onChange={setToB}
+              tone="dark"
+              min={fromB}
+              sheetTitle="Период B: конец"
+              sheetDescription="Выберите конец второго периода."
+            />
           </div>
         </div>
       ) : (
         <div className="rounded-2xl border border-neutral-800 p-3 space-y-3">
           <div className="text-xs text-neutral-500">Один общий период для сравнения двух сущностей</div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-neutral-500 w-20">Период:</span>
-            <input type="date" value={entityFrom} onChange={e => setEntityFrom(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
-            <span className="text-xs text-neutral-500">-</span>
-            <input type="date" value={entityTo} onChange={e => setEntityTo(e.target.value)} className="bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs text-neutral-200" />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <DateFieldPicker
+              label="Период: с"
+              value={entityFrom}
+              onChange={setEntityFrom}
+              tone="dark"
+              sheetTitle="Начало общего периода"
+              sheetDescription="Выберите дату начала общего периода."
+            />
+            <DateFieldPicker
+              label="Период: по"
+              value={entityTo}
+              onChange={setEntityTo}
+              tone="dark"
+              min={entityFrom}
+              sheetTitle="Конец общего периода"
+              sheetDescription="Выберите дату окончания общего периода."
+            />
           </div>
         </div>
       )}
@@ -601,7 +641,7 @@ export default function OwnerView() {
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
       
-      {/* Logout button (fixed, next to debug) */}
+      {/* Logout button */}
       <button
         type="button"
         onClick={logout}
@@ -610,7 +650,7 @@ export default function OwnerView() {
       >
         Выйти
       </button>
-      <main className="pb-24">
+      <main className="pt-14 pb-24">
         {tab === "money" && <div data-testid="owner-screen-money"><OwnerMoneyView /></div>}
         {tab === "compare" && <div data-testid="owner-screen-compare"><OwnerComparePeriodsView /></div>}
         {tab === "boats" && <div data-testid="owner-screen-boats"><OwnerBoatsView /></div>}

@@ -417,6 +417,7 @@ export function calcMotivationDay(db, day, options = {}) {
     : 'default';
   const shiftCloseFormulaEnabled = profile === 'dispatcher_shift_close';
   const sellerOnlyScope = !shiftCloseFormulaEnabled && options?.scope === 'seller_only';
+  const persistSnapshot = options?.persistSnapshot !== false;
   
   // Validate date format
   if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
@@ -454,12 +455,14 @@ export function calcMotivationDay(db, day, options = {}) {
   } else {
     settings = resolveOwnerSettings(db);
     settingsSource = 'owner_settings';
-    
-    const now = new Date().toISOString();
-    try {
-      db.prepare('INSERT INTO motivation_day_settings (business_day, settings_json, created_at) VALUES (?, ?, ?)').run(day, JSON.stringify(settings), now);
-    } catch (e) {
-      // Snapshot may exist from concurrent call - ignore
+
+    if (persistSnapshot) {
+      const now = new Date().toISOString();
+      try {
+        db.prepare('INSERT INTO motivation_day_settings (business_day, settings_json, created_at) VALUES (?, ?, ?)').run(day, JSON.stringify(settings), now);
+      } catch (e) {
+        // Snapshot may exist from concurrent call - ignore
+      }
     }
   }
   

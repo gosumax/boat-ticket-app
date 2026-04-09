@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import apiClient from "../../utils/apiClient";
+import DateFieldPicker from "../ui/DateFieldPicker.jsx";
 
 /**
  * OwnerLoadView.jsx
@@ -319,24 +320,25 @@ export default function OwnerLoadView() {
       <Section title="Общие параметры загрузки">
         <Card>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Field label="Дата с">
-              <input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                disabled={locked}
-                className={inputCls(locked)}
-              />
-            </Field>
-            <Field label="Дата по">
-              <input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                disabled={locked}
-                className={inputCls(locked)}
-              />
-            </Field>
+            <DateFieldPicker
+              label="Дата с"
+              value={dateFrom}
+              onChange={setDateFrom}
+              tone="dark"
+              disabled={locked}
+              sheetTitle="Дата с"
+              sheetDescription="Выберите начало периода ручной загрузки."
+            />
+            <DateFieldPicker
+              label="Дата по"
+              value={dateTo}
+              onChange={setDateTo}
+              tone="dark"
+              disabled={locked}
+              min={dateFrom}
+              sheetTitle="Дата по"
+              sheetDescription="Выберите конец периода ручной загрузки."
+            />
           </div>
 
           <div className="mt-3">

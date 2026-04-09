@@ -1,14 +1,6 @@
-import React from 'react';
+import { AlertTriangle, ArrowRightLeft, CircleX } from 'lucide-react';
+import { dpAlert, dpButton, dpIconWrap } from './dispatcherTheme';
 
-/**
- * ConfirmCancelTripModal
- *
- * Old usage (backward compatible):
- *   <ConfirmCancelTripModal open onConfirm onClose />
- *
- * New usage (prepay decision):
- *   <ConfirmCancelTripModal open mode="PREPAY_DECISION" prepayAmount onRefund onFund onClose loading error />
- */
 const ConfirmCancelTripModal = (props) => {
   const open = !!props.open;
   const mode = props.mode || null;
@@ -28,25 +20,33 @@ const ConfirmCancelTripModal = (props) => {
 
   if (isPrepayDecision) {
     return (
-      <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-        <div className="bg-white p-6 rounded-lg max-w-sm w-full">
-          <h3 className="font-semibold text-lg mb-2">Предоплата: что сделать?</h3>
-
-          <p className="text-sm text-gray-700 mb-3">
-            Предоплата: <span className="font-semibold">{prepayAmount.toLocaleString('ru-RU')} ₽</span>
-          </p>
-
-          <p className="text-sm text-gray-600 mb-4">
-            Выбери действие: вернуть клиенту или отправить в сезонный фонд.
-          </p>
+      <div className="dp-overlay z-50 flex items-center justify-center p-4">
+        <div className="dp-modal-card">
+          <div className="flex items-start gap-4">
+            <div className={dpIconWrap('warning')}>
+              <ArrowRightLeft size={18} strokeWidth={2} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="dp-modal-title">Предоплата: что сделать?</h3>
+              <p className="dp-modal-copy">
+                Предоплата: <span className="font-semibold text-neutral-100">{prepayAmount.toLocaleString('ru-RU')} ₽</span>
+              </p>
+              <p className="dp-modal-copy">
+                Выберите действие: вернуть клиенту или отправить в сезонный фонд.
+              </p>
+            </div>
+          </div>
 
           {error && (
-            <div className="mb-4 p-3 bg-red-100 text-red-700 rounded text-sm">{error}</div>
+            <div className={dpAlert('danger', 'mt-4')}>
+              <AlertTriangle size={18} strokeWidth={2} className="mt-0.5 shrink-0" />
+              <div>{error}</div>
+            </div>
           )}
 
-          <div className="flex flex-col gap-2">
+          <div className="mt-5 grid gap-3">
             <button
-              className="w-full px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-70 disabled:cursor-not-allowed"
+              className={dpButton({ variant: 'success', block: true })}
               onClick={onRefund}
               disabled={loading}
             >
@@ -54,7 +54,7 @@ const ConfirmCancelTripModal = (props) => {
             </button>
 
             <button
-              className="w-full px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-70 disabled:cursor-not-allowed"
+              className={dpButton({ variant: 'warning', block: true })}
               onClick={onFund}
               disabled={loading}
             >
@@ -62,7 +62,7 @@ const ConfirmCancelTripModal = (props) => {
             </button>
 
             <button
-              className="w-full px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300 disabled:opacity-70 disabled:cursor-not-allowed"
+              className={dpButton({ variant: 'ghost', block: true })}
               onClick={onClose}
               disabled={loading}
             >
@@ -74,23 +74,31 @@ const ConfirmCancelTripModal = (props) => {
     );
   }
 
-  // Back-compat: cancel whole trip
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center">
-      <div className="bg-white p-4 rounded w-[320px]">
-        <h3 className="font-semibold mb-2">Отменить рейс?</h3>
+    <div className="dp-overlay z-50 flex items-center justify-center p-4">
+      <div className="dp-modal-card">
+        <div className="flex items-start gap-4">
+          <div className={dpIconWrap('danger')}>
+            <CircleX size={18} strokeWidth={2} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="dp-modal-title">Отменить рейс?</h3>
+            <p className="dp-modal-copy">
+              Рейс будет отменён, а новые продажи станут недоступны.
+            </p>
+            <p className="dp-modal-copy">
+              Все купленные билеты перейдут в список для обработки.
+            </p>
+          </div>
+        </div>
 
-        <p className="text-sm mb-2">Рейс будет отменён и новые продажи станут недоступны.</p>
-
-        <p className="text-sm mb-4">Все купленные билеты перейдут в список для обработки.</p>
-
-        <div className="flex justify-end gap-2">
-          <button className="px-3 py-1 bg-gray-200 rounded" onClick={onClose} disabled={loading}>
+        <div className="mt-5 flex flex-wrap justify-end gap-3">
+          <button className={dpButton({ variant: 'ghost' })} onClick={onClose} disabled={loading}>
             Нет
           </button>
 
           <button
-            className="px-3 py-1 bg-red-600 text-white rounded disabled:opacity-70 disabled:cursor-not-allowed"
+            className={dpButton({ variant: 'danger' })}
             onClick={onConfirm}
             disabled={loading}
           >

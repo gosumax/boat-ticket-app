@@ -1,19 +1,13 @@
-import React from 'react';
+import { AlertTriangle, ArrowRightLeft, ShieldCheck } from 'lucide-react';
+import { dpAlert, dpButton, dpIconWrap } from './dispatcherTheme';
 
-/**
- * ConfirmBoardingModal
- *
- * Backward compatible:
- *  - default mode "boarding" (old UI)
- *  - mode "prepay_decision" for cancelling a presale that has prepayment
- */
 const ConfirmBoardingModal = ({
   open,
   onConfirm,
   onClose,
   loading = false,
   error = null,
-  mode = 'boarding', // 'boarding' | 'prepay_decision'
+  mode = 'boarding',
   prepayAmount = 0,
 }) => {
   if (!open) return null;
@@ -26,21 +20,30 @@ const ConfirmBoardingModal = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+      className="dp-overlay z-50 flex items-center justify-center p-4"
       data-testid={isPrepayDecision ? 'dispatcher-prepay-decision-modal' : 'dispatcher-confirm-modal'}
     >
-      <div className="bg-white p-6 rounded-lg max-w-sm w-full">
-        <h3 className="font-semibold text-lg mb-2">{title}</h3>
-
-        <p className="text-sm text-gray-600 mb-4">{description}</p>
+      <div className="dp-modal-card">
+        <div className="flex items-start gap-4">
+          <div className={dpIconWrap(isPrepayDecision ? 'warning' : 'success')}>
+            {isPrepayDecision ? <ArrowRightLeft size={18} strokeWidth={2} /> : <ShieldCheck size={18} strokeWidth={2} />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="dp-modal-title">{title}</h3>
+            <p className="dp-modal-copy">{description}</p>
+          </div>
+        </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded text-sm">{error}</div>
+          <div className={dpAlert('danger', 'mt-4')}>
+            <AlertTriangle size={18} strokeWidth={2} className="mt-0.5 shrink-0" />
+            <div>{error}</div>
+          </div>
         )}
 
-        <div className="flex justify-end gap-2">
+        <div className="mt-5 flex flex-wrap justify-end gap-3">
           <button
-            className="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300 transition-colors"
+            className={dpButton({ variant: 'ghost' })}
             onClick={onClose}
             disabled={loading}
             data-testid="dispatcher-confirm-cancel"
@@ -51,9 +54,7 @@ const ConfirmBoardingModal = ({
           {isPrepayDecision ? (
             <>
               <button
-                className={`px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors ${
-                  loading ? 'opacity-75 cursor-not-allowed' : ''
-                }`}
+                className={dpButton({ variant: 'primary' })}
                 onClick={() => onConfirm?.('REFUND')}
                 disabled={loading}
                 data-testid="dispatcher-prepay-decision-refund"
@@ -62,9 +63,7 @@ const ConfirmBoardingModal = ({
               </button>
 
               <button
-                className={`px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600 transition-colors ${
-                  loading ? 'opacity-75 cursor-not-allowed' : ''
-                }`}
+                className={dpButton({ variant: 'warning' })}
                 onClick={() => onConfirm?.('FUND')}
                 disabled={loading}
                 data-testid="dispatcher-prepay-decision-fund"
@@ -74,9 +73,7 @@ const ConfirmBoardingModal = ({
             </>
           ) : (
             <button
-              className={`px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600 transition-colors ${
-                loading ? 'opacity-75 cursor-not-allowed' : ''
-              }`}
+              className={dpButton({ variant: 'success' })}
               onClick={() => onConfirm?.()}
               disabled={loading}
               data-testid="dispatcher-confirm-submit"

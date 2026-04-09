@@ -1,9 +1,28 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  CalendarDays,
+  ChevronRight,
+  Clock3,
+  CreditCard,
+  Receipt,
+  WalletCards,
+  X,
+} from 'lucide-react';
 import apiClient from '../../utils/apiClient';
 import ConfirmBoardingModal from './ConfirmBoardingModal';
 import QuickSaleForm from './QuickSaleForm';
 import { getSlotAvailable } from '../../utils/slotAvailability';
 import { useOwnerData } from '../../contexts/OwnerDataContext';
+import { dpAlert, dpButton, dpIconWrap } from './dispatcherTheme';
+
+const ACTION_OVERLAY_Z_INDEX = 80;
+
+function renderDispatcherOverlay(node) {
+  if (typeof document === 'undefined') return node;
+  const root = document.querySelector('.dispatcher-premium') || document.body;
+  return createPortal(node, root);
+}
 
 /**
  * Local helper to generate ticket numbers (fallback if utils/ticketUtils is missing)
@@ -77,6 +96,26 @@ function getPaymentInfoText(presale) {
 function formatPhone(phone) {
   const p = String(phone || '').replace(/[^\d+]/g, '');
   return p || '—';
+}
+
+function getSaleAttribution(presale) {
+  const rawRole = String(
+    presale?.sale_attribution_role ||
+    presale?.seller_role ||
+    ''
+  ).toLowerCase();
+  const role = rawRole === 'seller' || rawRole === 'dispatcher' ? rawRole : '';
+  const name = String(
+    presale?.sale_attribution_name ||
+    presale?.seller_name ||
+    presale?.sellerName ||
+    ''
+  ).trim();
+  const id = presale?.sale_attribution_user_id ?? presale?.seller_id ?? presale?.sellerId;
+  const fallbackName = id != null && id !== '' ? `#${id}` : '';
+  const displayName = name || fallbackName;
+
+  return displayName ? { name: displayName, role } : null;
 }
 
 function formatDateTime(value) {
@@ -188,7 +227,7 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
       const slots = resp?.data || resp?.slots || resp || [];
       const arr = Array.isArray(slots) ? slots : [];
       const found = arr.find((s) => String(s?.slot_uid ?? s?.id ?? '') === String(slotKey));
-      const v = Number(found?.seats_left ?? found?.seatsLeft ?? found?.free_seats ?? found?.freeSeats);
+      const v = Number(found?.seats_available ?? found?.seatsAvailable ?? found?.seats_left ?? found?.seatsLeft ?? found?.free_seats ?? found?.freeSeats);
       if (Number.isFinite(v)) setSeatsLeft(v);
     } catch {
       // silent
@@ -903,6 +942,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
     const totalPrice = safeToInt(presale.total_price, 0);
     const prepay = safeToInt(presale.prepayment_amount, 0);
     const remaining = Math.max(0, totalPrice - prepay);
+    const saleAttribution = getSaleAttribution(presale);
 
     const isActive = status === 'ACTIVE' && remaining > 0;
     const payPct = totalPrice > 0 ? Math.min(100, Math.round((prepay / totalPrice) * 100)) : 0;
@@ -926,6 +966,12 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 <div className="mt-0.5 text-sm text-neutral-300 truncate">
                   {formatPhone(presale.customer_phone)}
                 </div>
+                {saleAttribution && (
+                  <div className="mt-1 text-xs text-neutral-400 truncate">
+                    Оформил: <span className="text-neutral-200">{saleAttribution.name}</span>
+                    {saleAttribution.role && <span className="text-neutral-500"> · {saleAttribution.role}</span>}
+                  </div>
+                )}
               </div>
 
               <div className="shrink-0 flex flex-col items-end gap-1">
@@ -1126,22 +1172,28 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
   return (
     <div className="h-full min-h-[98vh]">
       {/* Sticky header */}
-      <div className="sticky top-0 z-40 bg-neutral-950 border-b border-neutral-900">
-        <div className="max-w-[650px] mx-auto p-4">
+      <div className="sticky top-0 z-40 px-3 pt-3 pb-2 bg-[linear-gradient(180deg,rgba(4,7,15,0.96)_0%,rgba(4,7,15,0.78)_72%,rgba(4,7,15,0)_100%)] backdrop-blur-xl">
+        <div className="max-w-[760px] mx-auto rounded-[26px] border border-white/10 bg-[linear-gradient(135deg,rgba(22,31,49,0.82)_0%,rgba(6,10,20,0.94)_58%,rgba(9,23,36,0.82)_100%)] p-4 shadow-[0_24px_70px_-44px_rgba(0,0,0,0.95)]">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="font-bold text-[22px] leading-snug truncate">{trip.boat_name || 'Рейс'}</div>
-              <div className="mt-1 text-sm text-neutral-300 flex flex-wrap gap-x-3 gap-y-1">
-                <span>🕒 {trip.time || '—'}</span>
-                <span className="text-neutral-700">•</span>
-                <span>📅 {trip.trip_date || '—'}</span>
-                <span className="text-neutral-700">•</span>
-                <span>Свободно: <span className="font-semibold">{available}</span></span>
+              <div className="mt-2 flex flex-wrap gap-2 text-sm text-neutral-200">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5">
+                  <Clock3 size={14} strokeWidth={2} />
+                  {trip.time || '—'}
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5">
+                  <CalendarDays size={14} strokeWidth={2} />
+                  {trip.trip_date || '—'}
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/15 bg-emerald-400/[0.08] px-3 py-1.5 text-emerald-100">
+                  Свободно: <span className="font-semibold">{available}</span>
+                </span>
               </div>
             </div>
 
             <button
-              className="shrink-0 px-4 py-2 rounded-2xl bg-neutral-800/50 text-neutral-100 font-semibold"
+              className={dpButton({ variant: 'ghost', className: 'shrink-0' })}
               onClick={() => (onBack || onClose)?.()}
             >
               Назад
@@ -1149,7 +1201,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
           </div>
 
           {error && (
-            <div className="mt-3 bg-red-50 border border-red-200 text-red-700 rounded-2xl p-3 text-sm">
+            <div className={dpAlert('danger', 'mt-3 text-sm')}>
               {error}
             </div>
           )}
@@ -1157,9 +1209,11 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
           <div className="mt-3">
             <button
               disabled={shiftClosed}
-              className={`w-full px-4 py-3 rounded-2xl font-semibold ${
-                shiftClosed ? 'bg-gray-200 text-neutral-500' : 'bg-emerald-600 text-white'
-              }`}
+              className={dpButton({
+                variant: shiftClosed ? 'ghost' : 'success',
+                disabled: shiftClosed,
+                block: true,
+              })}
               onClick={() => setShowQuickSale(true)}
               data-testid="trip-sell-btn"
             >
@@ -1192,30 +1246,34 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
       </div>
 
       {showQuickSale && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-end">
-          <div className="w-full bg-neutral-950/40 rounded-t-2xl p-4 -lg max-h-[90vh] overflow-y-auto">
-            <QuickSaleForm
-              trip={trip}
-              onBack={() => setShowQuickSale(false)}
-              onSaleSuccess={() => {
-                setShowQuickSale(false);
-                lastReloadAtRef.current = 0;
-        reloadPresalesAndTickets();
-        refreshSeatsLeft();
-              }}
-              refreshAllSlots={refreshAllSlots}
-            />
-          </div>
-        </div>
+        <QuickSaleForm
+          trip={trip}
+          seatsLeft={available}
+          onBack={() => setShowQuickSale(false)}
+          onSaleSuccess={(_, soldSeats) => {
+            setShowQuickSale(false);
+            const sold = Number(soldSeats);
+            if (Number.isFinite(sold) && sold > 0) {
+              setSeatsLeft(prev => Math.max(0, (Number.isFinite(prev) ? prev : available) - Math.trunc(sold)));
+            }
+            lastReloadAtRef.current = 0;
+            reloadPresalesAndTickets();
+            refreshSeatsLeft();
+          }}
+          refreshAllSlots={refreshAllSlots}
+        />
       )}
 
-      {transferModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-end">
-          <div className="w-full bg-neutral-950/40 rounded-t-2xl p-4 -lg">
+      {transferModalOpen && renderDispatcherOverlay(
+        <div
+          className="dp-overlay fixed inset-0 flex items-end justify-center p-3"
+          style={{ zIndex: ACTION_OVERLAY_Z_INDEX }}
+        >
+          <div className="dp-sheet w-full rounded-t-[28px] p-4">
             <div className="flex items-center justify-between">
               <div className="text-lg font-bold">Перенос</div>
               <button
-                className="px-3 py-2 rounded-xl bg-neutral-800/50 text-neutral-200"
+                className={dpButton({ variant: 'ghost', size: 'sm' })}
                 onClick={() => {
                   setTransferModalOpen(false);
                   setTransferCtx(null);
@@ -1223,14 +1281,14 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                   setTransferSelectedSlotUid('');
                 }}
               >
-                ✕
+                <X size={16} strokeWidth={2} />
               </button>
             </div>
 
             <div className="mt-3">
               <label className="block text-sm text-neutral-300 mb-1">Выбери рейс</label>
               <select
-                className="w-full p-3 rounded-2xl border border-neutral-800 bg-neutral-950/40 text-neutral-100"
+                className="w-full p-3 rounded-2xl text-neutral-100"
                 value={transferSelectedSlotUid}
                 onChange={(e) => setTransferSelectedSlotUid(e.target.value)}
               >
@@ -1244,14 +1302,14 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
             </div>
 
             {transferError && (
-              <div className="mt-3 bg-red-50 border border-red-200 text-red-700 rounded-2xl p-3 text-sm">
+                <div className={dpAlert('danger', 'mt-3 text-sm')}>
                 {transferError}
               </div>
             )}
 
             <div className="mt-4 grid grid-cols-2 gap-2">
               <button
-                className="px-4 py-3 rounded-2xl bg-neutral-800/50 text-neutral-100 font-semibold"
+                className={dpButton({ variant: 'ghost', block: true })}
                 onClick={() => {
                   setTransferModalOpen(false);
                   setTransferCtx(null);
@@ -1264,7 +1322,11 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
               <button
                 disabled={transferLoading}
-                className={`px-4 py-3 rounded-2xl font-semibold ${transferLoading ? 'bg-gray-200 text-neutral-500' : 'bg-blue-600 text-white'}`}
+                className={dpButton({
+                  variant: transferLoading ? 'ghost' : 'primary',
+                  disabled: transferLoading,
+                  block: true,
+                })}
                 onClick={handleConfirmTransfer}
               >
                 {transferLoading ? '...' : 'Подтвердить перенос'}
@@ -1274,31 +1336,16 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
         </div>
       )}
 
-      {showQuickSale && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-end">
-          <div className="w-full bg-neutral-950/40 rounded-t-2xl p-4 -lg max-h-[95vh] overflow-auto">
-            <QuickSaleForm
-              trip={trip}
-              onBack={() => setShowQuickSale(false)}
-              refreshAllSlots={refreshAllSlots}
-              onSaleSuccess={() => {
-                setShowQuickSale(false);
-                lastReloadAtRef.current = 0;
-        reloadPresalesAndTickets();
-        refreshSeatsLeft();
-              }}
-            />
-          </div>
-        </div>
-      )}
-
-      {paymentMethodModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-end">
-          <div className="w-full bg-neutral-950/40 rounded-t-2xl p-4 -lg">
+      {paymentMethodModalOpen && renderDispatcherOverlay(
+        <div
+          className="dp-overlay fixed inset-0 flex items-end justify-center p-3"
+          style={{ zIndex: ACTION_OVERLAY_Z_INDEX }}
+        >
+          <div className="dp-sheet w-full rounded-t-[28px] p-4">
             <div className="flex items-center justify-between">
               <div className="text-lg font-bold">Способ оплаты</div>
               <button
-                className="px-3 py-2 rounded-xl bg-neutral-800/50 text-neutral-200"
+                className={dpButton({ variant: 'ghost', size: 'sm' })}
                 onClick={() => {
                   setPaymentMethodModalOpen(false);
                   setPaymentMethodSelected(null);
@@ -1311,7 +1358,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                   setConfirmError(null);
                 }}
               >
-                ✕
+                <X size={16} strokeWidth={2} />
               </button>
             </div>
 
@@ -1330,13 +1377,15 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 }}
               >
                 <div className="flex items-center gap-3">
-                  <span className="text-2xl leading-none">💵</span>
+                  <div className={dpIconWrap('success')}>
+                    <WalletCards size={18} strokeWidth={2} />
+                  </div>
                   <div className="text-left">
                     <div className="font-bold">Наличные</div>
                     <div className="text-sm text-neutral-400">Оплата в кассу</div>
                   </div>
                 </div>
-                <span className="text-neutral-500">›</span>
+                <ChevronRight size={16} strokeWidth={2} className="text-neutral-500" />
               </button>
 
               <button
@@ -1349,13 +1398,15 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 }}
               >
                 <div className="flex items-center gap-3">
-                  <span className="text-2xl leading-none">💳</span>
+                  <div className={dpIconWrap('info')}>
+                    <CreditCard size={18} strokeWidth={2} />
+                  </div>
                   <div className="text-left">
                     <div className="font-bold">Безнал</div>
                     <div className="text-sm text-neutral-400">Карта / перевод</div>
                   </div>
                 </div>
-                <span className="text-neutral-500">›</span>
+                <ChevronRight size={16} strokeWidth={2} className="text-neutral-500" />
               </button>
 
 
@@ -1367,13 +1418,15 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 }}
               >
                 <div className="flex items-center gap-3">
-                  <span className="text-2xl leading-none">🧾</span>
+                  <div className={dpIconWrap('warning')}>
+                    <Receipt size={18} strokeWidth={2} />
+                  </div>
                   <div className="text-left">
                     <div className="font-bold">Комбо</div>
                     <div className="text-sm text-neutral-400">Часть наличка / часть карта</div>
                   </div>
                 </div>
-                <span className="text-neutral-500">›</span>
+                <ChevronRight size={16} strokeWidth={2} className="text-neutral-500" />
               </button>
 
               {paymentMethodSelected === 'mixed' && (
@@ -1422,7 +1475,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
         </div>
       )}
 
-      {(() => {
+      {confirmBoardingOpen && renderDispatcherOverlay((() => {
         const idToUse = pendingPassengerId || pendingPresaleGroup?.id;
         const presaleToOperate = idToUse ? presales.find(p => p.id == idToUse) : null;
         const ticketPresale = pendingTicketOperation ? findPresaleByTicketId(pendingTicketOperation.ticketId) : null;
@@ -1437,22 +1490,24 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
           : 'boarding';
 
         return (
-          <ConfirmBoardingModal
-        open={confirmBoardingOpen}
-        onConfirm={handleConfirmBoarding}
-        onClose={() => {
-          setConfirmBoardingOpen(false);
-          setConfirmError(null);
-          setPendingTicketOperation(null); // Reset ticket operation
-          setPaymentMethodSelected(null);
-        }}
-        loading={confirmLoading}
-        error={confirmError}
-        mode={mode}
-        prepayAmount={prepay}
-          />
+          <div style={{ position: 'fixed', inset: 0, zIndex: ACTION_OVERLAY_Z_INDEX }}>
+            <ConfirmBoardingModal
+              open={confirmBoardingOpen}
+              onConfirm={handleConfirmBoarding}
+              onClose={() => {
+                setConfirmBoardingOpen(false);
+                setConfirmError(null);
+                setPendingTicketOperation(null); // Reset ticket operation
+                setPaymentMethodSelected(null);
+              }}
+              loading={confirmLoading}
+              error={confirmError}
+              mode={mode}
+              prepayAmount={prepay}
+            />
+          </div>
         );
-      })()}
+      })())}
     </div>
   );
 }

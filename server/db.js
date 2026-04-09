@@ -81,6 +81,7 @@ try {
       capacity INTEGER NOT NULL,
       seats_left INTEGER NOT NULL,
       duration_minutes INTEGER NULL,
+      trip_date TEXT NULL,
       is_active INTEGER NOT NULL DEFAULT 1,
       price_adult INTEGER NULL,
       price_child INTEGER NULL,
@@ -123,6 +124,7 @@ try {
   const boatSlotsColumns = db.prepare("PRAGMA table_info(boat_slots)").all();
   const hasSeatsLeftColumn = boatSlotsColumns.some(column => column.name === 'seats_left');
   const hasCapacityColumn = boatSlotsColumns.some(column => column.name === 'capacity');
+  const hasTripDateColumn = boatSlotsColumns.some(column => column.name === 'trip_date');
 
   if (!hasIsActiveColumn) {
     try {
@@ -166,6 +168,16 @@ try {
     } catch (error) {
       // Column might already exist, ignore error
       console.log('capacity column may already exist in boat_slots table');
+    }
+  }
+
+  if (!hasTripDateColumn) {
+    try {
+      db.exec('ALTER TABLE boat_slots ADD COLUMN trip_date TEXT NULL');
+      console.log('Added trip_date column to boat_slots table');
+    } catch (error) {
+      // Column might already exist, ignore error
+      console.log('trip_date column may already exist in boat_slots table');
     }
   }
 
@@ -992,6 +1004,7 @@ if (presalesSlotUidCheck.count === 0) {
       db.exec(`
         CREATE TABLE IF NOT EXISTS schedule_template_items (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          schedule_template_id INTEGER REFERENCES schedule_templates(id),
           name TEXT,
           boat_id INTEGER REFERENCES boats(id),
           boat_type TEXT,
@@ -1021,6 +1034,17 @@ if (presalesSlotUidCheck.count === 0) {
     }
   } else {
     console.log('[SCHEDULE_TEMPLATE_ITEMS_TABLE] Schedule template items table already created, skipping...');
+  }
+
+  try {
+    const scheduleTemplateItemColumns = db.prepare("PRAGMA table_info(schedule_template_items)").all();
+    const hasScheduleTemplateItemLinkColumn = scheduleTemplateItemColumns.some(column => column.name === 'schedule_template_id');
+    if (!hasScheduleTemplateItemLinkColumn) {
+      db.exec('ALTER TABLE schedule_template_items ADD COLUMN schedule_template_id INTEGER REFERENCES schedule_templates(id)');
+      console.log('[SCHEDULE_TEMPLATE_ITEMS_TABLE] Added schedule_template_id column to schedule_template_items table');
+    }
+  } catch (error) {
+    console.log('[SCHEDULE_TEMPLATE_ITEMS_TABLE] schedule_template_id column migration skipped:', error.message);
   }
   
   // Seed initial admin user if no users exist

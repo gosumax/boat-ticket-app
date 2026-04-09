@@ -151,9 +151,629 @@ function recalcPendingForTransfer(presaleId, slotUid, boatSlotId, totalPrice, pr
 import { authenticateToken, canSell, canDispatchManageSlots } from './auth.js';
 import { getDatabaseFilePath } from './db.js';
 import { assertShiftOpen, SHIFT_CLOSED_CODE } from './shift-guard.mjs';
+import { calcMotivationDay } from './motivation/engine.mjs';
+import {
+  getSellerDayRevenue,
+  getSellerState,
+  getStreakMultiplier,
+  getStreakThreshold,
+} from './seller-motivation-state.mjs';
+import { resolveOwnerSettings } from './owner-settings.mjs';
+import {
+  buildOwnerSeasonMotivationReadModel,
+  buildOwnerWeeklyMotivationReadModel,
+} from './owner.mjs';
+import { getIsoWeekIdForBusinessDay } from './utils/iso-week.mjs';
 
 function getLocalBusinessDay() {
   return db.prepare(`SELECT DATE('now','localtime') AS d`).get()?.d || null;
+}
+
+function roundToKopecks(amount) {
+  return Math.round(Number(amount || 0) * 100) / 100;
+}
+
+function getLocalBusinessDayWindow() {
+  const row = db.prepare(`
+    SELECT
+      DATE('now','localtime') AS today,
+      DATE('now','localtime','+1 day') AS tomorrow
+  `).get();
+
+  return {
+    today: row?.today || getLocalBusinessDay(),
+    tomorrow: row?.tomorrow || null,
+  };
+}
+
+const SEASON_MMDD_REGEX = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+function resolveSeasonDateRange(seasonId, settings) {
+  const defaultStart = '01-01';
+  const defaultEnd = '12-31';
+  const ymdRegex = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+  const rawSeasonStart = String(settings?.seasonStart ?? '').trim();
+  const rawSeasonEnd = String(settings?.seasonEnd ?? '').trim();
+  const hasValidYmdRange =
+    ymdRegex.test(rawSeasonStart) &&
+    ymdRegex.test(rawSeasonEnd) &&
+    rawSeasonStart <= rawSeasonEnd;
+
+  const rawStartMmdd = String(settings?.season_start_mmdd ?? '').trim();
+  const rawEndMmdd = String(settings?.season_end_mmdd ?? '').trim();
+  const hasValidMmddRange =
+    SEASON_MMDD_REGEX.test(rawStartMmdd) &&
+    SEASON_MMDD_REGEX.test(rawEndMmdd) &&
+    rawStartMmdd <= rawEndMmdd;
+
+  const startMmdd = hasValidYmdRange
+    ? rawSeasonStart.slice(5)
+    : (hasValidMmddRange ? rawStartMmdd : defaultStart);
+  const endMmdd = hasValidYmdRange
+    ? rawSeasonEnd.slice(5)
+    : (hasValidMmddRange ? rawEndMmdd : defaultEnd);
+
+  return {
+    seasonFrom: `${seasonId}-${startMmdd}`,
+    seasonTo: `${seasonId}-${endMmdd}`,
+  };
+}
+
+function listCanonicalSellerPointRowsForBusinessDay(businessDay) {
+  const settings = resolveOwnerSettings(db);
+  const kSpeed = Number(settings.k_speed ?? 1.2);
+  const kCruise = Number(settings.k_cruise ?? 3.0);
+  const kZoneHedgehog = Number(settings.k_zone_hedgehog ?? 1.3);
+  const kZoneCenter = Number(settings.k_zone_center ?? 1.0);
+  const kZoneSanatorium = Number(settings.k_zone_sanatorium ?? 0.8);
+  const kZoneStationary = Number(settings.k_zone_stationary ?? 0.7);
+  const kBananaHedgehog = Number(settings.k_banana_hedgehog ?? 2.7);
+  const kBananaCenter = Number(settings.k_banana_center ?? 2.2);
+  const kBananaSanatorium = Number(settings.k_banana_sanatorium ?? 1.2);
+  const kBananaStationary = Number(settings.k_banana_stationary ?? 1.0);
+
+  const getZoneK = (zone) => {
+    if (zone === 'hedgehog') return kZoneHedgehog;
+    if (zone === 'center') return kZoneCenter;
+    if (zone === 'sanatorium') return kZoneSanatorium;
+    if (zone === 'stationary') return kZoneStationary;
+    return 1.0;
+  };
+
+  const getBananaK = (zone) => {
+    if (zone === 'hedgehog') return kBananaHedgehog;
+    if (zone === 'center') return kBananaCenter;
+    if (zone === 'sanatorium') return kBananaSanatorium;
+    if (zone === 'stationary') return kBananaStationary;
+    return 1.0;
+  };
+
+  const sellerZoneRows = db.prepare(`
+    SELECT id, username, zone
+    FROM users
+    WHERE role = 'seller' AND is_active = 1
+  `).all();
+  const sellerZoneMap = new Map((sellerZoneRows || []).map((row) => [Number(row.id), row]));
+  const revenueRows = db.prepare(`
+    SELECT
+      ml.seller_id,
+      COALESCE(b.type, gb.type) AS boat_type,
+      p.zone_at_sale,
+      COALESCE(SUM(CASE
+        WHEN ml.type IN (
+          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+        ) THEN ml.amount
+        ELSE 0
+      END), 0) AS revenue_gross,
+      COALESCE(SUM(CASE WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN ABS(ml.amount) ELSE 0 END), 0) AS refunds
+    FROM money_ledger ml
+    LEFT JOIN presales p ON p.id = ml.presale_id
+    LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
+    LEFT JOIN generated_slots gs
+      ON p.slot_uid LIKE 'generated:%'
+     AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER)
+    LEFT JOIN boats b ON b.id = bs.boat_id
+    LEFT JOIN boats gb ON gb.id = gs.boat_id
+    WHERE ml.status = 'POSTED'
+      AND ml.kind = 'SELLER_SHIFT'
+      AND DATE(ml.business_day) = ?
+      AND ml.seller_id IS NOT NULL
+      AND ml.seller_id > 0
+      AND ml.type IN (
+        'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+        'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
+        'SALE_CANCEL_REVERSE'
+      )
+    GROUP BY ml.seller_id, COALESCE(b.type, gb.type), p.zone_at_sale
+  `).all(businessDay);
+
+  const statsMap = new Map();
+  for (const row of revenueRows || []) {
+    const sellerId = Number(row.seller_id);
+    const boatType = String(row.boat_type || '').toLowerCase();
+    const sellerMeta = sellerZoneMap.get(sellerId);
+    if (!sellerMeta) continue;
+    if (!['speed', 'cruise', 'banana'].includes(boatType)) continue;
+
+    const revenueNet = Math.max(
+      0,
+      Number(row.revenue_gross || 0) - Number(row.refunds || 0)
+    );
+
+    let entry = statsMap.get(sellerId);
+    if (!entry) {
+      const state = getSellerState(sellerId);
+      const streakDays = state?.calibrated ? Number(state.streak_days || 0) : 0;
+      entry = {
+        user_id: sellerId,
+        name: sellerMeta.username || `Seller ${sellerId}`,
+        revenue_total: 0,
+        points_total: 0,
+        k_streak: getStreakMultiplier(streakDays),
+        zone: sellerMeta.zone || null,
+      };
+      statsMap.set(sellerId, entry);
+    }
+
+    const effectiveZone = row.zone_at_sale || entry.zone;
+    const revenueInK = revenueNet / 1000;
+    let pointsBase = 0;
+
+    if (boatType === 'speed') {
+      pointsBase = revenueInK * kSpeed * getZoneK(effectiveZone);
+    } else if (boatType === 'cruise') {
+      pointsBase = revenueInK * kCruise * getZoneK(effectiveZone);
+    } else if (boatType === 'banana') {
+      pointsBase = revenueInK * getBananaK(effectiveZone);
+    }
+
+    entry.revenue_total = roundToKopecks(entry.revenue_total + revenueNet);
+    entry.points_total = roundToKopecks(entry.points_total + (pointsBase * entry.k_streak));
+  }
+
+  return [...statsMap.values()];
+}
+
+function hasStoredSellerDayStats(businessDay) {
+  const row = db.prepare(`
+    SELECT COUNT(*) AS cnt
+    FROM seller_day_stats
+    WHERE DATE(business_day) = ?
+  `).get(businessDay);
+  return Number(row?.cnt || 0) > 0;
+}
+
+function listSellerLeaderboardRows({ dateFrom, dateTo, today, todayRows = null }) {
+  const shouldOverlayToday =
+    today >= dateFrom &&
+    today <= dateTo &&
+    !hasStoredSellerDayStats(today) &&
+    Array.isArray(todayRows);
+
+  const where = ['DATE(s.business_day) BETWEEN ? AND ?'];
+  const params = [dateFrom, dateTo];
+  if (shouldOverlayToday) {
+    where.push('DATE(s.business_day) <> ?');
+    params.push(today);
+  }
+
+  const aggregatedRows = db.prepare(`
+    SELECT
+      s.seller_id AS user_id,
+      COALESCE(u.username, 'Seller ' || s.seller_id) AS name,
+      COALESCE(SUM(s.revenue_day), 0) AS revenue_total,
+      COALESCE(SUM(s.points_day_total), 0) AS points_total
+    FROM seller_day_stats s
+    JOIN users u ON u.id = s.seller_id
+    WHERE u.role = 'seller'
+      AND COALESCE(u.is_active, 1) = 1
+      AND ${where.join('\n      AND ')}
+    GROUP BY s.seller_id, name
+  `).all(...params);
+
+  const rowsMap = new Map();
+  for (const row of aggregatedRows || []) {
+    rowsMap.set(Number(row.user_id), {
+      user_id: Number(row.user_id),
+      name: row.name || `Seller ${row.user_id}`,
+      revenue_total: roundToKopecks(Number(row.revenue_total || 0)),
+      points_total: roundToKopecks(Number(row.points_total || 0)),
+    });
+  }
+
+  if (shouldOverlayToday) {
+    for (const row of todayRows) {
+      const sellerId = Number(row.user_id);
+      if (!Number.isFinite(sellerId) || sellerId <= 0) continue;
+      const entry = rowsMap.get(sellerId) || {
+        user_id: sellerId,
+        name: row.name || `Seller ${sellerId}`,
+        revenue_total: 0,
+        points_total: 0,
+      };
+      entry.revenue_total = roundToKopecks(entry.revenue_total + Number(row.revenue_total || 0));
+      entry.points_total = roundToKopecks(entry.points_total + Number(row.points_total || 0));
+      rowsMap.set(sellerId, entry);
+    }
+  }
+
+  const rows = [...rowsMap.values()]
+    .filter((row) => Number(row.revenue_total || 0) > 0 || Number(row.points_total || 0) > 0)
+    .sort((left, right) => {
+      if (Number(right.points_total || 0) !== Number(left.points_total || 0)) {
+        return Number(right.points_total || 0) - Number(left.points_total || 0);
+      }
+      if (Number(right.revenue_total || 0) !== Number(left.revenue_total || 0)) {
+        return Number(right.revenue_total || 0) - Number(left.revenue_total || 0);
+      }
+      return String(left.name || '').localeCompare(String(right.name || ''));
+    })
+    .map((row, index) => ({
+      ...row,
+      place: index + 1,
+    }));
+
+  return {
+    rows,
+    source: shouldOverlayToday ? 'seller_day_stats+live_today' : 'seller_day_stats',
+  };
+}
+
+const SELLER_SEASON_RULES = {
+  minWorkedDaysSeason: 75,
+  minWorkedDaysSep: 20,
+  minWorkedDaysEndSep: 1,
+  endSepWindowDays: 7,
+};
+
+const SEASON_PAYOUT_SCHEMES = new Set(['all', 'top3', 'top5']);
+
+function getCurrentWeeklyPrizeSplit(poolTotal) {
+  const total = Math.max(0, Math.round(Number(poolTotal || 0)));
+  const first = Math.max(0, Math.round(total * 0.5));
+  const second = Math.max(0, Math.round(total * 0.3));
+  const third = Math.max(0, total - first - second);
+
+  return {
+    first,
+    second,
+    third,
+  };
+}
+
+function buildCurrentWeeklyPrizes(poolTotal) {
+  const split = getCurrentWeeklyPrizeSplit(poolTotal);
+  return [
+    { place: 1, amount: split.first },
+    { place: 2, amount: split.second },
+    { place: 3, amount: split.third },
+  ];
+}
+
+function getWeeklyPrizeAmountByPlace(place, prizes) {
+  const numericPlace = Number(place || 0);
+  if (!Number.isFinite(numericPlace) || numericPlace <= 0) return 0;
+  return Number(prizes.find((item) => Number(item.place) === numericPlace)?.amount || 0);
+}
+
+function normalizeSeasonPayoutScheme(raw) {
+  const scheme = String(raw || '').trim().toLowerCase();
+  return SEASON_PAYOUT_SCHEMES.has(scheme) ? scheme : 'all';
+}
+
+function getSeasonPayoutModeLabel(scheme) {
+  if (scheme === 'top3') return 'eligible_top3_weighted_by_rank';
+  if (scheme === 'top5') return 'eligible_top5_weighted_by_rank';
+  return 'eligible_all_equal_split';
+}
+
+function selectSeasonPayoutRecipients(sellers, scheme) {
+  const rankedSellers = (Array.isArray(sellers) ? sellers : []).filter((seller) => Number(seller?.user_id || 0) > 0);
+  if (scheme === 'top3') return rankedSellers.slice(0, 3);
+  if (scheme === 'top5') return rankedSellers.slice(0, 5);
+  return rankedSellers;
+}
+
+function getSeasonPayoutWeights(scheme, recipientCount) {
+  const count = Math.max(0, Number(recipientCount || 0));
+  if (count <= 0) return [];
+
+  if (scheme === 'all') {
+    return Array.from({ length: count }, () => 1 / count);
+  }
+
+  if (scheme === 'top3') {
+    if (count === 1) return [1];
+    if (count === 2) return [0.6, 0.4];
+    return [0.5, 0.3, 0.2];
+  }
+
+  if (count === 1) return [1];
+  if (count === 2) return [0.6, 0.4];
+  if (count === 3) return [0.5, 0.3, 0.2];
+  if (count === 4) return [0.4, 0.3, 0.2, 0.1];
+  return [0.35, 0.25, 0.18, 0.12, 0.1];
+}
+
+function allocateSeasonPayouts(totalAmount, recipients, scheme) {
+  const payoutMap = new Map();
+  const shareMap = new Map();
+  const preparedRecipients = (Array.isArray(recipients) ? recipients : [])
+    .map((recipient) => Number(recipient?.user_id || 0))
+    .filter((userId) => userId > 0);
+  const payoutFundTotal = roundToKopecks(Math.max(0, Number(totalAmount || 0)));
+  const payoutWeights = getSeasonPayoutWeights(scheme, preparedRecipients.length);
+
+  if (preparedRecipients.length === 0 || payoutFundTotal <= 0 || payoutWeights.length !== preparedRecipients.length) {
+    return { payoutMap, shareMap, allocatedTotal: 0 };
+  }
+
+  const totalKopecks = Math.max(0, Math.round(payoutFundTotal * 100));
+  const payoutKopecks = payoutWeights.map((weight) => Math.max(0, Math.floor(totalKopecks * Number(weight || 0))));
+  let undistributedKopecks = Math.max(0, totalKopecks - payoutKopecks.reduce((sum, amount) => sum + amount, 0));
+
+  for (let index = 0; undistributedKopecks > 0; index = (index + 1) % payoutKopecks.length) {
+    payoutKopecks[index] += 1;
+    undistributedKopecks -= 1;
+  }
+
+  let allocatedTotal = 0;
+  preparedRecipients.forEach((userId, index) => {
+    const payoutAmount = roundToKopecks(payoutKopecks[index] / 100);
+    shareMap.set(userId, Number(payoutWeights[index] || 0));
+    payoutMap.set(userId, payoutAmount);
+    allocatedTotal = roundToKopecks(allocatedTotal + payoutAmount);
+  });
+
+  return {
+    payoutMap,
+    shareMap,
+    allocatedTotal: roundToKopecks(allocatedTotal),
+  };
+}
+
+function getActiveSellerMetaMap() {
+  const rows = db.prepare(`
+    SELECT id, username, zone
+    FROM users
+    WHERE role = 'seller' AND is_active = 1
+  `).all();
+
+  return new Map((rows || []).map((row) => [Number(row.id), row]));
+}
+
+function buildCurrentSellerBaseSummary(sellerId, activeSellerMeta) {
+  return {
+    user_id: sellerId,
+    name: activeSellerMeta?.username || `Seller ${sellerId}`,
+    zone: activeSellerMeta?.zone || null,
+    place: null,
+    points: null,
+    revenue: null,
+    current_payout: 0,
+    prize_place: null,
+    participating: false,
+  };
+}
+
+function buildWorkedDaysMap(dateFrom, dateTo, { today, liveTodayRows = null } = {}) {
+  const rows = db.prepare(`
+    SELECT seller_id, COUNT(*) AS cnt
+    FROM seller_day_stats
+    WHERE business_day BETWEEN ? AND ?
+      AND revenue_day > 0
+    GROUP BY seller_id
+  `).all(dateFrom, dateTo);
+
+  const result = new Map((rows || []).map((row) => [Number(row.seller_id), Number(row.cnt || 0)]));
+
+  if (
+    Array.isArray(liveTodayRows) &&
+    String(today || '').trim() &&
+    today >= dateFrom &&
+    today <= dateTo
+  ) {
+    for (const row of liveTodayRows) {
+      const sellerId = Number(row?.user_id || 0);
+      const revenueTotal = Number(row?.revenue_total || 0);
+      if (!Number.isFinite(sellerId) || sellerId <= 0 || revenueTotal <= 0) continue;
+      result.set(sellerId, Number(result.get(sellerId) || 0) + 1);
+    }
+  }
+
+  return result;
+}
+
+function buildSeasonProgress({
+  workedDaysSeason = 0,
+  workedDaysSep = 0,
+  workedDaysEndSep = 0,
+} = {}) {
+  const seasonRequired = SELLER_SEASON_RULES.minWorkedDaysSeason;
+  const sepRequired = SELLER_SEASON_RULES.minWorkedDaysSep;
+  const endSepRequired = SELLER_SEASON_RULES.minWorkedDaysEndSep;
+
+  const remainingSeason = Math.max(0, seasonRequired - Number(workedDaysSeason || 0));
+  const remainingSep = Math.max(0, sepRequired - Number(workedDaysSep || 0));
+  const remainingEndSep = Math.max(0, endSepRequired - Number(workedDaysEndSep || 0));
+
+  return {
+    worked_days_season: Number(workedDaysSeason || 0),
+    worked_days_required: seasonRequired,
+    remaining_days_season: remainingSeason,
+    worked_days_sep: Number(workedDaysSep || 0),
+    worked_days_sep_required: sepRequired,
+    remaining_days_sep: remainingSep,
+    worked_days_end_sep: Number(workedDaysEndSep || 0),
+    worked_days_end_sep_required: endSepRequired,
+    remaining_days_end_sep: remainingEndSep,
+    is_eligible: remainingSeason === 0 && remainingSep === 0 && remainingEndSep === 0 ? 1 : 0,
+  };
+}
+
+function mapOwnerWeeklySellerRow(row, sellerId, prizes) {
+  const sellerNumericId = Number(row?.user_id || 0);
+  const place = Number(row?.rank ?? row?.place ?? 0) || null;
+  const currentPayout = roundToKopecks(Number(
+    row?.weekly_payout_current ??
+    row?.weekly_payout ??
+    getWeeklyPrizeAmountByPlace(place, prizes)
+  ) || 0);
+
+  return {
+    user_id: sellerNumericId,
+    name: row?.name || `Seller ${sellerNumericId}`,
+    zone: row?.zone || null,
+    place,
+    points: roundToKopecks(Number(row?.points_week_total ?? row?.points_total ?? 0)),
+    revenue: roundToKopecks(Number(row?.revenue_total_week ?? row?.revenue_total ?? 0)),
+    current_payout: currentPayout,
+    prize_place: place && place <= 3 ? place : null,
+    is_prize_place: Boolean(place && place <= 3),
+    participating: true,
+    is_current_seller: sellerNumericId === Number(sellerId || 0),
+  };
+}
+
+function buildWeeklyMotivationSnapshot({ sellerId, today = null } = {}) {
+  const resolvedToday = String(today || '').trim() || getLocalBusinessDay();
+  const weekId = getIsoWeekIdForBusinessDay(resolvedToday);
+  const ownerWeekly = buildOwnerWeeklyMotivationReadModel({ week: weekId });
+  const ownerData = ownerWeekly?.data || {};
+  const activeSellerMeta = getActiveSellerMetaMap().get(Number(sellerId || 0)) || null;
+  const poolTotalCurrent = roundToKopecks(Number(
+    ownerData.weekly_pool_total_current ??
+    ownerData.weekly_pool_total ??
+    0
+  ));
+  const prizes = buildCurrentWeeklyPrizes(poolTotalCurrent);
+  const sellers = (Array.isArray(ownerData.sellers) ? ownerData.sellers : [])
+    .map((row) => mapOwnerWeeklySellerRow(row, sellerId, prizes));
+
+  const currentSeller =
+    sellers.find((row) => Number(row.user_id) === Number(sellerId || 0))
+    || buildCurrentSellerBaseSummary(Number(sellerId || 0), activeSellerMeta);
+
+  if (!currentSeller.is_current_seller) {
+    currentSeller.is_current_seller = true;
+  }
+
+  return {
+    week_id: ownerData.week_id || weekId,
+    date_from: ownerData.date_from || resolvedToday,
+    date_to: ownerData.date_to || resolvedToday,
+    weekly_percent: Number(ownerData.weekly_percent || 0),
+    fund_total: poolTotalCurrent,
+    fund_total_ledger: roundToKopecks(Number(ownerData.weekly_pool_total_ledger || 0)),
+    fund_total_daily_sum: roundToKopecks(Number(ownerData.weekly_pool_total_daily_sum || 0)),
+    prizes,
+    total_sellers: Number(ownerData.sellers?.length || sellers.length),
+    source: ownerWeekly?.meta?.ranking_source || 'owner_motivation_weekly',
+    current_seller: currentSeller,
+    sellers,
+    owner_meta: ownerWeekly?.meta || null,
+  };
+}
+
+function buildOwnerSeasonProgress(row, eligibilityRules) {
+  const workedDaysSeason = Math.max(0, Number(row?.worked_days_season || 0));
+  const workedDaysSep = Math.max(0, Number(row?.worked_days_sep || 0));
+  const workedDaysEndSep = Math.max(0, Number(row?.worked_days_end_sep || 0));
+  const workedDaysRequired = Math.max(0, Number(eligibilityRules?.min_worked_days_season ?? SELLER_SEASON_RULES.minWorkedDaysSeason));
+  const workedDaysSepRequired = Math.max(0, Number(eligibilityRules?.min_worked_days_sep ?? SELLER_SEASON_RULES.minWorkedDaysSep));
+  const workedDaysEndSepRequired = Math.max(0, Number(eligibilityRules?.min_worked_days_end_sep ?? 1));
+
+  return {
+    worked_days_season: workedDaysSeason,
+    worked_days_required: workedDaysRequired,
+    remaining_days_season: Math.max(0, workedDaysRequired - workedDaysSeason),
+    worked_days_sep: workedDaysSep,
+    worked_days_sep_required: workedDaysSepRequired,
+    remaining_days_sep: Math.max(0, workedDaysSepRequired - workedDaysSep),
+    worked_days_end_sep: workedDaysEndSep,
+    worked_days_end_sep_required: workedDaysEndSepRequired,
+    remaining_days_end_sep: Math.max(0, workedDaysEndSepRequired - workedDaysEndSep),
+    is_eligible: Number(row?.is_eligible || 0) === 1 ? 1 : 0,
+  };
+}
+
+function mapOwnerSeasonSellerRow(row, sellerId, eligibilityRules) {
+  const sellerNumericId = Number(row?.user_id || 0);
+  const place = Number(row?.rank ?? row?.place ?? 0) || null;
+
+  return {
+    user_id: sellerNumericId,
+    name: row?.name || `Seller ${sellerNumericId}`,
+    zone: row?.zone || null,
+    place,
+    points: roundToKopecks(Number(row?.points_total ?? row?.points ?? 0)),
+    revenue: roundToKopecks(Number(row?.revenue_total ?? row?.revenue ?? 0)),
+    current_payout: roundToKopecks(Number(row?.season_payout ?? row?.current_payout ?? 0)),
+    season_share: Number(row?.season_share || 0),
+    season_payout_recipient: Number(row?.season_payout_recipient || 0),
+    participating: true,
+    is_current_seller: sellerNumericId === Number(sellerId || 0),
+    ...buildOwnerSeasonProgress(row, eligibilityRules),
+  };
+}
+
+function buildSeasonMotivationSnapshot({ sellerId, today = null } = {}) {
+  const resolvedToday = String(today || '').trim() || getLocalBusinessDay();
+  const seasonId = String(resolvedToday || '').slice(0, 4);
+  const ownerSeason = buildOwnerSeasonMotivationReadModel({ seasonId });
+  const ownerData = ownerSeason?.data || {};
+  const eligibilityRules = ownerSeason?.meta?.eligibility_rules || {};
+  const activeSellerMetaMap = getActiveSellerMetaMap();
+  const rankedSellers = (Array.isArray(ownerData.sellers) ? ownerData.sellers : [])
+    .map((row) => mapOwnerSeasonSellerRow(row, sellerId, eligibilityRules));
+
+  const currentSellerId = Number(sellerId || 0);
+  const currentSellerMeta = activeSellerMetaMap.get(currentSellerId) || null;
+  const currentSellerProgress = buildOwnerSeasonProgress({}, eligibilityRules);
+  const currentSeller =
+    rankedSellers.find((seller) => Number(seller.user_id) === currentSellerId)
+    || {
+      user_id: currentSellerId,
+      name: currentSellerMeta?.username || `Seller ${currentSellerId}`,
+      zone: currentSellerMeta?.zone || null,
+      place: null,
+      points: null,
+      revenue: null,
+      current_payout: 0,
+      season_share: 0,
+      season_payout_recipient: 0,
+      participating: false,
+      is_current_seller: true,
+      ...currentSellerProgress,
+    };
+
+  return {
+    season_id: ownerData.season_id || seasonId,
+    season_from: ownerData.season_from || resolvedToday,
+    season_to: ownerData.season_to || resolvedToday,
+    payout_scheme: ownerData.season_payout_scheme || ownerSeason?.meta?.season_payout_scheme || 'all',
+    payout_mode: ownerSeason?.meta?.season_payout_mode || null,
+    fund_total: roundToKopecks(Number(ownerData.season_payout_fund_total || 0)),
+    fund_from_revenue_total: roundToKopecks(Number(ownerData.season_pool_from_revenue_total || 0)),
+    fund_manual_transfer_total: roundToKopecks(Number(ownerData.season_pool_dispatcher_decision_total || ownerData.season_pool_manual_transfer_total || 0)),
+    fund_rounding_total: roundToKopecks(Number(ownerData.season_pool_rounding_total || 0)),
+    total_sellers: rankedSellers.length,
+    eligible_count: Number(ownerData.eligible_count || 0),
+    recipient_count: Number(ownerData.season_payout_recipient_count || 0),
+    payouts_sum: roundToKopecks(Number(ownerData.season_payouts_sum || 0)),
+    payouts_remainder: roundToKopecks(Number(ownerData.season_payouts_remainder || 0)),
+    eligibility_rules: {
+      min_worked_days_season: Number(eligibilityRules.min_worked_days_season ?? SELLER_SEASON_RULES.minWorkedDaysSeason),
+      min_worked_days_sep: Number(eligibilityRules.min_worked_days_sep ?? SELLER_SEASON_RULES.minWorkedDaysSep),
+      min_worked_days_end_sep: Number(eligibilityRules.min_worked_days_end_sep ?? 1),
+      end_sep_window_days: Number(eligibilityRules.end_sep_window_days ?? SELLER_SEASON_RULES.endSepWindowDays),
+    },
+    source: ownerSeason?.meta?.season_stats_source || 'owner_motivation_season',
+    current_seller: currentSeller,
+    sellers: rankedSellers,
+    owner_meta: ownerSeason?.meta || null,
+  };
 }
 
 function respondShiftClosedIfNeeded(res, error) {
@@ -224,6 +844,134 @@ function resolveSaleMoneyAttribution(attributedUserId, fallbackUserId = null) {
     ledger_kind: isSellerAttributed ? 'SELLER_SHIFT' : 'DISPATCHER_SHIFT',
     is_seller_attributed: isSellerAttributed,
   };
+}
+
+function buildPresalePaymentSnapshot({
+  paymentMethod = null,
+  paymentCashAmount = 0,
+  paymentCardAmount = 0,
+  paidAmount = 0,
+} = {}) {
+  const paid = Math.max(0, Math.round(Number(paidAmount || 0)));
+  let method = String(paymentMethod || '').toUpperCase();
+  let cash = Math.max(0, Math.round(Number(paymentCashAmount || 0)));
+  let card = Math.max(0, Math.round(Number(paymentCardAmount || 0)));
+
+  if (paid <= 0) {
+    return {
+      method: null,
+      cash: 0,
+      card: 0,
+      paid: 0,
+    };
+  }
+
+  if (method !== 'CASH' && method !== 'CARD' && method !== 'MIXED') {
+    if (cash > 0 && card > 0) method = 'MIXED';
+    else if (card > 0) method = 'CARD';
+    else method = 'CASH';
+  }
+
+  const rawSum = cash + card;
+  if (method === 'CARD') {
+    cash = 0;
+    card = paid;
+  } else if (method === 'MIXED') {
+    if (rawSum > 0) {
+      cash = Math.round((paid * cash) / rawSum);
+      cash = Math.max(0, Math.min(paid, cash));
+      card = paid - cash;
+    } else {
+      cash = Math.floor(paid / 2);
+      card = paid - cash;
+    }
+    if (cash <= 0) method = 'CARD';
+    else if (card <= 0) method = 'CASH';
+  } else {
+    method = 'CASH';
+    cash = paid;
+    card = 0;
+  }
+
+  return { method, cash, card, paid };
+}
+
+function shrinkPresalePaymentSnapshot({
+  paymentMethod = null,
+  paymentCashAmount = 0,
+  paymentCardAmount = 0,
+  paidAmount = 0,
+  nextPaidAmount = 0,
+} = {}) {
+  const current = buildPresalePaymentSnapshot({
+    paymentMethod,
+    paymentCashAmount,
+    paymentCardAmount,
+    paidAmount,
+  });
+  const next = buildPresalePaymentSnapshot({
+    paymentMethod: current.method,
+    paymentCashAmount: current.cash,
+    paymentCardAmount: current.card,
+    paidAmount: nextPaidAmount,
+  });
+
+  return {
+    current,
+    next,
+    refundCash: Math.max(0, current.cash - next.cash),
+    refundCard: Math.max(0, current.card - next.card),
+  };
+}
+
+function insertPartialSaleCancelReverseRows({
+  presaleId,
+  slotId = null,
+  tripDay = null,
+  sellerId = null,
+  refundCash = 0,
+  refundCard = 0,
+} = {}) {
+  const cash = Math.max(0, Math.round(Number(refundCash || 0)));
+  const card = Math.max(0, Math.round(Number(refundCard || 0)));
+  if (cash <= 0 && card <= 0) return;
+
+  const saleAttribution = resolveSaleMoneyAttribution(sellerId, sellerId);
+  const ledgerKind = saleAttribution.ledger_kind;
+  const ledgerSellerId = saleAttribution.attributed_user_id;
+  const refundBusinessDay = getLocalBusinessDay();
+  const resolvedTripDay = String(tripDay || '').trim() || refundBusinessDay;
+  const insertReverse = db.prepare(`
+    INSERT INTO money_ledger
+      (business_day, trip_day, kind, method, amount, status, seller_id, presale_id, slot_id, event_time, type, decision_final)
+    VALUES
+      (?, ?, ?, ?, ?, 'POSTED', ?, ?, ?, CURRENT_TIMESTAMP, 'SALE_CANCEL_REVERSE', 'CANCELLED')
+  `);
+
+  if (cash > 0) {
+    insertReverse.run(
+      refundBusinessDay,
+      resolvedTripDay,
+      ledgerKind,
+      'CASH',
+      -cash,
+      ledgerSellerId,
+      presaleId,
+      slotId ?? null,
+    );
+  }
+  if (card > 0) {
+    insertReverse.run(
+      refundBusinessDay,
+      resolvedTripDay,
+      ledgerKind,
+      'CARD',
+      -card,
+      ledgerSellerId,
+      presaleId,
+      slotId ?? null,
+    );
+  }
 }
 
 function assertShiftOpenForPresaleDays(presaleId, primaryBusinessDay, extraBusinessDays = []) {
@@ -1860,11 +2608,23 @@ return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedT
 // Get all presales (for dispatcher view)
 router.get('/presales', authenticateToken, canSell, (req, res) => {
   try {
+    const where = [];
+    const params = [];
+
+    if (String(req.user?.role || '').toLowerCase() === 'seller') {
+      where.push('p.seller_id = ?');
+      params.push(Number(req.user.id || 0));
+    }
+
+    const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
     const presales = db.prepare(`
       SELECT 
         p.id, p.boat_slot_id, p.customer_name, p.customer_phone, p.number_of_seats,
         p.total_price, p.prepayment_amount, p.prepayment_comment, p.status, p.tickets_json,
         p.payment_method, p.payment_cash_amount, p.payment_card_amount,
+        p.seller_id as sale_attribution_user_id,
+        u.username as sale_attribution_name,
+        u.role as sale_attribution_role,
         (p.total_price - p.prepayment_amount) as remaining_amount,
         p.created_at, p.updated_at,
         COALESCE(bs.time, gs.time) as slot_time,
@@ -1877,7 +2637,7 @@ router.get('/presales', authenticateToken, canSell, (req, res) => {
         COALESCE(b.is_active, gb.is_active) as boat_is_active,
         COALESCE(bs.capacity, gs.capacity) as slot_capacity,
         COALESCE(bs.seats_left, gs.seats_left) as slot_seats_left,
-        gs.trip_date as slot_trip_date,
+        COALESCE(NULLIF(p.business_day, ''), gs.trip_date) as slot_trip_date,
         COALESCE(bss.seller_cutoff_minutes, gs.seller_cutoff_minutes) as seller_cutoff_minutes,
         COALESCE(bss.dispatcher_cutoff_minutes, gs.dispatcher_cutoff_minutes) as dispatcher_cutoff_minutes,
         CASE 
@@ -1891,13 +2651,240 @@ router.get('/presales', authenticateToken, canSell, (req, res) => {
       LEFT JOIN boats b ON bs.boat_id = b.id
       LEFT JOIN boats gb ON gs.boat_id = gb.id
       LEFT JOIN boat_settings bss ON bss.boat_id = COALESCE(bs.boat_id, gs.boat_id)
+      LEFT JOIN users u ON u.id = p.seller_id
+      ${whereSql}
       ORDER BY p.created_at DESC
-    `).all();
+    `).all(...params);
     
     res.json(presales);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales method=GET message=' + error.message + ' stack=' + error.stack);
     res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
+  }
+});
+
+router.get('/seller-dashboard', authenticateToken, canSell, (req, res) => {
+  try {
+    const role = String(req.user?.role || '').toLowerCase();
+    if (role !== 'seller') {
+      return res.status(403).json({ ok: false, error: 'Seller dashboard is available only for seller role' });
+    }
+
+    const sellerId = Number(req.user?.id || 0);
+    if (!Number.isFinite(sellerId) || sellerId <= 0) {
+      return res.status(401).json({ ok: false, error: 'Invalid seller user context' });
+    }
+
+    const { today, tomorrow } = getLocalBusinessDayWindow();
+    const liveTodayRows = hasStoredSellerDayStats(today)
+      ? null
+      : listCanonicalSellerPointRowsForBusinessDay(today);
+    const motivationResult = calcMotivationDay(db, today, {
+      profile: 'dispatcher_shift_close',
+      persistSnapshot: false,
+    });
+
+    if (motivationResult?.error) {
+      return res.status(400).json({ ok: false, error: motivationResult.error });
+    }
+
+    const dayData = motivationResult?.data || {};
+    const sellerPayout = Array.isArray(dayData.payouts)
+      ? dayData.payouts.find((row) => Number(row?.user_id) === sellerId)
+      : null;
+
+    const todayLeaderboard = listSellerLeaderboardRows({
+      dateFrom: today,
+      dateTo: today,
+      today,
+      todayRows: liveTodayRows,
+    });
+
+    const todayPointsRow = todayLeaderboard.rows.find((row) => Number(row.user_id) === sellerId) || null;
+    const weekData = buildWeeklyMotivationSnapshot({ sellerId, today });
+    const seasonData = buildSeasonMotivationSnapshot({ sellerId, today });
+    const weekRow = weekData.current_seller || null;
+    const seasonRow = seasonData.current_seller || null;
+
+    const sellerState = getSellerState(sellerId);
+    const streakCalibrated = Boolean(Number(sellerState?.calibrated || 0));
+    const streakLevel = String(sellerState?.current_level || 'NONE');
+    const streakDays = streakCalibrated ? Math.max(0, Number(sellerState?.streak_days || 0)) : 0;
+    const streakThreshold = streakCalibrated ? Number(getStreakThreshold(streakLevel) || 0) : null;
+    const todayRevenue = roundToKopecks(getSellerDayRevenue(today, sellerId));
+    const prepaymentsTodayRow = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE
+          WHEN ml.type = 'SALE_PREPAYMENT_CASH' OR (ml.type = 'SALE_PREPAYMENT' AND ml.method = 'CASH') THEN ABS(ml.amount)
+          WHEN ml.type = 'SALE_PREPAYMENT_MIXED' OR (ml.type = 'SALE_PREPAYMENT' AND ml.method = 'MIXED') THEN CASE
+            WHEN COALESCE(p.payment_cash_amount, 0) + COALESCE(p.payment_card_amount, 0) > 0
+              THEN ROUND(ABS(ml.amount) * COALESCE(p.payment_cash_amount, 0) / (COALESCE(p.payment_cash_amount, 0) + COALESCE(p.payment_card_amount, 0)))
+            ELSE 0
+          END
+          ELSE 0
+        END), 0) AS cash,
+        COALESCE(SUM(CASE
+          WHEN ml.type = 'SALE_PREPAYMENT_CARD' OR (ml.type = 'SALE_PREPAYMENT' AND ml.method = 'CARD') THEN ABS(ml.amount)
+          WHEN ml.type = 'SALE_PREPAYMENT_MIXED' OR (ml.type = 'SALE_PREPAYMENT' AND ml.method = 'MIXED') THEN CASE
+            WHEN COALESCE(p.payment_cash_amount, 0) + COALESCE(p.payment_card_amount, 0) > 0
+              THEN ABS(ml.amount) - ROUND(ABS(ml.amount) * COALESCE(p.payment_cash_amount, 0) / (COALESCE(p.payment_cash_amount, 0) + COALESCE(p.payment_card_amount, 0)))
+            ELSE 0
+          END
+          ELSE 0
+        END), 0) AS card
+      FROM money_ledger ml
+      LEFT JOIN presales p ON p.id = ml.presale_id
+      WHERE ml.business_day = ?
+        AND ml.seller_id = ?
+        AND ml.status = 'POSTED'
+        AND ml.type IN ('SALE_PREPAYMENT','SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED')
+    `).get(today, sellerId) || {};
+    const prepaymentsTodayCash = roundToKopecks(Number(prepaymentsTodayRow.cash || 0));
+    const prepaymentsTodayCard = roundToKopecks(Number(prepaymentsTodayRow.card || 0));
+
+    return res.json({
+      ok: true,
+      data: {
+        dates: {
+          today,
+          tomorrow,
+          week_id: weekData.week_id,
+          season_id: seasonData.season_id,
+          season_from: seasonData.season_from,
+          season_to: seasonData.season_to,
+        },
+        earnings: {
+          available: true,
+          value: roundToKopecks(Number(sellerPayout?.total || 0)),
+          source: 'calcMotivationDay(profile=dispatcher_shift_close).payouts.total',
+        },
+        points: {
+          today: todayPointsRow ? roundToKopecks(Number(todayPointsRow.points_total || 0)) : null,
+          source: todayLeaderboard.source,
+        },
+        prepayments_today: {
+          available: true,
+          cash: prepaymentsTodayCash,
+          card: prepaymentsTodayCard,
+          total: roundToKopecks(prepaymentsTodayCash + prepaymentsTodayCard),
+          source: 'money_ledger.business_day+SALE_PREPAYMENT*',
+        },
+        streak: {
+          available: Boolean(sellerState),
+          calibrated: streakCalibrated,
+          calibration_worked_days: Math.max(0, Number(sellerState?.calibration_worked_days || 0)),
+          current_level: streakLevel,
+          current_series: streakDays,
+          multiplier: roundToKopecks(getStreakMultiplier(streakDays)),
+          threshold: streakThreshold,
+          today_revenue: todayRevenue,
+          today_completed: streakThreshold === null ? null : todayRevenue > streakThreshold,
+          source: 'seller_motivation_state+money_ledger',
+        },
+        week: {
+          available: true,
+          participating: Boolean(weekRow?.participating),
+          week_id: weekData.week_id,
+          date_from: weekData.date_from,
+          date_to: weekData.date_to,
+          place: weekRow?.place || null,
+          points: weekRow?.points ?? null,
+          revenue: weekRow?.revenue ?? null,
+          total_sellers: weekData.total_sellers,
+          current_payout: roundToKopecks(Number(weekRow?.current_payout || 0)),
+          prize_place: weekRow?.prize_place || null,
+          prizes: weekData.prizes,
+          source: weekData.source,
+        },
+        season: {
+          available: true,
+          participating: Boolean(seasonRow?.participating),
+          season_id: seasonData.season_id,
+          season_from: seasonData.season_from,
+          season_to: seasonData.season_to,
+          place: seasonRow?.place || null,
+          points: seasonRow?.points ?? null,
+          revenue: seasonRow?.revenue ?? null,
+          total_sellers: seasonData.total_sellers,
+          current_payout: roundToKopecks(Number(seasonRow?.current_payout || 0)),
+          season_share: Number(seasonRow?.season_share || 0),
+          season_payout_recipient: Number(seasonRow?.season_payout_recipient || 0),
+          is_eligible: Number(seasonRow?.is_eligible || 0),
+          worked_days_season: Number(seasonRow?.worked_days_season || 0),
+          worked_days_required: Number(seasonRow?.worked_days_required || 0),
+          remaining_days_season: Number(seasonRow?.remaining_days_season || 0),
+          worked_days_sep: Number(seasonRow?.worked_days_sep || 0),
+          worked_days_sep_required: Number(seasonRow?.worked_days_sep_required || 0),
+          remaining_days_sep: Number(seasonRow?.remaining_days_sep || 0),
+          worked_days_end_sep: Number(seasonRow?.worked_days_end_sep || 0),
+          worked_days_end_sep_required: Number(seasonRow?.worked_days_end_sep_required || 0),
+          remaining_days_end_sep: Number(seasonRow?.remaining_days_end_sep || 0),
+          payout_scheme: seasonData.payout_scheme,
+          payout_mode: seasonData.payout_mode,
+          fund_total: seasonData.fund_total,
+          eligible_count: seasonData.eligible_count,
+          recipient_count: seasonData.recipient_count,
+          source: seasonData.source,
+        },
+        motivation: {
+          mode: dayData.mode || null,
+          warnings: Array.isArray(motivationResult?.warnings) ? motivationResult.warnings : [],
+        },
+      },
+    });
+  } catch (error) {
+    console.error('[SELLING_500] route=/api/selling/seller-dashboard method=GET message=' + error.message + ' stack=' + error.stack);
+    res.status(500).json({ ok: false, error: 'Server error' });
+  }
+});
+
+router.get('/seller-dashboard/weekly', authenticateToken, canSell, (req, res) => {
+  try {
+    const role = String(req.user?.role || '').toLowerCase();
+    if (role !== 'seller') {
+      return res.status(403).json({ ok: false, error: 'Seller weekly motivation is available only for seller role' });
+    }
+
+    const sellerId = Number(req.user?.id || 0);
+    if (!Number.isFinite(sellerId) || sellerId <= 0) {
+      return res.status(401).json({ ok: false, error: 'Invalid seller user context' });
+    }
+
+    const { today } = getLocalBusinessDayWindow();
+    const weekData = buildWeeklyMotivationSnapshot({ sellerId, today });
+
+    return res.json({
+      ok: true,
+      data: weekData,
+    });
+  } catch (error) {
+    console.error('[SELLING_500] route=/api/selling/seller-dashboard/weekly method=GET message=' + error.message + ' stack=' + error.stack);
+    res.status(500).json({ ok: false, error: 'Server error' });
+  }
+});
+
+router.get('/seller-dashboard/season', authenticateToken, canSell, (req, res) => {
+  try {
+    const role = String(req.user?.role || '').toLowerCase();
+    if (role !== 'seller') {
+      return res.status(403).json({ ok: false, error: 'Seller season motivation is available only for seller role' });
+    }
+
+    const sellerId = Number(req.user?.id || 0);
+    if (!Number.isFinite(sellerId) || sellerId <= 0) {
+      return res.status(401).json({ ok: false, error: 'Invalid seller user context' });
+    }
+
+    const { today } = getLocalBusinessDayWindow();
+    const seasonData = buildSeasonMotivationSnapshot({ sellerId, today });
+
+    return res.json({
+      ok: true,
+      data: seasonData,
+    });
+  } catch (error) {
+    console.error('[SELLING_500] route=/api/selling/seller-dashboard/season method=GET message=' + error.message + ' stack=' + error.stack);
+    res.status(500).json({ ok: false, error: 'Server error' });
   }
 });
 
@@ -2068,10 +3055,15 @@ router.put('/dispatcher/sellers/:id/zone', authenticateToken, canDispatchManageS
 // Create a new slot
 router.post('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req, res) => {
   try {
-    const { boat_id, time, capacity, duration_minutes, active = 1, price_adult, price_child, price_teen } = req.body;
+    const { boat_id, time, trip_date, tripDate, capacity, duration_minutes, active = 1, price_adult, price_child, price_teen } = req.body;
+    const slotTripDate = trip_date || tripDate;
     
-    if (!boat_id || !time || capacity === undefined) {
-      return res.status(400).json({ error: 'boat_id, time, Рё capacity РѕР±СЏР·Р°С‚РµР»СЊРЅС‹' });
+    if (!boat_id || !time || !slotTripDate || capacity === undefined) {
+      return res.status(400).json({ error: 'boat_id, trip_date, time, и capacity обязательны' });
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(slotTripDate))) {
+      return res.status(400).json({ error: 'Некорректная дата рейса. Используйте YYYY-MM-DD' });
     }
     
     // Validate data types
@@ -2115,7 +3107,7 @@ router.post('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req
     }
     
     // Add debug logging to see the values being processed
-    console.log('[CREATE_SLOT_DEBUG] Values:', { boatId, slotCapacity, durationMinutes, isActive, price_adult, price_child, price_teen });
+    console.log('[CREATE_SLOT_DEBUG] Values:', { boatId, slotTripDate, slotCapacity, durationMinutes, isActive, price_adult, price_child, price_teen });
     
     if (isNaN(boatId) || boatId <= 0) {
       return res.status(400).json({ error: 'РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ ID Р»РѕРґРєРё' });
@@ -2151,13 +3143,38 @@ router.post('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req
     
     try {
       // Insert the new slot
-      const stmt = db.prepare('INSERT INTO boat_slots (boat_id, time, price, capacity, seats_left, duration_minutes, is_active, price_adult, price_child, price_teen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const stmt = db.prepare('INSERT INTO boat_slots (boat_id, time, trip_date, price, capacity, seats_left, duration_minutes, is_active, price_adult, price_child, price_teen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       // Set legacy price to price_adult for DB constraint compatibility
-      const result = stmt.run(boatId, time, price_adult, slotCapacity, slotCapacity, durationMinutes, isActive, price_adult, price_child, price_teen);
+      const result = stmt.run(boatId, time, slotTripDate, price_adult, slotCapacity, slotCapacity, durationMinutes, isActive, price_adult, price_child, price_teen);
       console.log('[DISPATCHER_SLOTS] Created slot with legacy price:', price_adult, 'adult:', price_adult, 'child:', price_child, 'teen:', price_teen);
       
       // Get the created slot
-      const newSlot = db.prepare('SELECT * FROM boat_slots WHERE id = ?').get(result.lastInsertRowid);
+      const newSlot = db.prepare(`
+        SELECT
+          bs.id as slot_id,
+          ('manual:' || bs.id) as slot_uid,
+          ('manual:' || bs.id) as slotUid,
+          bs.id,
+          bs.boat_id,
+          bs.trip_date,
+          bs.time,
+          bs.capacity,
+          bs.duration_minutes,
+          bs.is_active,
+          bs.price_adult as price,
+          bs.price_adult,
+          bs.price_child,
+          bs.price_teen,
+          b.name as boat_name,
+          b.type as boat_type,
+          b.is_active as boat_is_active,
+          CASE WHEN b.id IS NULL THEN 1 ELSE 0 END as boat_missing,
+          'manual' as source_type,
+          bs.seats_left
+        FROM boat_slots bs
+        LEFT JOIN boats b ON b.id = bs.boat_id
+        WHERE bs.id = ?
+      `).get(result.lastInsertRowid);
       
       res.status(201).json(newSlot);
     } catch (insertError) {
@@ -2621,40 +3638,86 @@ router.get('/dispatcher/sellers', authenticateToken, canSell, (req, res) => {
 router.get('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req, res) => {
   try {
     const rows = db.prepare(`
-      SELECT
-        gs.id as slot_id,
-        ('generated:' || gs.id) as slot_uid,
-        ('generated:' || gs.id) as slotUid,
-        gs.id,
-        gs.boat_id,
-        gs.trip_date,
-        gs.time,
-        gs.capacity,
-        gs.duration_minutes,
-        gs.is_active,
-        gs.price_adult as price,
-        gs.price_adult,
-        gs.price_child,
-        gs.price_teen,
-        b.name as boat_name,
-        b.type as boat_type,
-        b.is_active as boat_is_active,
-        CASE WHEN b.id IS NULL THEN 1 ELSE 0 END as boat_missing,
-        'generated' as source_type,
-        (gs.capacity - COALESCE(tc.active_tickets, 0)) as seats_left
-      FROM generated_slots gs
-      LEFT JOIN boats b ON b.id = gs.boat_id
-      LEFT JOIN (
+      SELECT *
+      FROM (
         SELECT
-          p.slot_uid as slot_uid,
-          COUNT(1) as active_tickets
-        FROM tickets t
-        JOIN presales p ON p.id = t.presale_id
-        WHERE t.status IN ('ACTIVE','PAID','UNPAID','RESERVED','PARTIALLY_PAID','CONFIRMED','USED')
-        GROUP BY p.slot_uid
-      ) tc ON tc.slot_uid = ('generated:' || gs.id)
-      WHERE gs.trip_date IS NOT NULL
-      ORDER BY gs.trip_date, gs.time
+          gs.id as slot_id,
+          ('generated:' || gs.id) as slot_uid,
+          ('generated:' || gs.id) as slotUid,
+          gs.id,
+          gs.boat_id,
+          gs.trip_date,
+          gs.time,
+          gs.capacity,
+          gs.duration_minutes,
+          gs.is_active,
+          gs.price_adult as price,
+          gs.price_adult,
+          gs.price_child,
+          gs.price_teen,
+          b.name as boat_name,
+          b.type as boat_type,
+          b.is_active as boat_is_active,
+          CASE WHEN b.id IS NULL THEN 1 ELSE 0 END as boat_missing,
+          'generated' as source_type,
+          (gs.capacity - COALESCE(tc.active_tickets, 0)) as seats_left
+        FROM generated_slots gs
+        LEFT JOIN boats b ON b.id = gs.boat_id
+        LEFT JOIN (
+          SELECT
+            p.slot_uid as slot_uid,
+            COUNT(1) as active_tickets
+          FROM tickets t
+          JOIN presales p ON p.id = t.presale_id
+          WHERE t.status IN ('ACTIVE','PAID','UNPAID','RESERVED','PARTIALLY_PAID','CONFIRMED','USED')
+          GROUP BY p.slot_uid
+        ) tc ON tc.slot_uid = ('generated:' || gs.id)
+        WHERE gs.trip_date IS NOT NULL
+
+        UNION ALL
+
+        SELECT
+          bs.id as slot_id,
+          ('manual:' || bs.id) as slot_uid,
+          ('manual:' || bs.id) as slotUid,
+          bs.id,
+          bs.boat_id,
+          bs.trip_date,
+          bs.time,
+          bs.capacity,
+          bs.duration_minutes,
+          bs.is_active,
+          bs.price_adult as price,
+          bs.price_adult,
+          bs.price_child,
+          bs.price_teen,
+          b.name as boat_name,
+          b.type as boat_type,
+          b.is_active as boat_is_active,
+          CASE WHEN b.id IS NULL THEN 1 ELSE 0 END as boat_missing,
+          'manual' as source_type,
+          (bs.capacity - COALESCE(tc.active_tickets, 0)) as seats_left
+        FROM boat_slots bs
+        LEFT JOIN boats b ON b.id = bs.boat_id
+        LEFT JOIN (
+          SELECT
+            COALESCE(NULLIF(p.slot_uid, ''), 'manual:' || p.boat_slot_id) as slot_uid,
+            COUNT(1) as active_tickets
+          FROM tickets t
+          JOIN presales p ON p.id = t.presale_id
+          WHERE t.status IN ('ACTIVE','PAID','UNPAID','RESERVED','PARTIALLY_PAID','CONFIRMED','USED')
+          GROUP BY COALESCE(NULLIF(p.slot_uid, ''), 'manual:' || p.boat_slot_id)
+        ) tc ON tc.slot_uid = ('manual:' || bs.id)
+        WHERE bs.trip_date IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM generated_slots gs_ref
+            WHERE gs_ref.boat_id = bs.boat_id
+              AND gs_ref.time = bs.time
+              AND gs_ref.trip_date = bs.trip_date
+          )
+      )
+      ORDER BY trip_date, time
     `).all();
 
     res.json(rows);
@@ -4188,8 +5251,15 @@ router.patch('/tickets/:ticketId/refund', authenticateToken, canDispatchManageSl
         SELECT
           t.*,
           p.status as presale_status,
+          p.prepayment_amount as presale_prepayment_amount,
+          p.total_price as presale_total_price,
           p.slot_uid as presale_slot_uid,
-          p.boat_slot_id as presale_boat_slot_id
+          p.boat_slot_id as presale_boat_slot_id,
+          p.business_day as presale_business_day,
+          p.seller_id as presale_seller_id,
+          p.payment_method as presale_payment_method,
+          p.payment_cash_amount as presale_payment_cash_amount,
+          p.payment_card_amount as presale_payment_card_amount
         FROM tickets t
         JOIN presales p ON p.id = t.presale_id
         WHERE t.id = ?
@@ -4263,6 +5333,19 @@ router.patch('/tickets/:ticketId/refund', authenticateToken, canDispatchManageSl
 
       const newSeats = activeTickets.length;
       const newTotal = activeTickets.reduce((sum, t) => sum + Number(t.price ?? 0), 0);
+      const oldPrepay = Number(ticket.presale_prepayment_amount ?? 0);
+      const newPrepay = Math.max(0, Math.min(oldPrepay, newTotal));
+      const fullDeletion = newSeats === 0;
+      const paymentSnapshot = shrinkPresalePaymentSnapshot({
+        paymentMethod: ticket.presale_payment_method,
+        paymentCashAmount: ticket.presale_payment_cash_amount,
+        paymentCardAmount: ticket.presale_payment_card_amount,
+        paidAmount: oldPrepay,
+        nextPaidAmount: newPrepay,
+      });
+      const tripDayForRefund =
+        String(ticket.presale_business_day || '').trim() ||
+        resolveBusinessDayFromSlot(ticket.presale_slot_uid, ticket.presale_boat_slot_id);
 
       // Recalculate tickets_json by counting ACTIVE tickets by type
       let cAdult = 0, cTeen = 0, cChild = 0;
@@ -4279,11 +5362,48 @@ router.patch('/tickets/:ticketId/refund', authenticateToken, canDispatchManageSl
 
       console.log('[TICKET_REFUND recalc presale]', { presaleId, newSeats, newTotal, newTicketsJson });
 
+      insertPartialSaleCancelReverseRows({
+        presaleId,
+        slotId: ticket.presale_boat_slot_id ?? null,
+        tripDay: tripDayForRefund,
+        sellerId: ticket.presale_seller_id ?? null,
+        refundCash: paymentSnapshot.refundCash,
+        refundCard: paymentSnapshot.refundCard,
+      });
+
+      db.prepare(`DELETE FROM money_ledger WHERE presale_id = ? AND kind = 'EXPECT_PAYMENT'`).run(presaleId);
+      const remainingAfterRefund = Math.max(0, newTotal - newPrepay);
+      if (!fullDeletion && remainingAfterRefund > 0) {
+        db.prepare(`
+          INSERT INTO money_ledger
+          (presale_id, slot_id, trip_day, kind, method, amount, status, type)
+          VALUES (?, ?, ?, 'EXPECT_PAYMENT', NULL, ?, 'POSTED', 'PENDING')
+        `).run(presaleId, ticket.presale_boat_slot_id ?? null, tripDayForRefund, remainingAfterRefund);
+      }
+
       db.prepare(`
         UPDATE presales
-        SET number_of_seats = ?, total_price = ?, tickets_json = ?, updated_at = CURRENT_TIMESTAMP
+        SET number_of_seats = ?,
+            total_price = ?,
+            prepayment_amount = ?,
+            payment_method = ?,
+            payment_cash_amount = ?,
+            payment_card_amount = ?,
+            tickets_json = ?,
+            status = ?,
+            updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).run(newSeats, newTotal, newTicketsJson, presaleId);
+      `).run(
+        newSeats,
+        newTotal,
+        fullDeletion ? 0 : newPrepay,
+        paymentSnapshot.next.method,
+        paymentSnapshot.next.cash,
+        paymentSnapshot.next.card,
+        newTicketsJson,
+        fullDeletion ? 'CANCELLED' : 'ACTIVE',
+        presaleId,
+      );
 
       return db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
     });
@@ -4315,7 +5435,11 @@ router.patch('/tickets/:ticketId/delete', authenticateToken, canDispatchManageSl
           p.total_price as presale_total_price,
           p.slot_uid as presale_slot_uid,
           p.boat_slot_id as presale_boat_slot_id,
-          p.business_day as presale_business_day
+          p.business_day as presale_business_day,
+          p.seller_id as presale_seller_id,
+          p.payment_method as presale_payment_method,
+          p.payment_cash_amount as presale_payment_cash_amount,
+          p.payment_card_amount as presale_payment_card_amount
         FROM tickets t
         JOIN presales p ON p.id = t.presale_id
         WHERE t.id = ?
@@ -4399,6 +5523,16 @@ router.patch('/tickets/:ticketId/delete', authenticateToken, canDispatchManageSl
       const newPrepay = Math.max(0, Math.min(oldPrepay, newTotal));
       const fullDeletion = newSeats === 0;
       const moveToSeasonFund = fullDeletion && decision === 'FUND' && oldPrepay > 0;
+      const paymentSnapshot = shrinkPresalePaymentSnapshot({
+        paymentMethod: ticket.presale_payment_method,
+        paymentCashAmount: ticket.presale_payment_cash_amount,
+        paymentCardAmount: ticket.presale_payment_card_amount,
+        paidAmount: oldPrepay,
+        nextPaidAmount: newPrepay,
+      });
+      const tripDayForDelete =
+        String(ticket.presale_business_day || '').trim() ||
+        resolveBusinessDayFromSlot(ticket.presale_slot_uid, ticket.presale_boat_slot_id);
 
       // Recalculate tickets_json by counting ACTIVE tickets by type
       let cAdult = 0, cTeen = 0, cChild = 0;
@@ -4414,6 +5548,17 @@ router.patch('/tickets/:ticketId/delete', authenticateToken, canDispatchManageSl
       const newTicketsJson = JSON.stringify({ adult: cAdult, teen: cTeen, child: cChild });
 
       console.log('[TICKET_DELETE recalc presale]', { presaleId, newSeats, newTotal, newTicketsJson });
+
+      if (!fullDeletion) {
+        insertPartialSaleCancelReverseRows({
+          presaleId,
+          slotId: ticket.presale_boat_slot_id ?? null,
+          tripDay: tripDayForDelete,
+          sellerId: ticket.presale_seller_id ?? null,
+          refundCash: paymentSnapshot.refundCash,
+          refundCard: paymentSnapshot.refundCard,
+        });
+      }
 
       // If this was the last active ticket in presale, fully cancel presale finance and optionally move prepayment to season fund.
       if (fullDeletion) {
@@ -4463,12 +5608,11 @@ router.patch('/tickets/:ticketId/delete', authenticateToken, canDispatchManageSl
       db.prepare(`DELETE FROM money_ledger WHERE presale_id = ? AND kind = 'EXPECT_PAYMENT'`).run(presaleId);
       const remainingAfterDelete = Math.max(0, newTotal - newPrepay);
       if (!fullDeletion && remainingAfterDelete > 0) {
-        const tripDay = resolveBusinessDayFromSlot(ticket.presale_slot_uid, ticket.presale_boat_slot_id);
         db.prepare(`
           INSERT INTO money_ledger
           (presale_id, slot_id, trip_day, kind, method, amount, status, type)
           VALUES (?, ?, ?, 'EXPECT_PAYMENT', NULL, ?, 'POSTED', 'PENDING')
-        `).run(presaleId, ticket.presale_boat_slot_id ?? null, tripDay, remainingAfterDelete);
+        `).run(presaleId, ticket.presale_boat_slot_id ?? null, tripDayForDelete, remainingAfterDelete);
       }
 
       if (fullDeletion) {
@@ -4507,9 +5651,27 @@ router.patch('/tickets/:ticketId/delete', authenticateToken, canDispatchManageSl
       const prepayNext = fullDeletion ? 0 : newPrepay;
       db.prepare(`
         UPDATE presales
-        SET number_of_seats = ?, total_price = ?, prepayment_amount = ?, tickets_json = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+        SET number_of_seats = ?,
+            total_price = ?,
+            prepayment_amount = ?,
+            payment_method = ?,
+            payment_cash_amount = ?,
+            payment_card_amount = ?,
+            tickets_json = ?,
+            status = ?,
+            updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).run(newSeats, newTotal, prepayNext, newTicketsJson, presaleStatusNext, presaleId);
+      `).run(
+        newSeats,
+        newTotal,
+        prepayNext,
+        paymentSnapshot.next.method,
+        paymentSnapshot.next.cash,
+        paymentSnapshot.next.card,
+        newTicketsJson,
+        presaleStatusNext,
+        presaleId,
+      );
 
       // Return updated presale in response for verification
       const updatedPresale = db.prepare('SELECT * FROM presales WHERE id = ?').get(presaleId);
@@ -4542,6 +5704,8 @@ function transferTicketToAnotherSlot(req, res) {
         SELECT
           t.*,
           p.customer_name, p.customer_phone,
+          p.seller_id as presale_seller_id,
+          p.zone_at_sale as presale_zone_at_sale,
           p.boat_slot_id as presale_boat_slot_id,
           p.slot_uid as presale_slot_uid,
           p.tickets_json as presale_tickets_json,
@@ -4636,11 +5800,11 @@ function transferTicketToAnotherSlot(req, res) {
         INSERT INTO presales (
           boat_slot_id, slot_uid, customer_name, customer_phone,
           number_of_seats, total_price, prepayment_amount, prepayment_comment, status,
-          tickets_json, business_day, created_at, updated_at
+          tickets_json, business_day, seller_id, zone_at_sale, created_at, updated_at
         ) VALUES (
           ?, ?, ?, ?,
           1, ?, 0, ?, 'ACTIVE',
-          ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+          ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
       `).run(
         targetBaseBoatSlotId,
@@ -4650,7 +5814,9 @@ function transferTicketToAnotherSlot(req, res) {
         tPrice,
         transferMarker,
         newTicketsJson,
-        targetBusinessDay
+        targetBusinessDay,
+        row.presale_seller_id ?? null,
+        row.presale_zone_at_sale ?? null,
       );
 
       const newPresaleId = Number(ins.lastInsertRowid);

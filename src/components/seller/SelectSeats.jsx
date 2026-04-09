@@ -1,12 +1,86 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { formatRUB } from '../../utils/currency';
 import { getSlotAvailable } from '../../utils/slotAvailability';
+import {
+  SellerHeroPanel,
+  SellerInset,
+  SellerSurface,
+  sellerButtonClass,
+  sellerChipClass,
+  sellerFieldLabelClass,
+  sellerInputClass,
+  sellerSegmentClass,
+} from './sellerUi';
 
-const SelectSeats = ({ 
-  trip, 
-  onConfirm, 
-  onBack, 
-  numberOfSeats, 
+function CounterCard({
+  label,
+  value,
+  minusTestId,
+  valueTestId,
+  plusTestId,
+  onDecrement,
+  onIncrement,
+  canDecrement,
+  canIncrement,
+}) {
+  return (
+    <div className="rounded-[24px] border border-slate-200 bg-white p-4 text-center shadow-[0_16px_28px_-24px_rgba(15,23,42,0.45)]">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
+      <div className="mt-4 inline-flex items-center justify-center gap-2">
+        <button
+          type="button"
+          onClick={onDecrement}
+          data-testid={minusTestId}
+          disabled={!canDecrement}
+          className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-2xl font-semibold text-slate-900 ring-1 ring-slate-200 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          −
+        </button>
+        <span data-testid={valueTestId} className="w-10 text-center text-3xl font-semibold tracking-[-0.04em] text-slate-950 tabular-nums">
+          {value}
+        </span>
+        <button
+          type="button"
+          onClick={onIncrement}
+          data-testid={plusTestId}
+          disabled={!canIncrement}
+          className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-2xl font-semibold text-white shadow-[0_18px_30px_-22px_rgba(15,23,42,0.75)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+        >
+          +
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PriceRow({ label, value, tone = 'default' }) {
+  const accentClass =
+    tone === 'accent'
+      ? 'text-sky-950 bg-sky-50 ring-sky-200'
+      : 'text-slate-900 bg-slate-50 ring-slate-200';
+
+  return (
+    <div className={`flex items-center justify-between rounded-2xl px-3 py-3 ring-1 ${accentClass}`}>
+      <span className="text-sm font-medium">{label}</span>
+      <span className="text-base font-semibold tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+function FieldError({ children }) {
+  if (!children) return null;
+
+  return <p className="mt-2 text-sm text-rose-600">{children}</p>;
+}
+
+const QUICK_NAMES = ['Алексей', 'Дмитрий', 'Иван', 'Анна', 'Мария', 'Елена'];
+const PREPAYMENT_PRESETS = [500, 1000, 2000];
+
+const SelectSeats = ({
+  trip,
+  onConfirm,
+  onBack,
+  numberOfSeats,
   setNumberOfSeats,
   customerName,
   setCustomerName,
@@ -25,43 +99,40 @@ const SelectSeats = ({
   validateCustomerInputs,
   apiUrl,
   lastError,
-  isSubmitting // Add isSubmitting prop
+  isSubmitting,
 }) => {
-  // Initialize local state with prop values
   const [seats, setSeats] = useState(numberOfSeats || 1);
   const [ticketBreakdown, setTicketBreakdown] = useState({ adult: 0, teen: 0, child: 0 });
   const [localCustomerName, setLocalCustomerName] = useState(customerName || '');
   const [localCustomerPhone, setLocalCustomerPhone] = useState(customerPhone || '');
-  const [localPrepaymentStr, setLocalPrepaymentStr] = useState(prepaymentStr || "");
+  const [localPrepaymentStr, setLocalPrepaymentStr] = useState(prepaymentStr || '');
   const [errors, setErrors] = useState({});
   const [prepaymentError, setPrepaymentError] = useState('');
   const [touched, setTouched] = useState({
     customerName: false,
-    customerPhone: false
+    customerPhone: false,
   });
   const isBananaTrip = trip?.boat_type === 'banana';
+  const maxSeats = getSlotAvailable(trip);
+  const selectedSeatsTotal =
+    (ticketBreakdown.adult ?? 0) + (ticketBreakdown.teen ?? 0) + (ticketBreakdown.child ?? 0);
 
-
-  // Update local state when props change
   useEffect(() => {
     setSeats(numberOfSeats || 1);
   }, [numberOfSeats]);
-  
-  // Calculate total seats from breakdown when breakdown changes and sync to parent
+
   useEffect(() => {
     const total = (ticketBreakdown.adult ?? 0) + (ticketBreakdown.teen ?? 0) + (ticketBreakdown.child ?? 0);
     setSeats(total);
-    // Update parent state if callback is provided
     if (setNumberOfSeats) {
       setNumberOfSeats(total);
     }
   }, [ticketBreakdown, setNumberOfSeats]);
 
-  // Для банана: подросток не используется — гарантируем teen = 0 (защита от скрытых мест и багов)
   useEffect(() => {
     if (!isBananaTrip) return;
     if ((ticketBreakdown?.teen ?? 0) === 0) return;
-    setTicketBreakdown(prev => ({ ...prev, teen: 0 }));
+    setTicketBreakdown((prev) => ({ ...prev, teen: 0 }));
   }, [isBananaTrip, ticketBreakdown?.teen]);
 
   useEffect(() => {
@@ -73,88 +144,90 @@ const SelectSeats = ({
   }, [customerPhone]);
 
   useEffect(() => {
-    setLocalPrepaymentStr(prepaymentStr || "");
+    setLocalPrepaymentStr(prepaymentStr || '');
   }, [prepaymentStr]);
 
   const incrementTicket = (type) => {
     if (!type) return;
-    const maxSeats = getSlotAvailable(trip);
-    const total =
-      (ticketBreakdown.adult ?? 0) +
-      (ticketBreakdown.teen ?? 0) +
-      (ticketBreakdown.child ?? 0);
+    const total = (ticketBreakdown.adult ?? 0) + (ticketBreakdown.teen ?? 0) + (ticketBreakdown.child ?? 0);
     if (trip?.boat_type === 'banana' && type === 'teen') return;
     if (total < maxSeats) {
-      setTicketBreakdown(prev => ({
+      setTicketBreakdown((prev) => ({
         ...prev,
-        [type]: (prev[type] ?? 0) + 1
+        [type]: (prev[type] ?? 0) + 1,
       }));
     }
   };
-  
+
   const decrementTicket = (type) => {
     if (!type) return;
-    setTicketBreakdown(prev => {
+    setTicketBreakdown((prev) => {
       const cur = prev[type] ?? 0;
       if (cur > 0) return { ...prev, [type]: cur - 1 };
       return prev;
     });
   };
 
-  const handleNameChange = (e) => {
-    const value = e.target.value;
+  const handleNameChange = (event) => {
+    const value = event.target.value;
     setLocalCustomerName(value);
-    // Update parent state immediately
     if (setCustomerName) {
       setCustomerName(value);
     }
-    // Clear error when user starts typing
     if (touched.customerName && errors.customerName) {
-      setErrors(prev => {
-        const newErrors = { ...prev };
-        delete newErrors['customerName'];
-        return newErrors;
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next.customerName;
+        return next;
       });
     }
   };
 
-  const handlePhoneChange = (e) => {
-    const value = e.target.value;
+  const handlePhoneChange = (event) => {
+    const value = event.target.value;
     setLocalCustomerPhone(value);
-    // Update parent state immediately
     if (setCustomerPhone) {
       setCustomerPhone(value);
     }
-    // Clear error when user starts typing
     if (touched.customerPhone && errors.customerPhone) {
-      setErrors(prev => {
-        const newErrors = { ...prev };
-        delete newErrors['customerPhone'];
-        return newErrors;
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next.customerPhone;
+        return next;
       });
     }
   };
 
-  const handlePrepaymentChange = (e) => {
-    const value = e.target.value;
-    setLocalPrepaymentStr(value);
-    // Update parent state immediately
-    if (setPrepaymentStr) {
-      setPrepaymentStr(value);
-    }
-    
-    // Clear prepayment error when user types
-    setPrepaymentError('');
-    
-    // Reset payment method when prepayment amount changes
+  const resetPrepaymentMethodState = () => {
     if (setPrepaymentMethod) setPrepaymentMethod(null);
     if (setPrepaymentMethodError) setPrepaymentMethodError('');
     if (setPrepaymentCashStr) setPrepaymentCashStr('');
     if (setPrepaymentCardStr) setPrepaymentCardStr('');
   };
 
+  const handlePrepaymentChange = (event) => {
+    const value = event.target.value;
+    setLocalPrepaymentStr(value);
+    if (setPrepaymentStr) {
+      setPrepaymentStr(value);
+    }
+    setPrepaymentError('');
+    resetPrepaymentMethodState();
+  };
+
+  const handleQuickName = (value) => {
+    setLocalCustomerName(value);
+    if (setCustomerName) setCustomerName(value);
+  };
+
+  const handleQuickPrepayment = (value) => {
+    const next = String(value);
+    setLocalPrepaymentStr(next);
+    if (setPrepaymentStr) setPrepaymentStr(next);
+    resetPrepaymentMethodState();
+  };
+
   const handleConfirm = () => {
-    // Push action to debug store
     if (window.__debugPushAction) {
       window.__debugPushAction({
         type: 'PRESALE_CLICK',
@@ -162,24 +235,21 @@ const SelectSeats = ({
           slotUid: trip?.slot_uid,
           numberOfSeats: seats,
           customerName: localCustomerName,
-          customerPhone: localCustomerPhone
+          customerPhone: localCustomerPhone,
         },
-        ts: new Date().toISOString()
+        ts: new Date().toISOString(),
       });
     }
 
     try {
-      // Mark all fields as touched to show validation errors
       setTouched({
         customerName: true,
-        customerPhone: true
+        customerPhone: true,
       });
 
-      // Validate inputs
       const validationErrors = validateCustomerInputs ? validateCustomerInputs() : {};
       setErrors(validationErrors);
 
-      // If validation errors exist, log them as API errors
       if (Object.keys(validationErrors).length > 0) {
         if (window.__debugPushAction) {
           window.__debugPushAction({
@@ -188,16 +258,14 @@ const SelectSeats = ({
               status: 0,
               code: 'VALIDATION_BLOCKED',
               message: 'Form validation failed',
-              debug: validationErrors
+              debug: validationErrors,
             },
-            ts: new Date().toISOString()
+            ts: new Date().toISOString(),
           });
         }
         return;
       }
 
-      // If no errors, proceed to confirmation
-      // Backward-compatible: some parents expect positional args, some expect a single payload object.
       if (typeof onConfirm === 'function') {
         if (onConfirm.length >= 3) {
           onConfirm(seats, ticketBreakdown, totalPrice);
@@ -207,12 +275,11 @@ const SelectSeats = ({
             ticketBreakdown,
             totalPrice,
             numberOfSeats: seats,
-            tickets: ticketBreakdown
+            tickets: ticketBreakdown,
           });
         }
       }
     } catch (error) {
-      // If exception occurs before request, log it
       if (window.__debugPushAction) {
         window.__debugPushAction({
           type: 'API_ERROR',
@@ -220,44 +287,35 @@ const SelectSeats = ({
             status: 0,
             code: 'FRONTEND_PRE_REQUEST',
             message: error.message,
-            stack: error.stack
+            stack: error.stack,
           },
-          ts: new Date().toISOString()
+          ts: new Date().toISOString(),
         });
       }
       console.error('Error in handleConfirm:', error);
     }
   };
 
-  const totalPrice = trip ? 
-    (ticketBreakdown.adult * (trip.price_adult || trip.price)) +
-    (ticketBreakdown.teen * (trip.price_teen || trip.price)) +
-    (ticketBreakdown.child * (trip.price_child || trip.price))
+  const totalPrice = trip
+    ? ticketBreakdown.adult * (trip.price_adult || trip.price) +
+      ticketBreakdown.teen * (trip.price_teen || trip.price) +
+      ticketBreakdown.child * (trip.price_child || trip.price)
     : 0;
-  
-  // Calculate prepayment amount from string value
+
   const prepaymentAmount = parseFloat(localPrepaymentStr) || 0;
-  
-  // Check if prepayment is valid (not greater than total price)
+  const remainingAmount = Math.max(0, totalPrice - prepaymentAmount);
   const isPrepaymentValid = prepaymentAmount <= totalPrice && prepaymentAmount >= 0;
-  
-  // Check if form is valid
+
   const isFormValid = (() => {
-    // Check if all required fields are valid
     const hasName = localCustomerName && localCustomerName.trim().length >= 2;
-    const phoneDigits = localCustomerPhone.replace(/\D/g, "");
+    const phoneDigits = localCustomerPhone.replace(/\D/g, '');
     const hasValidPhone = phoneDigits.length === 11;
     const hasValidSeats = seats >= 1;
-    
-    // For banana trips, check that teen tickets are not used
-    const isBananaTrip = trip?.boat_type === 'banana';
     const hasValidTicketBreakdown = !isBananaTrip || ticketBreakdown.teen === 0;
-    
-    // Also check prepayment validity
+
     return hasName && hasValidPhone && hasValidSeats && isPrepaymentValid && hasValidTicketBreakdown;
   })();
-  
-  // Update prepayment error message
+
   useEffect(() => {
     if (prepaymentAmount > totalPrice && totalPrice > 0) {
       setPrepaymentError('Предоплата не может быть больше суммы заказа');
@@ -269,272 +327,203 @@ const SelectSeats = ({
   }, [prepaymentAmount, totalPrice]);
 
   return (
-    <div className="flex flex-col" data-testid="seller-select-seats-screen">
-      <h2 className="text-2xl font-extrabold text-gray-900 mb-5 text-center">Количество мест</h2>
+    <div className="space-y-3" data-testid="seller-select-seats-screen">
+      <SellerSurface>
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">Клиент, места и оплата</h2>
+        </div>
 
-      {/* Trip Details */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 mb-4">
-        <h3 className="font-bold text-lg mb-1 text-gray-900">Детали рейса</h3>
-        <p className="text-gray-700 text-sm">
-          <span className="font-semibold">{trip?.boat_name || '—'}</span>
-          <span className="mx-2 text-gray-400">•</span>
-          <span className="font-semibold">{trip?.time || '—'}</span>
-          {trip?.duration ? (
-            <>
-              <span className="mx-2 text-gray-400">•</span>
-              <span className="text-gray-700">Длительность: <span className="font-semibold">{trip?.duration}</span></span>
-            </>
+        <div className="mt-4 grid gap-3">
+          <SellerInset>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Рейс</div>
+                <div className="mt-1 text-lg font-semibold leading-6 tracking-[-0.01em] text-slate-950">
+                  {trip?.boat_name || '—'}
+                </div>
+              </div>
+              <span className="rounded-2xl bg-slate-950 px-3 py-1.5 text-lg font-semibold leading-none text-white shadow-[0_16px_28px_-20px_rgba(15,23,42,0.85)]">
+                {trip?.time || '—'}
+              </span>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2 text-sm text-slate-600">
+              {trip?.trip_date ? (
+                <span className="rounded-full bg-slate-950/5 px-3 py-1 font-semibold text-slate-800 ring-1 ring-slate-200">
+                  {trip.trip_date}
+                </span>
+              ) : null}
+              {trip?.duration ? (
+                <span className="rounded-full bg-white px-3 py-1 font-medium ring-1 ring-slate-200">Длительность: {trip.duration}</span>
+              ) : null}
+              <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-800 ring-1 ring-emerald-200">
+                Свободно: {maxSeats}
+              </span>
+            </div>
+
+            {trip?.boat_type === 'banana' ? (
+              <div className="mt-3 rounded-2xl bg-amber-50 px-3 py-3 text-sm text-amber-900 ring-1 ring-amber-200">
+                Банан: только взрослый и детский билет, подростковая категория здесь недоступна.
+              </div>
+            ) : null}
+          </SellerInset>
+        </div>
+      </SellerSurface>
+
+      <SellerSurface>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900">Количество мест</h3>
+          </div>
+          <span
+            data-testid="seller-seats-total-count"
+            className="inline-flex h-10 min-w-10 items-center justify-center rounded-full bg-slate-950 px-3 text-lg font-semibold text-white shadow-[0_16px_28px_-20px_rgba(15,23,42,0.8)]"
+          >
+            {selectedSeatsTotal}
+          </span>
+        </div>
+
+        <div className={`mt-4 grid gap-3 ${isBananaTrip ? 'grid-cols-2' : 'grid-cols-1 sm:grid-cols-3'}`}>
+          <CounterCard
+            label="Взрослый"
+            value={ticketBreakdown.adult}
+            minusTestId="seller-seats-adult-minus"
+            valueTestId="seller-seats-adult-value"
+            plusTestId="seller-seats-adult-plus"
+            onDecrement={() => decrementTicket('adult')}
+            onIncrement={() => incrementTicket('adult')}
+            canDecrement={ticketBreakdown.adult > 0}
+            canIncrement={ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child < maxSeats}
+          />
+
+          {!isBananaTrip ? (
+            <CounterCard
+              label="Подросток"
+              value={ticketBreakdown.teen}
+              minusTestId="seller-seats-teen-minus"
+              valueTestId="seller-seats-teen-value"
+              plusTestId="seller-seats-teen-plus"
+              onDecrement={() => decrementTicket('teen')}
+              onIncrement={() => incrementTicket('teen')}
+              canDecrement={ticketBreakdown.teen > 0}
+              canIncrement={ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child < maxSeats}
+            />
           ) : null}
-        </p>
 
-        {/* Banana warning */}
-        {trip?.boat_type === 'banana' && (
-          <div className="mt-3 rounded-xl bg-yellow-50 border border-yellow-200 px-3 py-2 text-sm text-yellow-900">
-            Банан: только взрослый/детский билет, вместимость 12 мест
-          </div>
-        )}
-      </div>
-
-      {/* Seats / Breakdown */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 mb-4">
-        <h3 className="font-bold text-lg mb-4 text-gray-900">Количество мест</h3>
-
-        <div className={`grid ${isBananaTrip ? "grid-cols-2" : "grid-cols-3"} gap-x-8 gap-y-6 justify-items-center max-w-[520px] mx-auto`}>
-          {/* Adult */}
-          <div className="text-center">
-            <p className="text-xs font-extrabold text-gray-800 uppercase tracking-wider">Взрослый</p>
-            <div className="mt-3 inline-flex items-center justify-center gap-2">
-              <button
-                type="button"
-                onClick={() => decrementTicket('adult')}
-                data-testid="seller-seats-adult-minus"
-                disabled={ticketBreakdown.adult <= 0}
-                className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
-              >
-                −
-              </button>
-
-              <span data-testid="seller-seats-adult-value" className="w-8 text-center text-2xl font-extrabold text-gray-900 tabular-nums">
-                {ticketBreakdown.adult}
-              </span>
-
-              <button
-                type="button"
-                onClick={() => incrementTicket('adult')}
-                data-testid="seller-seats-adult-plus"
-                disabled={(ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child) >= getSlotAvailable(trip)}
-                className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
-              >
-                +
-              </button>
-            </div>
-          </div>
-
-          {/* Teen */}
-          {!isBananaTrip && (
-            <div className="text-center">
-              <p className="text-xs font-extrabold text-gray-800 uppercase tracking-wider">Подросток</p>
-              <div className="mt-3 inline-flex items-center justify-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => decrementTicket('teen')}
-                  data-testid="seller-seats-teen-minus"
-                  disabled={ticketBreakdown.teen <= 0}
-                  className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
-                >
-                  −
-                </button>
-
-                <span data-testid="seller-seats-teen-value" className="w-8 text-center text-2xl font-extrabold text-gray-900 tabular-nums">
-                  {ticketBreakdown.teen}
-                </span>
-
-                <button
-                  type="button"
-                  onClick={() => incrementTicket('teen')}
-                  data-testid="seller-seats-teen-plus"
-                  disabled={(ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child) >= getSlotAvailable(trip)}
-                  className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Child */}
-          <div className="text-center">
-            <p className="text-xs font-extrabold text-gray-800 uppercase tracking-wider">Детский</p>
-            <div className="mt-3 inline-flex items-center justify-center gap-2">
-              <button
-                type="button"
-                onClick={() => decrementTicket('child')}
-                data-testid="seller-seats-child-minus"
-                disabled={ticketBreakdown.child <= 0}
-                className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
-              >
-                −
-              </button>
-
-              <span data-testid="seller-seats-child-value" className="w-8 text-center text-2xl font-extrabold text-gray-900 tabular-nums">
-                {ticketBreakdown.child}
-              </span>
-
-              <button
-                type="button"
-                onClick={() => incrementTicket('child')}
-                data-testid="seller-seats-child-plus"
-                disabled={(ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child) >= getSlotAvailable(trip)}
-                className="w-11 h-11 rounded-2xl bg-white border border-gray-300 shadow-sm flex items-center justify-center text-2xl font-extrabold text-gray-900 disabled:opacity-40"
-              >
-                +
-              </button>
-            </div>
-          </div>
+          <CounterCard
+            label="Детский"
+            value={ticketBreakdown.child}
+            minusTestId="seller-seats-child-minus"
+            valueTestId="seller-seats-child-value"
+            plusTestId="seller-seats-child-plus"
+            onDecrement={() => decrementTicket('child')}
+            onIncrement={() => incrementTicket('child')}
+            canDecrement={ticketBreakdown.child > 0}
+            canIncrement={ticketBreakdown.adult + ticketBreakdown.teen + ticketBreakdown.child < maxSeats}
+          />
         </div>
 
-        <div className="mt-5 text-center">
-          <p className="font-bold text-gray-900">
-            Итого: <span data-testid="seller-seats-total-count" className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-300 bg-white text-gray-900 tabular-nums">{seats}</span> мест
-          </p>
-          <p className="text-sm text-gray-600 mt-1">Максимум {getSlotAvailable(trip)} мест доступно</p>
-        </div>
-
-        {/* Ticket prices (visible) */}
-        <div className="mt-4 rounded-2xl border border-gray-300 bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-extrabold text-gray-900 tracking-wide">Стоимость билетов</p>
-            <span className="text-xs font-semibold text-gray-600">за 1 место</span>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between rounded-xl bg-gray-50 px-3 py-2 border border-gray-200">
-              <span className="text-sm font-semibold text-gray-800">Взрослый</span>
-              <span className="text-sm font-extrabold text-gray-900 tabular-nums">
-                {formatRUB(trip?.price_adult || trip?.price)}
-              </span>
+        <div className="mt-4 grid gap-3 sm:grid-cols-[1.4fr_1fr]">
+          <SellerInset>
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-slate-900">Стоимость билетов</div>
+              <span className="text-xs font-medium uppercase tracking-[0.14em] text-slate-400">за 1 место</span>
             </div>
-
-            {!isBananaTrip && (
-              <div className="flex items-center justify-between rounded-xl bg-gray-50 px-3 py-2 border border-gray-200">
-                <span className="text-sm font-semibold text-gray-800">Подросток</span>
-                <span className="text-sm font-extrabold text-gray-900 tabular-nums">
-                  {formatRUB(trip?.price_teen || trip?.price)}
-                </span>
-              </div>
-            )}
-
-            <div className="flex items-center justify-between rounded-xl bg-gray-50 px-3 py-2 border border-gray-200">
-              <span className="text-sm font-semibold text-gray-800">Детский</span>
-              <span className="text-sm font-extrabold text-gray-900 tabular-nums">
-                {formatRUB(trip?.price_child || trip?.price)}
-              </span>
+            <div className="mt-3 space-y-2">
+              <PriceRow label="Взрослый" value={formatRUB(trip?.price_adult || trip?.price)} />
+              {!isBananaTrip ? <PriceRow label="Подросток" value={formatRUB(trip?.price_teen || trip?.price)} /> : null}
+              <PriceRow label="Детский" value={formatRUB(trip?.price_child || trip?.price)} />
             </div>
-          </div>
+          </SellerInset>
+
+          <SellerHeroPanel className="py-4">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-200">Итог по местам</div>
+            <div className="mt-3 text-[34px] font-semibold leading-none tracking-[-0.04em] text-white">{formatRUB(totalPrice)}</div>
+            <p className="mt-3 text-sm leading-5 text-slate-200">Максимум доступно: {maxSeats} мест. После выбора итог пересчитывается автоматически.</p>
+          </SellerHeroPanel>
         </div>
-      </div>
+      </SellerSurface>
 
-      {/* Customer Information Section */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 mb-4">
-        <h3 className="font-bold text-lg mb-4 text-gray-900">Информация о клиенте</h3>
+      <SellerSurface>
+        <h3 className="text-lg font-semibold text-slate-900">Информация о клиенте</h3>
 
-        <div className="mb-4">
-          <label className="block text-gray-800 text-sm font-bold mb-2" htmlFor="customerName">Имя клиента</label>
-
-          <div className="grid grid-cols-3 gap-2 mb-2">
-            {['Алексей','Дмитрий','Иван','Анна','Мария','Елена'].map((n) => (
+        <div className="mt-4">
+          <label className={sellerFieldLabelClass} htmlFor="customerName">
+            Имя клиента
+          </label>
+          <div className="mb-3 flex flex-wrap gap-2">
+            {QUICK_NAMES.map((name) => (
               <button
-                key={n}
+                key={name}
                 type="button"
-                onClick={() => {
-                  setLocalCustomerName(n);
-                  if (setCustomerName) setCustomerName(n);
-                }}
-                className={`py-2 rounded-lg font-semibold transition ${
-                  localCustomerName === n ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-900 hover:bg-blue-200 active:bg-blue-300'
-                }`}
+                onClick={() => handleQuickName(name)}
+                className={sellerChipClass({ active: localCustomerName === name, tone: 'accent' })}
               >
-                {n}
+                {name}
               </button>
             ))}
           </div>
-
           <input
             id="customerName"
             type="text"
             data-testid="seller-customer-name-input"
             value={localCustomerName}
             onChange={handleNameChange}
-            onBlur={() => setTouched(prev => ({ ...prev, customerName: true }))}
-            className="shadow-sm border border-gray-300 rounded-xl w-full py-3 px-3 text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
+            onBlur={() => setTouched((prev) => ({ ...prev, customerName: true }))}
+            className={sellerInputClass()}
             placeholder="Введите имя"
           />
-          {touched.customerName && errors.customerName && (
-            <p className="text-red-600 text-xs mt-1">{errors.customerName}</p>
-          )}
+          <FieldError>{touched.customerName && errors.customerName ? errors.customerName : ''}</FieldError>
         </div>
 
-        <div className="mb-4">
-          <label className="block text-gray-800 text-sm font-bold mb-2" htmlFor="customerPhone">Телефон клиента</label>
+        <div className="mt-4">
+          <label className={sellerFieldLabelClass} htmlFor="customerPhone">
+            Телефон клиента
+          </label>
           <input
             id="customerPhone"
             type="tel"
             data-testid="seller-customer-phone-input"
             value={localCustomerPhone}
             onChange={handlePhoneChange}
-            onBlur={() => setTouched(prev => ({ ...prev, customerPhone: true }))}
-            className="shadow-sm border border-gray-300 rounded-xl w-full py-3 px-3 text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
+            onBlur={() => setTouched((prev) => ({ ...prev, customerPhone: true }))}
+            className={sellerInputClass()}
             placeholder="+7 9xx xxx-xx-xx"
           />
-          {touched.customerPhone && errors.customerPhone && (
-            <p className="text-red-600 text-xs mt-1">{errors.customerPhone}</p>
-          )}
+          <FieldError>{touched.customerPhone && errors.customerPhone ? errors.customerPhone : ''}</FieldError>
         </div>
 
-        <div className="mb-1">
-          <label className="block text-gray-800 text-sm font-bold mb-2" htmlFor="prepayment">Предоплата (₽)</label>
-
-          <div className="grid grid-cols-3 gap-2 mb-2">
-            {[500, 1000, 2000].map((v) => (
+        <div className="mt-4">
+          <label className={sellerFieldLabelClass} htmlFor="prepayment">
+            Предоплата (₽)
+          </label>
+          <div className="mb-3 flex flex-wrap gap-2">
+            {PREPAYMENT_PRESETS.map((value) => (
               <button
-                key={v}
+                key={value}
                 type="button"
-                onClick={() => {
-                  setLocalPrepaymentStr(String(v));
-                  if (setPrepaymentStr) setPrepaymentStr(String(v));
-                  // Reset payment method when prepayment amount changes
-                  if (setPrepaymentMethod) setPrepaymentMethod(null);
-                  if (setPrepaymentMethodError) setPrepaymentMethodError('');
-                  if (setPrepaymentCashStr) setPrepaymentCashStr('');
-                  if (setPrepaymentCardStr) setPrepaymentCardStr('');
-                }}
-                className="py-2 rounded-lg font-semibold bg-blue-100 text-blue-900 hover:bg-blue-200 active:bg-blue-300 transition"
+                onClick={() => handleQuickPrepayment(value)}
+                className={sellerChipClass({ active: Number(localPrepaymentStr || 0) === value, tone: 'warning' })}
               >
-                {v} ₽
+                {value} ₽
               </button>
             ))}
           </div>
-
           <input
             id="prepayment"
             type="number"
             data-testid="seller-prepayment-input"
             value={localPrepaymentStr}
             onChange={handlePrepaymentChange}
-            className="shadow-sm border border-gray-300 rounded-xl w-full py-3 px-3 text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-300"
+            className={sellerInputClass('no-spin')}
             placeholder="0"
             min="0"
           />
+          <FieldError>{prepaymentError}</FieldError>
 
-          {prepaymentError && (
-            <p className="text-red-600 text-xs mt-1">{prepaymentError}</p>
-          )}
-
-          {/* Payment method selection - only shown when prepayment > 0 */}
-          {Number(localPrepaymentStr || 0) > 0 && (
-            <div className="mt-3 p-2 rounded-lg border border-gray-200 bg-gray-50">
-              <div className="text-gray-800 text-sm font-bold mb-2">Оплата предоплаты</div>
-
+          {Number(localPrepaymentStr || 0) > 0 ? (
+            <div className="mt-4">
+              <div className={sellerFieldLabelClass}>Способ оплаты предоплаты</div>
               <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
@@ -545,13 +534,10 @@ const SelectSeats = ({
                     if (setPrepaymentCashStr) setPrepaymentCashStr('');
                     if (setPrepaymentCardStr) setPrepaymentCardStr('');
                   }}
-                  className={`py-2 rounded-lg font-semibold transition ${
-                    prepaymentMethod === 'cash' ? 'bg-blue-600 text-white' : 'bg-white text-gray-800 border border-gray-300'
-                  }`}
+                  className={sellerSegmentClass(prepaymentMethod === 'cash')}
                 >
                   Нал
                 </button>
-
                 <button
                   type="button"
                   data-testid="seller-prepayment-method-card"
@@ -561,82 +547,90 @@ const SelectSeats = ({
                     if (setPrepaymentCashStr) setPrepaymentCashStr('');
                     if (setPrepaymentCardStr) setPrepaymentCardStr('');
                   }}
-                  className={`py-2 rounded-lg font-semibold transition ${
-                    prepaymentMethod === 'card' ? 'bg-blue-600 text-white' : 'bg-white text-gray-800 border border-gray-300'
-                  }`}
+                  className={sellerSegmentClass(prepaymentMethod === 'card')}
                 >
                   Карта
                 </button>
-
                 <button
                   type="button"
                   data-testid="seller-prepayment-method-mixed"
                   onClick={() => {
                     if (setPrepaymentMethod) setPrepaymentMethod('mixed');
                     if (setPrepaymentMethodError) setPrepaymentMethodError('');
-                    const p = Math.round(Number(localPrepaymentStr || 0));
-                    const cash = Math.max(1, Math.floor(p / 2));
-                    const card = Math.max(1, p - cash);
+                    const prepayment = Math.round(Number(localPrepaymentStr || 0));
+                    const cash = Math.max(1, Math.floor(prepayment / 2));
+                    const card = Math.max(1, prepayment - cash);
                     if (setPrepaymentCashStr) setPrepaymentCashStr(String(cash));
                     if (setPrepaymentCardStr) setPrepaymentCardStr(String(card));
                   }}
-                  className={`py-2 rounded-lg font-semibold transition ${
-                    prepaymentMethod === 'mixed' ? 'bg-blue-600 text-white' : 'bg-white text-gray-800 border border-gray-300'
-                  }`}
+                  className={sellerSegmentClass(prepaymentMethod === 'mixed')}
                 >
                   Комбо
                 </button>
               </div>
 
-              {prepaymentMethod === 'mixed' && (
-                <div className="mt-2 grid grid-cols-2 gap-2">
+              {prepaymentMethod === 'mixed' ? (
+                <div className="mt-3 grid grid-cols-2 gap-2">
                   <input
                     type="number"
                     data-testid="seller-prepayment-mixed-cash"
                     value={prepaymentCashStr || ''}
-                    onChange={(e) => setPrepaymentCashStr && setPrepaymentCashStr(e.target.value)}
+                    onChange={(event) => setPrepaymentCashStr && setPrepaymentCashStr(event.target.value)}
                     placeholder="Нал"
-                    className="py-2 px-2 rounded-lg border border-gray-300"
+                    className={sellerInputClass('no-spin')}
                   />
                   <input
                     type="number"
                     data-testid="seller-prepayment-mixed-card"
                     value={prepaymentCardStr || ''}
-                    onChange={(e) => setPrepaymentCardStr && setPrepaymentCardStr(e.target.value)}
+                    onChange={(event) => setPrepaymentCardStr && setPrepaymentCardStr(event.target.value)}
                     placeholder="Карта"
-                    className="py-2 px-2 rounded-lg border border-gray-300"
+                    className={sellerInputClass('no-spin')}
                   />
                 </div>
-              )}
+              ) : null}
 
-              {prepaymentMethodError && (
-                <div className="text-red-600 text-xs mt-2">{prepaymentMethodError}</div>
-              )}
+              <FieldError>{prepaymentMethodError}</FieldError>
             </div>
-          )}
+          ) : null}
         </div>
-      </div>
+      </SellerSurface>
 
-      {/* Total */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 mb-4">
-        <div className="flex items-center justify-between">
-          <span className="text-gray-900 font-bold">Итого:</span>
-          <span data-testid="seller-order-total" className="text-blue-700 font-extrabold text-xl tabular-nums">{formatRUB(totalPrice)}</span>
+      <SellerHeroPanel>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-200">Итог заказа</div>
+            <div data-testid="seller-order-total" className="mt-3 text-[40px] font-semibold leading-none tracking-[-0.04em] text-white">
+              {formatRUB(totalPrice)}
+            </div>
+          </div>
+          <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-slate-100">Перед созданием</span>
         </div>
-        {lastError && (
-          <div className="mt-3 rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-800">
+
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          <div className="rounded-2xl bg-white/10 px-3 py-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-100">Предоплата</div>
+            <div className="mt-1 text-xl font-semibold text-white">{formatRUB(prepaymentAmount)}</div>
+          </div>
+          <div className="rounded-2xl bg-white/10 px-3 py-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-100">Остаток к оплате</div>
+            <div className="mt-1 text-xl font-semibold text-white">{formatRUB(remainingAmount)}</div>
+          </div>
+        </div>
+
+        {lastError ? (
+          <div className="mt-4 rounded-2xl bg-rose-100 px-3 py-3 text-sm text-rose-700 ring-1 ring-rose-200">
             {lastError}
           </div>
-        )}
-      </div>
+        ) : null}
+      </SellerHeroPanel>
 
-      {/* Actions */}
       <div className="flex gap-3">
         <button
           onClick={onBack}
           type="button"
           data-testid="seller-seats-back"
-          className="flex-1 py-4 text-lg font-bold rounded-xl bg-gray-200 text-gray-900 hover:bg-gray-300 active:bg-gray-400 shadow"
+          className={sellerButtonClass({ variant: 'secondary', size: 'lg' })}
         >
           Назад
         </button>
@@ -646,11 +640,11 @@ const SelectSeats = ({
           type="button"
           data-testid="seller-seats-create-presale"
           disabled={!isFormValid || isSubmitting}
-          className={`flex-1 py-4 text-lg font-bold rounded-xl shadow transform transition ${
-            isFormValid && !isSubmitting
-              ? 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800'
-              : 'bg-gray-400 text-gray-200 cursor-not-allowed'
-          }`}
+          className={sellerButtonClass({
+            variant: 'primary',
+            size: 'lg',
+            disabled: !isFormValid || isSubmitting,
+          })}
         >
           Создать предзаказ
         </button>

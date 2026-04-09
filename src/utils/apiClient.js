@@ -267,6 +267,18 @@ class ApiClient {
     return this.request('/selling/presales');
   }
 
+  getSellerDashboard() {
+    return this.request('/selling/seller-dashboard');
+  }
+
+  getSellerDashboardWeekly() {
+    return this.request('/selling/seller-dashboard/weekly');
+  }
+
+  getSellerDashboardSeason() {
+    return this.request('/selling/seller-dashboard/season');
+  }
+
   // UI helper: presales for конкретного рейса (manual/generated)
   async getPresalesForSlot(slotUidOrId) {
     const all = await this.getPresales();

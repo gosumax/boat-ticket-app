@@ -1,7 +1,25 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Anchor,
+  BadgeCheck,
+  CalendarDays,
+  Clock3,
+  Gauge,
+  Hourglass,
+  SearchX,
+  Users,
+} from 'lucide-react';
 import apiClient from '../../utils/apiClient';
-import PassengerList from './PassengerList.jsx';
 import { getSlotAvailable, isSlotSoldOut } from '../../utils/slotAvailability';
+import {
+  dpBadge,
+  dpIconWrap,
+  dpMetric,
+  dpPill,
+  dpProgressTone,
+  dpTypeTone,
+} from './dispatcherTheme';
+import PassengerList from './PassengerList.jsx';
 
 function formatDurationMinutes(durationMinutes) {
   if (typeof durationMinutes !== 'number' || durationMinutes <= 0) return '~1 час';
@@ -29,13 +47,11 @@ function getDurationMinutes(trip) {
 
 function getSoldLevel(occupied, capacity) {
   if (typeof occupied !== 'number' || typeof capacity !== 'number' || capacity <= 0) return 'none';
-  // If capacity is the standard 12 seats, apply the requested absolute thresholds.
   if (capacity === 12) {
     if (occupied < 4) return 'low';
     if (occupied < 8) return 'mid';
     return 'high';
   }
-  // Otherwise use percent thresholds.
   const ratio = occupied / capacity;
   if (ratio < 0.34) return 'low';
   if (ratio < 0.67) return 'mid';
@@ -45,14 +61,30 @@ function getSoldLevel(occupied, capacity) {
 function getSoldUi(level) {
   switch (level) {
     case 'low':
-      return { text: 'text-red-600', bar: 'bg-red-500', ring: 'ring-red-200' };
+      return { tone: 'danger', label: 'Низкая загрузка' };
     case 'mid':
-      return { text: 'text-yellow-600', bar: 'bg-yellow-500', ring: 'ring-yellow-200' };
+      return { tone: 'warning', label: 'Средняя загрузка' };
     case 'high':
-      return { text: 'text-green-600', bar: 'bg-green-500', ring: 'ring-green-200' };
+      return { tone: 'success', label: 'Высокая загрузка' };
     default:
-      return { text: 'text-neutral-200', bar: 'bg-gray-400', ring: 'ring-gray-200' };
+      return { tone: 'neutral', label: 'Без данных' };
   }
+}
+
+function normalizeType(t) {
+  const value = String(t || '').toLowerCase();
+  if (value.includes('banana')) return 'banana';
+  if (value.includes('speed')) return 'speed';
+  if (value.includes('cruise')) return 'cruise';
+  return value || 'other';
+}
+
+function typeLabel(type) {
+  const value = normalizeType(type);
+  if (value === 'banana') return 'Банан';
+  if (value === 'speed') return 'Скоростная';
+  if (value === 'cruise') return 'Прогулочная';
+  return 'Рейс';
 }
 
 const TicketSellingView = ({
@@ -64,7 +96,7 @@ const TicketSellingView = ({
   onTripCountsChange,
   refreshAllSlots,
   shiftClosed,
-  isActive = true
+  isActive = true,
 }) => {
   const [trips, setTrips] = useState(() => {
     try {
@@ -98,8 +130,7 @@ const TicketSellingView = ({
       else if (data?.slots && Array.isArray(data.slots)) next = data.slots;
       else if (data?.data && Array.isArray(data.data)) next = data.data;
 
-      // Avoid useless state updates (prevents blinking), but include dynamic fields
-      const sig = JSON.stringify(next.map(t => ({
+      const sig = JSON.stringify(next.map((t) => ({
         id: t?.id,
         slot_uid: t?.slot_uid,
         trip_date: t?.trip_date,
@@ -117,11 +148,12 @@ const TicketSellingView = ({
       if (force || sig !== sigRef.current) {
         sigRef.current = sig;
         setTrips(next);
-        try { sessionStorage.setItem('dispatcher_trips_cache', JSON.stringify(next)); } catch {}
+        try {
+          sessionStorage.setItem('dispatcher_trips_cache', JSON.stringify(next));
+        } catch {}
       }
-} catch (e) {
+    } catch (e) {
       console.error(e);
-      // keep previous trips to avoid flicker
     } finally {
       if (!silent) setLoading(false);
       inFlightRef.current = false;
@@ -140,30 +172,28 @@ const TicketSellingView = ({
 
   useEffect(() => {
     const h = () => loadTrips({ silent: true, force: true });
-    try { window.addEventListener('dispatcher:slots-changed', h); } catch {}
+    try {
+      window.addEventListener('dispatcher:slots-changed', h);
+    } catch {}
     return () => {
-      try { window.removeEventListener('dispatcher:slots-changed', h); } catch {}
+      try {
+        window.removeEventListener('dispatcher:slots-changed', h);
+      } catch {}
     };
   }, [loadTrips]);
 
-  // Polling: auto-refresh every 5s when component is active (selling tab visible)
   useEffect(() => {
-    if (!isActive) return;
-    
+    if (!isActive) return undefined;
+
     const intervalId = setInterval(() => {
       loadTrips({ silent: true });
     }, 5000);
 
-    return () => {
-      clearInterval(intervalId);
-    };
+    return () => clearInterval(intervalId);
   }, [loadTrips, isActive]);
 
-
-
   const isInDateRange = (trip) => {
-    if (!trip.trip_date) return true;
-    if (!dateFrom || !dateTo) return true;
+    if (!trip.trip_date || !dateFrom || !dateTo) return true;
     return trip.trip_date >= dateFrom && trip.trip_date <= dateTo;
   };
 
@@ -178,11 +208,11 @@ const TicketSellingView = ({
     result = result.filter(isInDateRange);
 
     if (typeFilter !== 'all') {
-      result = result.filter(t => t.boat_type === typeFilter);
+      result = result.filter((t) => t.boat_type === typeFilter);
     }
 
     if (statusFilter !== 'all') {
-      result = result.filter(t => {
+      result = result.filter((t) => {
         if (statusFilter === 'active') return t.is_active === 1 && !isFinished(t);
         if (statusFilter === 'completed') return isFinished(t);
         return true;
@@ -191,9 +221,9 @@ const TicketSellingView = ({
 
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
-      result = result.filter(t =>
+      result = result.filter((t) =>
         (t.boat_name || '').toLowerCase().includes(term) ||
-        String(t.id).includes(term)
+        String(t.id).includes(term),
       );
     }
 
@@ -203,15 +233,15 @@ const TicketSellingView = ({
   useEffect(() => {
     onTripCountsChange?.({
       total: trips.length,
-      shown: filteredTrips.length
+      shown: filteredTrips.length,
     });
-  }, [trips.length, filteredTrips.length]);
+  }, [trips.length, filteredTrips.length, onTripCountsChange]);
 
   if (selectedTrip) {
     return (
-      <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm overflow-y-auto">
-        <div className="min-h-0 flex items-start justify-center p-3">
-          <div className="w-full max-w-[1100px] rounded-2xl border border-neutral-800 bg-neutral-950 p-3 transform scale-[0.9] origin-top">
+      <div className="dp-overlay z-50 overflow-y-auto">
+        <div className="flex min-h-screen items-start justify-center p-3">
+          <div className="dp-sheet">
             <PassengerList
               trip={selectedTrip}
               onBack={() => setSelectedTrip(null)}
@@ -225,117 +255,139 @@ const TicketSellingView = ({
     );
   }
 
-
   return (
     <div className="text-neutral-100">
-      {loading && <div className="text-center py-2 text-neutral-400 text-sm">Обновление…</div>}
+      {loading && <div className="dp-empty mb-3">Обновление рейсов…</div>}
 
       {!loading && filteredTrips.length === 0 && (
-        <div className="text-center py-6 text-neutral-500">
-          Нет рейсов
+        <div className="dp-empty">
+          <div className="dp-empty__icon">
+            <SearchX size={22} strokeWidth={2} />
+          </div>
+          <div className="text-base font-semibold text-neutral-100">Нет рейсов для продажи</div>
+          <div className="mt-2 text-sm text-neutral-500">
+            Измените фильтры или дождитесь появления новых активных слотов.
+          </div>
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
-        {filteredTrips.map(trip => {
+      <div className="dp-trip-grid grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+        {filteredTrips.map((trip) => {
           const available = getSlotAvailable(trip);
           const capacity = getCapacity(trip);
           const occupied = (typeof capacity === 'number') ? Math.max(0, capacity - available) : null;
-
-          // Галочка: рейс полностью заполнен и долгов нет (оплата принята по всем билетам)
           const soldOut = (typeof available === 'number') ? available <= 0 : isSlotSoldOut(trip);
           const hasDebt =
             Number(trip?.has_debt ?? trip?.hasDebt ?? 0) === 1 ||
             Number(trip?.debt_amount ?? trip?.debtAmount ?? 0) > 0;
           const showPaidFullBadge = soldOut && !hasDebt;
-
           const soldLevel = getSoldLevel(occupied, capacity);
           const soldUi = getSoldUi(soldLevel);
-
           const durationText = formatDurationMinutes(getDurationMinutes(trip));
-
           const fillPercent =
             (typeof occupied === 'number' && typeof capacity === 'number' && capacity > 0)
               ? Math.max(0, Math.min(100, Math.round((occupied / capacity) * 100)))
               : 0;
-
-          // подсветка карточки если почти полный (<= 10% мест или <= 1 место)
           const almostFull =
             (typeof available === 'number' && typeof capacity === 'number')
               ? available <= Math.max(1, Math.floor(capacity * 0.1))
               : false;
+          const cardGlow =
+            soldUi.tone === 'danger'
+              ? 'shadow-[0_0_0_1px_rgba(248,113,113,0.12)]'
+              : soldUi.tone === 'warning'
+                ? 'shadow-[0_0_0_1px_rgba(251,191,36,0.12)]'
+                : 'shadow-[0_0_0_1px_rgba(96,165,250,0.12)]';
 
           return (
             <div
               key={trip.slot_uid || trip.id}
               data-testid={`trip-card-${trip.slot_uid || trip.id}`}
-              className={`relative rounded-2xl border border-neutral-800 bg-neutral-900 p-3 cursor-pointer transition-all ${almostFull ? `ring-2 ${soldUi.ring}` : ''} ${isSlotSoldOut(trip) ? 'opacity-60' : ''}`}
+              className={`dp-card dp-card--interactive dp-trip-card ${cardGlow} ${soldOut ? 'opacity-70' : ''} ${shiftClosed ? 'cursor-default' : 'cursor-pointer'} ${almostFull ? 'border-amber-300/20' : ''}`}
               onClick={shiftClosed ? undefined : () => setSelectedTrip(trip)}
             >
-              {showPaidFullBadge && (
-                <div className="absolute top-3 right-3 w-12 h-12 rounded-2xl border border-emerald-600/50 bg-emerald-600/15 flex items-center justify-center">
-                  <span className="text-3xl text-emerald-400 leading-none">✓</span>
-                </div>
-              )}
-              <div className="flex flex-col">
+              <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-lg leading-none">🚤</span>
-                    <div className="font-semibold text-lg leading-tight truncate text-neutral-100">{trip.boat_name}</div>
+                  <div className="flex items-center gap-3">
+                    <div className={dpIconWrap(dpTypeTone(trip.boat_type))}>
+                      <Anchor size={18} strokeWidth={2} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="dp-trip-card__title truncate text-lg font-bold leading-tight text-neutral-50">
+                        {trip.boat_name}
+                      </div>
+                      <div className="dp-trip-card__meta mt-1 flex flex-wrap items-center gap-3 text-sm text-neutral-400">
+                        <span className="inline-flex items-center gap-1.5">
+                          <CalendarDays size={14} strokeWidth={2} />
+                          {trip.trip_date}
+                        </span>
+                        <span className="inline-flex items-center gap-1.5">
+                          <Clock3 size={14} strokeWidth={2} />
+                          {trip.time}
+                        </span>
+                        <span className="dp-trip-duration-chip hidden items-center gap-1.5 sm:inline-flex">
+                          <Hourglass size={14} strokeWidth={2} />
+                          {durationText}
+                        </span>
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="mt-1 flex items-center gap-2 text-sm text-neutral-300">
-                    <span className="leading-none">📅</span>
-                    <span>{trip.trip_date}</span>
-                    <span className="text-gray-300">•</span>
-                    <span className="leading-none">🕒</span>
-                    <span>{trip.time}</span>
-                  </div>
-
-                  <div className="mt-1 flex items-center gap-2 text-sm text-neutral-400">
-                    <span className="leading-none">⏱️</span>
-                    <span>Длительность: {durationText}</span>
+                  <div className="dp-trip-card__badges mt-3 flex flex-wrap items-center gap-2">
+                    <div className={dpPill(dpTypeTone(trip.boat_type))}>{typeLabel(trip.boat_type)}</div>
+                    <div className={dpPill(soldUi.tone)}>{soldUi.label}</div>
                   </div>
                 </div>
 
-                <div className="mt-3 flex flex-col gap-2">
-                  <div className="bg-neutral-950/40 border border-neutral-800 rounded-xl px-3 py-2 text-sm w-full">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-neutral-400 flex items-center gap-1">
-                        <span className="leading-none">🟢</span>
-                        Свободно
-                      </span>
-                      <span className="font-bold text-neutral-100">{available}</span>
-                    </div>
-
-                    {(typeof occupied === 'number' && typeof capacity === 'number') && (
-                      <div className="mt-1 flex items-center justify-between gap-3">
-                        <span className="text-neutral-400 flex items-center gap-1">
-                          <span className="leading-none">👥</span>
-                          Занято
-                        </span>
-                        <span className={`font-bold ${soldUi.text}`}>
-                          {occupied} / {capacity}
-                        </span>
-                      </div>
-                    )}
+                {showPaidFullBadge && (
+                  <div className={dpIconWrap('success')}>
+                    <BadgeCheck size={20} strokeWidth={2} />
                   </div>
+                )}
+              </div>
 
-                  {(typeof occupied === 'number' && typeof capacity === 'number') && (
-                    <div className="w-full">
-                      <div className="flex items-center justify-between text-xs text-neutral-400 mb-1">
-                        <span className="flex items-center gap-1"><span>📊</span>Заполнено</span>
-                        <span className="font-semibold text-neutral-200">{fillPercent}%</span>
-                      </div>
-                      <div className="h-2 w-full bg-neutral-800 rounded-full overflow-hidden">
-                        <div
-                          className={`h-2 ${soldUi.bar} rounded-full`}
-                          style={{ width: `${fillPercent}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
+              <div className="dp-trip-card__metrics mt-4 dp-grid-meta">
+                <div className={dpMetric(available <= 2 ? 'warning' : 'success')}>
+                  <div className="dp-metric__label">Свободно</div>
+                  <div className="dp-metric__value">{available}</div>
                 </div>
+                <div className={dpMetric('neutral')}>
+                  <div className="dp-metric__label">Вместимость</div>
+                  <div className="dp-metric__value text-neutral-100">{capacity ?? '—'}</div>
+                </div>
+              </div>
+
+              <div className="dp-trip-card__load mt-4 rounded-[20px] border border-white/5 bg-white/[0.03] p-3">
+                <div className="mb-2 flex items-center justify-between gap-3 text-sm text-neutral-400">
+                  <span className="inline-flex items-center gap-2">
+                    <Gauge size={14} strokeWidth={2} />
+                    Заполнение
+                  </span>
+                  <span className={dpBadge(soldUi.tone)}>{fillPercent}%</span>
+                </div>
+                <div className="dp-progress">
+                  <div
+                    className={dpProgressTone(soldUi.tone)}
+                    style={{ width: `${fillPercent}%` }}
+                  />
+                </div>
+                <div className="mt-3 flex items-center justify-between gap-3 text-sm text-neutral-400">
+                  <span className="inline-flex items-center gap-2">
+                    <Users size={14} strokeWidth={2} />
+                    Занято мест
+                  </span>
+                  <span className="font-semibold text-neutral-100">
+                    {occupied ?? '—'} / {capacity ?? '—'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="dp-trip-duration-mobile mt-4 flex items-center justify-between gap-3 rounded-[18px] border border-white/5 bg-white/[0.02] px-4 py-3 text-sm text-neutral-400 sm:hidden">
+                <span className="inline-flex items-center gap-2">
+                  <Hourglass size={14} strokeWidth={2} />
+                  Длительность
+                </span>
+                <span className="font-semibold text-neutral-100">{durationText}</span>
               </div>
             </div>
           );

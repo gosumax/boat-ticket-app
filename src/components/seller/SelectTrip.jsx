@@ -1,10 +1,18 @@
 import { useMemo } from 'react';
 import { getSlotAvailable } from '../../utils/slotAvailability';
+import {
+  SellerInset,
+  SellerSurface,
+  sellerButtonClass,
+  sellerChipClass,
+  sellerHelperTextClass,
+} from './sellerUi';
+import DateFieldPicker from '../ui/DateFieldPicker';
 
-function toISODate(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
+function toISODate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
 
@@ -16,7 +24,7 @@ function isSellableTrip(trip, cutoffMinutes = 10) {
     const start = new Date(`${dateStr}T${timeStr}:00`);
     if (Number.isNaN(start.getTime())) return true;
     const cutoffMs = cutoffMinutes * 60 * 1000;
-    return Date.now() < (start.getTime() - cutoffMs);
+    return Date.now() < start.getTime() - cutoffMs;
   } catch {
     return true;
   }
@@ -29,6 +37,52 @@ function formatDuration(durationMinutes) {
   if (h > 0 && m > 0) return `${h} ч ${m} мин`;
   if (h > 0) return `${h} ч`;
   return `${m} мин`;
+}
+
+function getLoadAccent(percent, seatsLeft, sold, capacity) {
+  if (seatsLeft <= 0 || (capacity > 0 && sold >= capacity)) {
+    return {
+      badge: 'bg-slate-950 text-white ring-1 ring-slate-950',
+      bar: 'bg-slate-950',
+      label: 'Мест нет',
+    };
+  }
+  if (percent >= 90) {
+    return {
+      badge: 'bg-rose-50 text-rose-700 ring-1 ring-rose-200',
+      bar: 'bg-rose-500',
+      label: 'Почти заполнено',
+    };
+  }
+  if (percent >= 60) {
+    return {
+      badge: 'bg-amber-50 text-amber-900 ring-1 ring-amber-200',
+      bar: 'bg-amber-400',
+      label: 'Ограниченно',
+    };
+  }
+  return {
+    badge: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
+    bar: 'bg-emerald-500',
+    label: 'Много мест',
+  };
+}
+
+function getTripCategorySurfaceClass(trip) {
+  const type = String(trip?.boat_type || trip?.type || '').toLowerCase();
+  const name = String(trip?.boat_name || '').toLowerCase();
+
+  if (type.includes('banana') || name.includes('банан')) {
+    return 'border-yellow-200 bg-[linear-gradient(135deg,#ffffff_0%,#fefce8_52%,#fef3c7_100%)] shadow-[0_22px_40px_-28px_rgba(250,204,21,0.72)] ring-yellow-100/90';
+  }
+  if (type.includes('cruise') || type.includes('walk') || name.includes('прогул')) {
+    return 'border-emerald-200 bg-[linear-gradient(135deg,#ffffff_0%,#ecfdf5_52%,#d1fae5_100%)] shadow-[0_22px_40px_-28px_rgba(16,185,129,0.64)] ring-emerald-100/90';
+  }
+  if (type.includes('speed') || name.includes('скорост')) {
+    return 'border-sky-200 bg-[linear-gradient(135deg,#ffffff_0%,#eff6ff_52%,#dbeafe_100%)] shadow-[0_22px_40px_-28px_rgba(37,99,235,0.64)] ring-sky-100/90';
+  }
+
+  return '';
 }
 
 const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChange }) => {
@@ -45,22 +99,36 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
   }, [todayIso]);
 
   const active = selectedDate || todayIso;
-  const visibleTrips = useMemo(() => trips.filter(t => isSellableTrip(t, 10)), [trips]);
+  const visibleTrips = useMemo(() => trips.filter((trip) => isSellableTrip(trip, 10)), [trips]);
 
   return (
-    <div className="flex flex-col" data-testid="seller-select-trip-screen">
-      <h2 className="text-2xl font-bold text-gray-800 mb-4 text-center">Выберите рейс</h2>
+    <div className="space-y-3" data-testid="seller-select-trip-screen">
+      <SellerSurface>
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">Выберите рейс</h2>
+        </div>
 
-      {/* Фильтр дат */}
-      <div className="bg-white rounded-xl shadow-md p-4 mb-6">
-        <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="mt-4">
+          <DateFieldPicker
+            value={active}
+            onChange={(nextValue) => onDateChange && onDateChange(nextValue)}
+            caption="Дата рейса"
+            sheetTitle="Дата рейса"
+            sheetDescription="Выберите удобную дату и сразу увидите доступные рейсы."
+            align="center"
+            size="lg"
+            testId="seller-trip-date-trigger"
+            inputTestId="seller-trip-date-input"
+            helper="Календарь открывается снизу, а быстрые даты остаются под рукой."
+          />
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => onDateChange && onDateChange(todayIso)}
             data-testid="seller-trip-date-today"
-            className={`py-2 rounded-lg font-medium ${
-              active === todayIso ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800'
-            }`}
+            className={sellerChipClass({ active: active === todayIso })}
           >
             Сегодня
           </button>
@@ -68,9 +136,7 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
             type="button"
             onClick={() => onDateChange && onDateChange(tomorrowIso)}
             data-testid="seller-trip-date-tomorrow"
-            className={`py-2 rounded-lg font-medium ${
-              active === tomorrowIso ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800'
-            }`}
+            className={sellerChipClass({ active: active === tomorrowIso, tone: 'accent' })}
           >
             Завтра
           </button>
@@ -78,129 +144,127 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
             type="button"
             onClick={() => onDateChange && onDateChange(afterTomorrowIso)}
             data-testid="seller-trip-date-day2"
-            className={`py-2 rounded-lg font-medium ${
-              active === afterTomorrowIso ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800'
-            }`}
+            className={sellerChipClass({ active: active === afterTomorrowIso, tone: 'success' })}
           >
             Послезавтра
           </button>
         </div>
+      </SellerSurface>
 
-        <input
-          type="date"
-          value={active}
-          onChange={(e) => onDateChange && onDateChange(e.target.value)}
-          data-testid="seller-trip-date-input"
-          className="w-full px-3 py-2 border rounded-lg border-gray-300"
-        />
-      </div>
-
-      <div className="space-y-4">
+      <div className="space-y-3">
         {loading ? (
-          <div className="space-y-4" data-testid="seller-trip-loading">
-            {[1, 2, 3].map(i => (
-              <div key={i} className="bg-white rounded-xl shadow-md p-6 animate-pulse h-24" />
+          <div className="space-y-3" data-testid="seller-trip-loading">
+            {[1, 2, 3].map((item) => (
+              <div
+                key={item}
+                className="h-32 animate-pulse rounded-[28px] bg-white/75 shadow-[0_18px_36px_-28px_rgba(15,23,42,0.4)] ring-1 ring-slate-200"
+              />
             ))}
           </div>
-        ) : (
-          <>
-            {visibleTrips.map(trip => {
-              const seatsLeft = getSlotAvailable(trip);
-
-              const capacityRaw =
-                typeof trip.capacity === 'number'
-                  ? trip.capacity
-                  : typeof trip.boat_capacity === 'number'
+        ) : visibleTrips.length > 0 ? (
+          visibleTrips.map((trip) => {
+            const seatsLeft = getSlotAvailable(trip);
+            const capacityRaw =
+              typeof trip.capacity === 'number'
+                ? trip.capacity
+                : typeof trip.boat_capacity === 'number'
                   ? trip.boat_capacity
                   : null;
-
-              const capacity = typeof capacityRaw === 'number' ? capacityRaw : 0;
-              const sold = Math.max(0, capacity - seatsLeft);
-              const percent =
-                capacity > 0 ? Math.round((sold / capacity) * 100) : 0;
-
-              const durationMinutes =
-                typeof trip.duration_minutes === 'number'
-                  ? trip.duration_minutes
-                  : typeof trip.duration === 'number'
+            const capacity = typeof capacityRaw === 'number' ? capacityRaw : 0;
+            const sold = capacity > 0 ? Math.min(capacity, Math.max(0, capacity - seatsLeft)) : 0;
+            const percent =
+              capacity > 0 ? (sold >= capacity ? 100 : Math.min(99, Math.round((sold / capacity) * 100))) : 0;
+            const durationMinutes =
+              typeof trip.duration_minutes === 'number'
+                ? trip.duration_minutes
+                : typeof trip.duration === 'number'
                   ? trip.duration
                   : null;
+            const accent = getLoadAccent(percent, seatsLeft, sold, capacity);
 
-              return (
-                <div
-                  key={trip.slot_uid}
-                  onClick={() => onSelect({ ...trip, seatsLeft })}
-                  data-testid={`seller-trip-card-${trip.slot_uid}`}
-                  data-trip-type={trip?.boat_type || ''}
-                  data-trip-date={trip?.trip_date || ''}
-                  className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 flex justify-between gap-4 cursor-pointer hover:shadow-md active:shadow-sm active:scale-[0.99] transition"
-                >
-                  {/* Левая часть */}
-                  <div>
-                    <div className="font-bold text-lg text-gray-900">{trip.boat_name}</div>
+            return (
+              <button
+                key={trip.slot_uid}
+                type="button"
+                onClick={() => onSelect({ ...trip, seatsLeft })}
+                data-testid={`seller-trip-card-${trip.slot_uid}`}
+                data-trip-type={trip?.boat_type || ''}
+                data-trip-date={trip?.trip_date || ''}
+                className="w-full text-left"
+              >
+                <SellerSurface className={`transition-transform duration-200 hover:-translate-y-0.5 ${getTripCategorySurfaceClass(trip)}`}>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-base font-semibold text-slate-950">{trip.boat_name || 'Рейс'}</div>
 
-                    <div className="mt-1 flex items-center gap-2 text-base text-gray-800">
-                      <span className="text-blue-600 text-lg">📅</span>
-                      <span>{trip.trip_date} • {trip.time}</span>
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <span className="rounded-2xl bg-slate-950 px-3 py-1.5 text-xl font-semibold leading-none text-white shadow-[0_16px_28px_-20px_rgba(15,23,42,0.85)]">
+                          {trip.time || '—'}
+                        </span>
+                        <span className="text-sm text-slate-500">{trip.trip_date || active}</span>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2 text-sm text-slate-600">
+                        <span className="rounded-full bg-slate-100 px-3 py-1 font-medium">
+                          Длительность: {formatDuration(durationMinutes)}
+                        </span>
+                        <span className={`rounded-full px-3 py-1 font-medium ${accent.badge}`}>{accent.label}</span>
+                      </div>
                     </div>
 
-                    <div className="mt-0.5 flex items-center gap-2 text-base text-gray-700">
-                      <span className="text-blue-600 text-lg">⏱</span>
-                      <span>Длительность: {formatDuration(durationMinutes)}</span>
+                    <div className="shrink-0 min-w-[132px]">
+                      <SellerInset className="px-3 py-3">
+                        <div className="flex items-center justify-between gap-3 text-sm">
+                          <span className="text-slate-500">Свободно</span>
+                          <span data-testid={`seller-trip-free-${trip.slot_uid}`} className="text-lg font-semibold text-slate-950">
+                            {seatsLeft}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-3 text-sm">
+                          <span className="text-slate-500">Занято</span>
+                          <span className="font-semibold text-slate-900">
+                            <span data-testid={`seller-trip-sold-${trip.slot_uid}`}>{sold}</span>
+                            <span className="mx-1 text-slate-400">/</span>
+                            <span data-testid={`seller-trip-capacity-${trip.slot_uid}`}>{capacity}</span>
+                          </span>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-3 text-xs font-medium text-slate-500">
+                          <span>Заполнено</span>
+                          <span data-testid={`seller-trip-load-${trip.slot_uid}`}>{percent}%</span>
+                        </div>
+                        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                          <div
+                            className={`h-full rounded-full ${accent.bar}`}
+                            style={{ width: `${percent}%` }}
+                          />
+                        </div>
+                      </SellerInset>
                     </div>
                   </div>
-
-                  {/* Правая мини-карточка */}
-                  <div className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 min-w-[128px] text-gray-900">
-                    <div className="flex justify-between text-sm mb-1">
-                      <span className="flex items-center gap-1 text-gray-700">
-                        <span className="w-2 h-2 bg-green-500 rounded-full" />
-                        Свободно
-                      </span>
-                      <span data-testid={`seller-trip-free-${trip.slot_uid}`} className="font-bold">{seatsLeft}</span>
-                    </div>
-
-                    <div className="flex justify-between text-sm mb-1">
-                      <span className="text-gray-700">Занято</span>
-                      <span className="font-bold">
-                        <span data-testid={`seller-trip-sold-${trip.slot_uid}`} className="text-red-600">{sold}</span> / <span data-testid={`seller-trip-capacity-${trip.slot_uid}`}>{capacity}</span>
-                      </span>
-                    </div>
-
-                    <div className="flex justify-between text-xs text-gray-600 mb-1">
-                      <span>Заполнено</span>
-                      <span data-testid={`seller-trip-load-${trip.slot_uid}`}>{percent}%</span>
-                    </div>
-
-                    <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
-                      <div
-                        className="h-3 bg-green-500 rounded-full"
-                        style={{ width: `${percent}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-
-            {visibleTrips.length === 0 && (
-              <div data-testid="seller-trip-empty" className="text-center py-8 text-gray-500">
-                Нет доступных рейсов
-              </div>
-            )}
-          </>
+                </SellerSurface>
+              </button>
+            );
+          })
+        ) : (
+          <SellerSurface data-testid="seller-trip-empty">
+            <div className="text-center">
+              <div className="text-base font-semibold text-slate-900">Нет доступных рейсов</div>
+              <p className={`mt-2 ${sellerHelperTextClass}`}>
+                Попробуйте другую дату или вернитесь к выбору типа лодки.
+              </p>
+            </div>
+          </SellerSurface>
         )}
       </div>
 
-      <div className="mt-6">
-        <button
-          onClick={onBack}
-          data-testid="seller-trip-back"
-          className="w-full py-3 bg-gray-300 text-gray-800 rounded-lg font-medium"
-        >
-          Назад
-        </button>
-      </div>
+      <button
+        type="button"
+        onClick={onBack}
+        data-testid="seller-trip-back"
+        className={sellerButtonClass({ variant: 'secondary', size: 'lg' })}
+      >
+        Назад
+      </button>
     </div>
   );
 };
