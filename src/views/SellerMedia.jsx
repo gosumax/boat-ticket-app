@@ -8,6 +8,7 @@ import {
   sellerContentClass,
   sellerHelperTextClass,
 } from '../components/seller/sellerUi';
+import SellerTelegramGlobalAlertBanner from '../components/seller/telegram/SellerTelegramGlobalAlertBanner';
 
 const SellerMedia = () => {
   const navigate = useNavigate();
@@ -20,7 +21,14 @@ const SellerMedia = () => {
 
   return (
     <SellerScreen>
-      <SellerTopbar title="Фото|видео" subtitle="Материалы" onBack={() => navigate('/seller/home')} onLogout={handleLogout} />
+      <SellerTopbar
+        title="Фото|видео"
+        subtitle="Материалы"
+        onBack={() => navigate('/seller/home')}
+        onLogout={handleLogout}
+      />
+
+      <SellerTelegramGlobalAlertBanner />
 
       <div className={`${sellerContentClass} space-y-3`}>
         <SellerHeroPanel>

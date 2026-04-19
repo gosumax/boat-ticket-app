@@ -1,12 +1,23 @@
-# DEBUG POLICY
+# Debug Policy
 
-- Debug разрешён на ВСЕХ экранах
-- Debug не удаляется до окончания проекта
-- Debug может включать:
-  - slotUid
-  - server time
-  - cutoff time
-  - role
-  - error codes
-- После деплоя debug удаляется полностью
-- Fund consistency checksum must use immutable money_ledger only; any recalculated expected values are diagnostic estimates and must not be used as control totals.
+This file is an optional operational reference, not a core source of truth.
+
+## Purpose
+
+- allow temporary diagnostics during development
+- keep diagnostic data useful without redefining business behavior
+
+## Rules
+
+- Debug output must not silently change runtime behavior.
+- Debug-only instrumentation should stay removable and scoped.
+- Financial debug views must treat `money_ledger` as the immutable source of truth.
+- Recalculated or estimated values are diagnostic only and must not replace control totals.
+
+## Good Diagnostic Data
+
+- `slotUid`
+- server time
+- cutoff-related timestamps
+- role and guard outcomes
+- structured error codes

@@ -8,6 +8,7 @@ import {
   sellerContentClass,
   sellerHelperTextClass,
 } from '../components/seller/sellerUi';
+import SellerTelegramGlobalAlertBanner from '../components/seller/telegram/SellerTelegramGlobalAlertBanner';
 
 const MENU_CARD_TONES = {
   sell: {
@@ -105,6 +106,8 @@ const SellerHome = () => {
   return (
     <SellerScreen data-testid="seller-home-screen">
       <SellerTopbar title="Продавец" subtitle="Рабочее место" onLogout={handleLogout} />
+
+      <SellerTelegramGlobalAlertBanner />
 
       <div className={`${sellerContentClass} flex min-h-[calc(100svh-73px)] flex-col space-y-3 sm:min-h-0`}>
         <SellerSurface className="flex min-h-[62svh] flex-col p-5 sm:min-h-0 sm:flex-none sm:p-4">

@@ -1,0 +1,32 @@
+{
+  "responseStatus": 200,
+  "headers": {
+    "accept-ranges": "bytes",
+    "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+    "content-type": "text/html; charset=utf-8",
+    "date": "Fri, 17 Apr 2026 16:10:31 GMT",
+    "etag": "W/\"d47d-19d9c27241f\"",
+    "expires": "0",
+    "last-modified": "Fri, 17 Apr 2026 15:55:04 GMT",
+    "pragma": "no-cache",
+    "content-length": "54397",
+    "surrogate-control": "no-store",
+    "x-powered-by": "Express",
+    "x-telegram-mini-app-build-marker": "/telegram/assets/telegramMiniAppRuntimeEntry-DwxUBtcW.js",
+    "x-telegram-mini-app-cache-buster": "251ecf89ba7c",
+    "x-telegram-mini-app-html-id": "telegram-mini-app.html",
+    "x-telegram-mini-app-runtime-entry": "/telegram/assets/telegramMiniAppRuntimeEntry-DwxUBtcW.js",
+    "x-telegram-mini-app-stylesheets": "/telegram/assets/index-DdzMuFUB.css"
+  },
+  "state": {
+    "title": "Boat Ticket App Mini App",
+    "heading": null,
+    "htmlIdentityMeta": "telegram-mini-app.html",
+    "buildMarkerMeta": "/telegram/assets/telegramMiniAppRuntimeEntry-DwxUBtcW.js",
+    "bootstrapCompleted": false,
+    "entryImportResult": "pending",
+    "navVisible": false,
+    "textSample": null
+  },
+  "events": []
+}

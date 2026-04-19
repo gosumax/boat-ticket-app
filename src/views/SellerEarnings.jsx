@@ -11,6 +11,7 @@ import {
   sellerChipClass,
   sellerContentClass,
 } from '../components/seller/sellerUi';
+import SellerTelegramGlobalAlertBanner from '../components/seller/telegram/SellerTelegramGlobalAlertBanner';
 import DateFieldPicker from '../components/ui/DateFieldPicker';
 
 const DAY_FORMATTER = new Intl.DateTimeFormat('ru-RU', {
@@ -1568,6 +1569,8 @@ const SellerEarnings = () => {
           </button>
         }
       />
+
+      <SellerTelegramGlobalAlertBanner />
 
       <div className={`${sellerContentClass} space-y-3`}>
         <SellerHeroMetric dashboard={dashboard} loading={loading} />

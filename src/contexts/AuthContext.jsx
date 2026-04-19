@@ -1,7 +1,13 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import apiClient from '../utils/apiClient';
+import { getLocalStorageSafe, getStorageItemSafe } from '../utils/safeWebStorage.js';
 
 const AuthContext = createContext(null);
+
+function readStoredTokenSafe() {
+  const storage = getLocalStorageSafe();
+  return getStorageItemSafe(storage, 'token');
+}
 
 function normalizeUser(user) {
   if (!user) return null;
@@ -23,7 +29,7 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     let alive = true;
 
-    const token = localStorage.getItem('token');
+    const token = readStoredTokenSafe();
     if (!token) {
       setLoadingAuth(false);
       return;
@@ -39,7 +45,7 @@ export const AuthProvider = ({ children }) => {
         const user = data?.user ?? data;
 
         if (alive) setCurrentUser(normalizeUser(user));
-      } catch (e) {
+      } catch {
         apiClient.logout();
         if (alive) setCurrentUser(null);
       } finally {

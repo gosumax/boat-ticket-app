@@ -1,0 +1,148 @@
+{
+  "responseStatus": 200,
+  "state": {
+    "location": "http://127.0.0.1:3301/telegram/mini-app?telegram_user_id=777123456&mini_app_v=runtime-check-v1&tgWebAppPlatform=ios&tgWebAppVersion=8.0",
+    "title": "Boat Ticket App Mini App",
+    "htmlIdentityMeta": "telegram-mini-app.html",
+    "buildMarkerMeta": "/telegram/assets/telegramMiniAppRuntimeEntry-DwxUBtcW.js",
+    "entryUrlMeta": "/telegram/assets/telegramMiniAppRuntimeEntry-DwxUBtcW.js",
+    "stylesheetHrefs": [
+      "/assets/index-DdzMuFUB.css"
+    ],
+    "runtime": {
+      "completed": true,
+      "lastStage": "entry source imports parsed",
+      "entryImportResult": "resolved",
+      "failureCategory": null,
+      "entryScriptUrl": "/telegram/assets/telegramMiniAppRuntimeEntry-DwxUBtcW.js",
+      "checkpoints": [
+        {
+          "stage": "TelegramMiniApp module evaluated",
+          "detail": null
+        },
+        {
+          "stage": "main.jsx before React mount",
+          "detail": null
+        },
+        {
+          "stage": "import(entryUrl) resolved",
+          "detail": "/telegram/assets/telegramMiniAppRuntimeEntry-DwxUBtcW.js"
+        },
+        {
+          "stage": "entry source fetch started",
+          "detail": "/telegram/assets/telegramMiniAppRuntimeEntry-DwxUBtcW.js"
+        },
+        {
+          "stage": "App.jsx render reached",
+          "detail": null
+        },
+        {
+          "stage": "TelegramMiniApp function render entered",
+          "detail": null
+        },
+        {
+          "stage": "TelegramMiniApp first return JSX reached",
+          "detail": null
+        },
+        {
+          "stage": "entry source fetch completed",
+          "detail": "status=200"
+        },
+        {
+          "stage": "TelegramMiniApp first useEffect entered",
+          "detail": null
+        },
+        {
+          "stage": "catalog load started",
+          "detail": null
+        },
+        {
+          "stage": "my-requests load started",
+          "detail": null
+        },
+        {
+          "stage": "entry source imports parsed",
+          "detail": "count=1"
+        }
+      ]
+    },
+    "bootstrapShell": null,
+    "emergencyShell": null,
+    "miniApp": {
+      "visible": true,
+      "className": "tg-mini-app",
+      "backgroundImage": "radial-gradient(circle at 0% 0%, rgba(37, 99, 235, 0.26), rgba(0, 0, 0, 0) 34%), radial-gradient(circle at 100% 0%, rgba(14, 165, 233, 0.16), rgba(0, 0, 0, 0) 22%), radial-gradient(circle at 50% 120%, rgba(29, 78, 216, 0.18), rgba(0, 0, 0, 0) 28%), linear-gradient(rgb(4, 9, 19) 0%, rgb(8, 18, 34) 42%, rgb(9, 21, 37) 100%)",
+      "color": "rgb(248, 251, 255)",
+      "fontFamily": "\"Avenir Next\", \"SF Pro Display\", \"Segoe UI\", sans-serif"
+    },
+    "nav": {
+      "visible": true,
+      "computedDisplay": "grid",
+      "computedPosition": "sticky",
+      "backgroundColor": "rgba(5, 11, 20, 0.9)",
+      "backgroundImage": "none"
+    },
+    "navButtons": [
+      {
+        "text": "Catalog",
+        "className": "tg-mini-app__nav-button is-active",
+        "visible": true
+      },
+      {
+        "text": "My Tickets",
+        "className": "tg-mini-app__nav-button",
+        "visible": true
+      },
+      {
+        "text": "Useful",
+        "className": "tg-mini-app__nav-button",
+        "visible": true
+      },
+      {
+        "text": "FAQ",
+        "className": "tg-mini-app__nav-button",
+        "visible": true
+      },
+      {
+        "text": "Contact",
+        "className": "tg-mini-app__nav-button",
+        "visible": true
+      }
+    ],
+    "heading": "Trips and Hold Booking",
+    "openCatalogVisible": true,
+    "buyerButtons": [
+      "Open Catalog",
+      "Catalog",
+      "My Tickets",
+      "Useful",
+      "FAQ",
+      "Contact"
+    ],
+    "rootChildCount": 1,
+    "rootTextSample": "Buyer Mini AppTrips and Hold BookingGuest flow: catalog, trip card, booking request, and deterministic hold result.Buyer flow onlyTelegram guest readyShellSeller-style buyer surfaceRequests0 activeFocusCatalogQuick controlsOpen catalog fastKeep the buyer shell usable on small screens while preserving the existing route and API flow.Telegram user idBuyer identity stays editable for safe debugging on device.Date filterKeep the catalog tight around a single sailing date.NavigationOpen CatalogJump b",
+    "bodyTextSample": "Buyer Mini AppTrips and Hold BookingGuest flow: catalog, trip card, booking request, and deterministic hold result.Buyer flow onlyTelegram guest readyShellSeller-style buyer surfaceRequests0 activeFocusCatalogQuick controlsOpen catalog fastKeep the buyer shell usable on small screens while preserving the existing route and API flow.Telegram user idBuyer identity stays editable for safe debugging on device.Date filterKeep the catalog tight around a single sailing date.NavigationOpen CatalogJump b"
+  },
+  "events": [
+    {
+      "type": "console",
+      "text": "[DIAGNOSTICS] Module load diagnostics installed"
+    },
+    {
+      "type": "console",
+      "text": "[MAIN] mount start"
+    },
+    {
+      "type": "console",
+      "text": "[MAIN] mount done"
+    },
+    {
+      "type": "console",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "console",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    }
+  ]
+}

@@ -1,64 +1,131 @@
-# SYSTEM MODE: META TASK ORCHESTRATOR
+# Execution Policy
 
-Ты обязан работать только в META TASK MODE.
+This repository uses task-driven execution.
 
-## 1. Формат входа
-Пользователь всегда даёт команды в формате:
+## Input Format
 
-TASK: <описание задачи>
+- Expected user format: `TASK: <description>`.
+- If a message does not start with `TASK:`, do not make repo changes and reply with:
+  `ERROR: Input must start with TASK:`
 
-Если сообщение не начинается с `TASK:`, ты обязан:
-- не выполнять никаких действий
-- не анализировать код
-- вернуть ошибку формата:
-  "ERROR: Input must start with TASK:"
+## Required Working Process
 
-## 2. Запрещено
-- Самостоятельно запускать аудит
-- Делать рефакторинг без явного TASK
-- Изменять существующую бизнес-логику seller/dispatcher/owner без прямого указания
-- Ломать API-контракты
-- Делать “улучшения” вне scope задачи
+For every valid task, follow this sequence:
 
-## 3. Обязательный процесс выполнения любой TASK
+1. Research
+2. Design
+3. Plan
+4. Minimal Diff Implementation
+5. Appropriate Validation
+6. Report
 
-Строгий pipeline:
+Do not skip the reasoning steps, but keep them proportional to task risk.
 
-1) Research
-2) Design
-3) Plan
-4) Minimal Diff Implementation
-5) Проверка инвариантов
-6) Вывод отчёта
+## Scope And Safety
 
-Без пропуска шагов.
+- Preserve existing seller, dispatcher, owner, and admin runtime behavior unless the task explicitly changes it.
+- Preserve business rules documented in `docs/BUSINESS_RULES.md`.
+- Preserve API behavior documented in `docs/API_CONTRACT.md`.
+- Keep diffs minimal.
+- No speculative refactors.
+- No silent behavior changes.
+- Do not move or remove Telegram groundwork unless the task explicitly requires it.
 
-## 4. Архитектурные ограничения
+## Architectural Guardrails
 
-- Финансовая логика инвариантна
-- money_ledger — источник истины
-- Seller-flow защищён (нельзя ломать существующую логику)
-- Разрешено только добавление кода, если не указано иное
-- Минимальный diff
-- Никакого массового рефакторинга
+- `money_ledger` remains the financial source of truth.
+- Seller flow is protected.
+- Shift-close behavior is high risk.
+- Existing DB schema, auth behavior, and production contracts are protected unless a task explicitly changes them.
 
-## 5. Дополнительные policy-файлы проекта
+## Project Docs To Consider
 
-Перед выполнением любой TASK ты обязан учитывать:
+Use these documents when relevant:
 
-- PROCESS_RULES.md
-- research.md
-- design.md
-- plan.md
-- system_map.md
-- security.md
-- concurrency.md
-- financial.md
+- `docs/PROJECT_PRINCIPLES.md`
+- `docs/BUSINESS_RULES.md`
+- `docs/API_CONTRACT.md`
+- `docs/TIME_RULES.md`
+- `docs/DEBUG_POLICY.md`
+- `docs/dispatcher-shift-close.md`
+- `docs/GLOSSARY.md`
+- `docs/telegram/README.md` for Telegram structure work
 
-Если файл отсутствует — продолжай без него.
+If a reference file is missing, continue without it.
 
-## 6. Validate Gate (MANDATORY)
+## Risk-Based Validation Policy
 
-- Stage `Validate` = `PASS` only if `npm run validate` finishes with exit code `0`.
-- `npm run validate` must run full backend suites (`owner` + `seller` + `dispatcher`) and Playwright e2e (`npm run e2e`).
-- Any failed test in this chain must make Validate stage `FAILED` (exit code `1`).
+Validation must match task risk instead of defaulting to full-system validation.
+
+### Low Risk
+
+Examples:
+
+- docs-only changes
+- rules-only changes
+- planning-only changes
+- structure-only changes
+- placeholder-only changes
+- non-runtime scaffolding
+- Telegram groundwork that does not introduce runtime behavior
+
+Required validation:
+
+- confirm touched files are documentation or placeholders only
+- confirm runtime code was not changed
+- run a lightweight sanity check only if useful
+
+Not required by default:
+
+- `npm run validate`
+- full owner/seller/dispatcher test chain
+- Playwright e2e
+
+### Medium Risk
+
+Examples:
+
+- isolated Telegram development
+- new modules behind reserved Telegram boundaries
+- targeted scaffolding or contracts that do not touch active seller/dispatcher/owner/admin runtime flows
+- work that avoids shared financial logic, auth, live API contracts, DB behavior, and shift-close logic
+
+Required validation:
+
+- targeted checks for the files or module being changed
+- narrow tests, lint, or build steps only when they directly cover the changed area
+
+Not required by default:
+
+- full `npm run validate`
+
+### High Risk
+
+Examples:
+
+- shared runtime logic
+- seller, dispatcher, owner, or admin behavior changes
+- financial or ledger logic
+- auth or permissions
+- API contracts
+- DB schema or persistence behavior
+- shift-close logic
+- cross-module production behavior
+
+Required validation:
+
+- strong validation proportional to risk
+- run `npm run validate` when the task touches current production behavior or other high-risk paths
+
+## Validation Gate
+
+- `npm run validate` is mandatory for high-risk changes.
+- `npm run validate` is not mandatory for low-risk or medium-risk tasks unless the task explicitly asks for it or the changed area justifies it.
+- A task is complete only after the required validation for its risk level has been run and reported.
+
+## Output Expectations
+
+- Report what changed.
+- Report what was validated.
+- Report any assumptions or limits.
+- Keep the response practical; no rigid format is required beyond clarity.

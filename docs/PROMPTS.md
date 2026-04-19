@@ -1,26 +1,23 @@
-# PROJECT PROMPTS — BOAT TICKET APP
+# Prompting Notes
 
-## 🔒 Anti-Hallucination Rules (MANDATORY)
+This file is an optional reference for humans and tooling prompts. It is not a source of truth for runtime behavior, validation policy, or output format.
 
-RULES:
-- No assumptions.
-- No reports.
-- No summaries.
-- No "already exists", "probably", "seems".
-- If unsure → STOP and ask.
+## Use
 
-## 🧱 Source of Truth
+- Prefer task-driven requests with clear scope.
+- State constraints explicitly when a task must preserve behavior.
+- Name the protected domains when relevant: seller, dispatcher, owner, admin, auth, money flow, contracts, DB behavior.
 
-- Single DB: <project-root>/database.sqlite
-- Backend entry: server/index.mjs
-- DB init: server/db.js
-- Only allowed file to change unless stated otherwise.
+## Do Not Treat This File As
 
-## ✅ Output Contract
+- an execution policy override
+- a contract document
+- a business-rules document
+- a rigid output-format requirement
 
-Only one of:
-- Exact code diff
-- Exact curl output
-- Exact console log
+Authoritative docs:
 
-Anything else = INVALID.
+- execution policy: `AGENTS.md`
+- engineering principles: `docs/PROJECT_PRINCIPLES.md`
+- business truth: `docs/BUSINESS_RULES.md`
+- API truth: `docs/API_CONTRACT.md`

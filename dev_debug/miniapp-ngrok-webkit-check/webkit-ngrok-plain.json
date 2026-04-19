@@ -1,0 +1,54 @@
+{
+  "responseStatus": 200,
+  "headers": {
+    "content-type": "text/html",
+    "referrer-policy": "no-referrer",
+    "content-length": "2847",
+    "date": "Fri, 17 Apr 2026 16:10:23 GMT",
+    "ngrok-error-code": "ERR_NGROK_6024"
+  },
+  "state": {
+    "title": "ERR_NGROK_6024 - You are about to visit unnarrative-kaeden-unchivalric.ngrok-free.dev, served by 193.178.169.171. This website is served for free through ngrok.com. You should only visit this website if you trust whoever sent the link to you.",
+    "heading": null,
+    "htmlIdentityMeta": null,
+    "buildMarkerMeta": null,
+    "bootstrapCompleted": null,
+    "entryImportResult": null,
+    "navVisible": false,
+    "textSample": "You are about to visit:unnarrative-kaeden-unchivalric.ngrok-free.devWebsite IP: 193.178.169.171This website is served for free through ngrok.com.You should only visit this website if you trust whoever sent the link to you.Be careful about disclosing personal or financial information like passwords, phone numbers, or credit cards.Visit SiteAre you the developer?We display this page to prevent abuse. Visitors to your site will only see it once.To remove this page:Set and send an ngrok-skip-browser-warning request header with any value.Or, set and send a custom/non-standard browser User-Agent request header.Or, please upgrade to any paid ngrok account. Learn how ngrok fights abusePowered by ngr"
+  },
+  "events": [
+    {
+      "type": "console",
+      "text": "The resource https://assets.ngrok.com/fonts/euclid-square/EuclidSquare-Regular-WebS.woff was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it wasn't preloaded for nothing."
+    },
+    {
+      "type": "console",
+      "text": "The resource https://assets.ngrok.com/fonts/euclid-square/EuclidSquare-RegularItalic-WebS.woff was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it wasn't preloaded for nothing."
+    },
+    {
+      "type": "console",
+      "text": "The resource https://assets.ngrok.com/fonts/euclid-square/EuclidSquare-Medium-WebS.woff was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it wasn't preloaded for nothing."
+    },
+    {
+      "type": "console",
+      "text": "The resource https://assets.ngrok.com/fonts/euclid-square/EuclidSquare-MediumItalic-WebS.woff was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it wasn't preloaded for nothing."
+    },
+    {
+      "type": "console",
+      "text": "The resource https://assets.ngrok.com/fonts/ibm-plex-mono/IBMPlexMono-Text.woff was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it wasn't preloaded for nothing."
+    },
+    {
+      "type": "console",
+      "text": "The resource https://assets.ngrok.com/fonts/ibm-plex-mono/IBMPlexMono-TextItalic.woff was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it wasn't preloaded for nothing."
+    },
+    {
+      "type": "console",
+      "text": "The resource https://assets.ngrok.com/fonts/ibm-plex-mono/IBMPlexMono-SemiBold.woff was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it wasn't preloaded for nothing."
+    },
+    {
+      "type": "console",
+      "text": "The resource https://assets.ngrok.com/fonts/ibm-plex-mono/IBMPlexMono-SemiBoldItalic.woff was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it wasn't preloaded for nothing."
+    }
+  ]
+}

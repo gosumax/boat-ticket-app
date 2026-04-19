@@ -791,7 +791,7 @@ const loadTransferOptions = async (ctx) => {
       if (action === 'delete' && prepay > 0) {
         const d = String(decision || '').toUpperCase();
         if (d !== 'REFUND' && d !== 'FUND') {
-          setConfirmError('Р’С‹Р±РµСЂРё: РІРµСЂРЅСѓС‚СЊ РїСЂРµРґРѕРїР»Р°С‚Сѓ РёР»Рё РѕС‚РїСЂР°РІРёС‚СЊ РІ СЃРµР·РѕРЅРЅС‹Р№ С„РѕРЅРґ');
+          setConfirmError('Выбери: вернуть предоплату или отправить в сезонный фонд');
           return;
         }
         await handleTicketOperation(ticketId, action, d);

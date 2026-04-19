@@ -1,0 +1,1544 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Boat Ticket App Mini App</title>
+    <meta name="telegram-mini-app-html-id" content="telegram-mini-app.html" />
+    <meta
+      name="telegram-mini-app-build-marker"
+      content="__TELEGRAM_MINI_APP_BUILD_MARKER__"
+    />
+    <link rel="stylesheet" href="/src/index.css" />
+    <link rel="stylesheet" href="/src/telegram/mini-app.css" />
+    <script>
+      (function () {
+        var checkpointMap = {};
+        var ENTRY_IMPORT_TIMEOUT_MS = 12000;
+        var IMMEDIATE_IMPORT_TIMEOUT_MS = 4000;
+        var shell = null;
+        var message = null;
+        var stage = null;
+        var details = null;
+        var list = null;
+
+        function appendShell() {
+          if (!document.body || shell) {
+            return;
+          }
+
+          shell = document.createElement('div');
+          shell.id = 'telegram-mini-app-bootstrap-fallback';
+          shell.style.cssText = [
+            'display:none',
+            'position:fixed',
+            'inset:0',
+            'z-index:2147483647',
+            'overflow:auto',
+            'padding:24px',
+            'background:radial-gradient(circle at top left, rgba(37,99,235,0.24), transparent 30%), linear-gradient(180deg,#040913 0%,#081222 48%,#091525 100%)',
+            'color:#f8fbff',
+            'font-family:"Avenir Next","SF Pro Display",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+          ].join(';');
+
+          var card = document.createElement('div');
+          card.style.cssText = [
+            'max-width:720px',
+            'margin:0 auto',
+            'border:1px solid rgba(251,113,133,0.24)',
+            'border-radius:28px',
+            'background:linear-gradient(145deg, rgba(4,9,19,0.96) 0%, rgba(8,18,34,0.98) 46%, rgba(11,31,58,0.94) 100%)',
+            'padding:22px',
+            'box-shadow:0 28px 70px -30px rgba(2,6,23,0.94)',
+          ].join(';');
+
+          var eyebrow = document.createElement('p');
+          eyebrow.textContent = 'Telegram Mini App bootstrap';
+          eyebrow.style.cssText =
+            'margin:0;font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#8fa4be;';
+
+          var heading = document.createElement('h1');
+          heading.textContent = 'Buyer UI failed before first render';
+          heading.style.cssText = 'margin:12px 0 8px;font-size:30px;line-height:1.02;';
+
+          message = document.createElement('p');
+          message.style.cssText = 'margin:0;color:#d5dfeb;line-height:1.6;';
+
+          stage = document.createElement('pre');
+          stage.style.cssText = [
+            'margin:16px 0 0',
+            'padding:14px',
+            'border-radius:18px',
+            'border:1px solid rgba(251,191,36,0.24)',
+            'background:rgba(120,53,15,0.24)',
+            'color:#fde68a',
+            'white-space:pre-wrap',
+            'overflow-x:auto',
+          ].join(';');
+
+          details = document.createElement('pre');
+          details.style.cssText = [
+            'margin:12px 0 0',
+            'padding:14px',
+            'border-radius:18px',
+            'border:1px solid rgba(148,163,184,0.18)',
+            'background:rgba(255,255,255,0.04)',
+            'color:#cbd5e1',
+            'white-space:pre-wrap',
+            'overflow-x:auto',
+          ].join(';');
+
+          list = document.createElement('ol');
+          list.style.cssText =
+            'margin:16px 0 0;padding-left:20px;line-height:1.6;color:#d5dfeb;';
+
+          card.appendChild(eyebrow);
+          card.appendChild(heading);
+          card.appendChild(message);
+          card.appendChild(stage);
+          card.appendChild(details);
+          card.appendChild(list);
+          shell.appendChild(card);
+          document.addEventListener(
+            'DOMContentLoaded',
+            function () {
+              if (!document.body.contains(shell)) {
+                document.body.appendChild(shell);
+              }
+            },
+            { once: true }
+          );
+        }
+
+        function renderCheckpoints(runtime) {
+          if (!list) {
+            return;
+          }
+          list.innerHTML = '';
+          for (var index = 0; index < runtime.checkpoints.length; index += 1) {
+            var item = runtime.checkpoints[index];
+            var line = document.createElement('li');
+            line.textContent = item.stage + (item.detail ? ' - ' + item.detail : '');
+            list.appendChild(line);
+          }
+        }
+
+        function normalizeError(errorValue) {
+          if (!errorValue) {
+            return {
+              name: null,
+              message: 'Unknown startup failure',
+              stack: null,
+            };
+          }
+
+          if (typeof errorValue === 'string') {
+            return {
+              name: null,
+              message: errorValue,
+              stack: null,
+            };
+          }
+
+          return {
+            name:
+              typeof errorValue.name === 'string' && errorValue.name
+                ? errorValue.name
+                : null,
+            message:
+              typeof errorValue.message === 'string' && errorValue.message
+                ? errorValue.message
+                : String(errorValue),
+            stack:
+              typeof errorValue.stack === 'string' && errorValue.stack
+                ? errorValue.stack
+                : null,
+          };
+        }
+
+        function createImportTimeoutError(targetUrl, timeoutMs, label) {
+          var error = new Error(
+            String(label || 'import(entryUrl)') +
+              ' timed out after ' +
+              String(timeoutMs || 0) +
+              'ms'
+          );
+          error.name = 'ImportTimeoutError';
+          error.targetUrl = targetUrl ? String(targetUrl) : null;
+          error.timeoutMs = Number(timeoutMs || 0) || 0;
+          return error;
+        }
+
+        function classifyImportFailure(errorInfo) {
+          var normalized = normalizeError(errorInfo);
+          var message = String(normalized.message || '').toLowerCase();
+          var name = String(normalized.name || '').toLowerCase();
+
+          if (
+            name === 'importtimeouterror' ||
+            message.indexOf('timed out') >= 0 ||
+            message.indexOf('timeout') >= 0
+          ) {
+            return 'timeout';
+          }
+
+          if (
+            name === 'syntaxerror' ||
+            message.indexOf('syntax') >= 0 ||
+            message.indexOf('unexpected token') >= 0 ||
+            message.indexOf('unexpected identifier') >= 0 ||
+            message.indexOf('cannot use import statement') >= 0
+          ) {
+            return 'parse';
+          }
+
+          if (
+            message.indexOf('failed to fetch dynamically imported module') >= 0 ||
+            message.indexOf('importing a module script failed') >= 0 ||
+            message.indexOf('failed to load module script') >= 0 ||
+            message.indexOf('module script') >= 0 ||
+            message.indexOf('mime') >= 0 ||
+            message.indexOf('network') >= 0 ||
+            message.indexOf('http ') >= 0 ||
+            message.indexOf('status=') >= 0 ||
+            message.indexOf('404') >= 0 ||
+            message.indexOf('503') >= 0 ||
+            message.indexOf('load failed') >= 0 ||
+            message.indexOf('load error') >= 0 ||
+            message.indexOf('fetch') >= 0
+          ) {
+            return 'import graph';
+          }
+
+          if (
+            name === 'referenceerror' ||
+            name === 'typeerror' ||
+            name === 'rangeerror' ||
+            name === 'urierror' ||
+            name === 'evalerror' ||
+            name === 'error'
+          ) {
+            return 'top-level runtime';
+          }
+
+          return 'evaluation';
+        }
+
+        function parseStaticImportSpecifiers(sourceText) {
+          var text = String(sourceText || '');
+          var result = [];
+          var seen = {};
+          var patterns = [
+            /(?:^|[;\n\r])\s*import\s*["']([^"']+)["']/gm,
+            /(?:^|[;\n\r])\s*(?:import|export)[^"'`]+?\bfrom\s*["']([^"']+)["']/gm,
+          ];
+          var patternIndex = 0;
+
+          for (; patternIndex < patterns.length; patternIndex += 1) {
+            var match = null;
+            while ((match = patterns[patternIndex].exec(text))) {
+              var specifier = match[1];
+              if (!specifier || seen[specifier]) {
+                continue;
+              }
+              seen[specifier] = true;
+              result.push(specifier);
+            }
+          }
+
+          return result;
+        }
+
+        function readMetaContentByName(metaName) {
+          var normalizedMetaName = String(metaName || '').trim();
+          var metaElement = null;
+          var content = '';
+
+          if (!normalizedMetaName) {
+            return '';
+          }
+
+          try {
+            metaElement = document.querySelector(
+              'meta[name="' + normalizedMetaName + '"]'
+            );
+          } catch (_error) {
+            return '';
+          }
+          if (!metaElement) {
+            return '';
+          }
+
+          content = String(metaElement.getAttribute('content') || '').trim();
+          return content;
+        }
+
+        function readStylesheetAssetUrls() {
+          var links = [];
+          var urls = [];
+          var index = 0;
+
+          try {
+            links = Array.prototype.slice.call(
+              document.querySelectorAll('link[rel="stylesheet"]')
+            );
+          } catch (_error) {
+            return [];
+          }
+
+          for (; index < links.length; index += 1) {
+            var hrefValue = String(links[index].getAttribute('href') || '').trim();
+            if (!hrefValue) {
+              continue;
+            }
+            urls.push(hrefValue);
+          }
+
+          return urls;
+        }
+
+        function toAbsoluteUrl(urlValue) {
+          var normalizedUrl = String(urlValue || '').trim();
+          if (!normalizedUrl) {
+            return '';
+          }
+
+          try {
+            return new URL(normalizedUrl, window.location.href).href;
+          } catch (_error) {
+            return normalizedUrl;
+          }
+        }
+
+        function describePerformanceResource(urlValue) {
+          var absoluteUrl = toAbsoluteUrl(urlValue);
+          var entries = [];
+          var entry = null;
+          var index = 0;
+
+          if (
+            !absoluteUrl ||
+            typeof performance === 'undefined' ||
+            !performance ||
+            typeof performance.getEntriesByType !== 'function'
+          ) {
+            return 'not observed';
+          }
+
+          try {
+            entries = performance.getEntriesByType('resource') || [];
+          } catch (_error) {
+            return 'not observed';
+          }
+
+          for (; index < entries.length; index += 1) {
+            if (String(entries[index].name || '') === absoluteUrl) {
+              entry = entries[index];
+            }
+          }
+
+          if (!entry) {
+            return 'not observed';
+          }
+
+          return (
+            'observed initiator=' +
+            String(entry.initiatorType || 'unknown') +
+            ' duration=' +
+            String(Math.round(Number(entry.duration || 0))) +
+            'ms'
+          );
+        }
+
+        function summarizeTrackedStylesheetStates(runtime) {
+          var trackedStates = runtime.stylesheetLoadStates || {};
+          var urls = Object.keys(trackedStates);
+          var lines = [];
+          var index = 0;
+
+          if (!urls.length) {
+            return lines;
+          }
+
+          urls.sort();
+          for (; index < urls.length; index += 1) {
+            var trackedState = trackedStates[urls[index]];
+            lines.push(
+              '- ' +
+                trackedState.url +
+                ' :: ' +
+                String(trackedState.loadState || 'discovered') +
+                ' :: via=' +
+                (trackedState.discoveredVia.length > 0
+                  ? trackedState.discoveredVia.join('|')
+                  : 'unknown') +
+                ' :: resource=' +
+                describePerformanceResource(trackedState.url)
+            );
+          }
+
+          return lines;
+        }
+
+        function isProbeableBuiltAsset(entryUrl, specifier) {
+          var normalizedEntryUrl = String(entryUrl || '');
+          var normalizedSpecifier = String(specifier || '');
+
+          if (normalizedEntryUrl.indexOf('/assets/') < 0) {
+            return false;
+          }
+
+          if (
+            normalizedSpecifier.indexOf('data:') === 0 ||
+            normalizedSpecifier.indexOf('virtual:') === 0 ||
+            normalizedSpecifier.indexOf('node:') === 0
+          ) {
+            return false;
+          }
+
+          if (
+            normalizedSpecifier.indexOf('.css') >= 0 ||
+            normalizedSpecifier.indexOf('.svg') >= 0 ||
+            normalizedSpecifier.indexOf('.png') >= 0 ||
+            normalizedSpecifier.indexOf('.jpg') >= 0 ||
+            normalizedSpecifier.indexOf('.jpeg') >= 0 ||
+            normalizedSpecifier.indexOf('.gif') >= 0 ||
+            normalizedSpecifier.indexOf('.webp') >= 0
+          ) {
+            return false;
+          }
+
+          return (
+            normalizedSpecifier.indexOf('./') === 0 ||
+            normalizedSpecifier.indexOf('../') === 0 ||
+            normalizedSpecifier.indexOf('/') === 0 ||
+            normalizedSpecifier.indexOf('http://') === 0 ||
+            normalizedSpecifier.indexOf('https://') === 0
+          );
+        }
+
+        function resolveImportUrl(baseUrl, specifier) {
+          try {
+            return new URL(String(specifier || ''), String(baseUrl || '')).href;
+          } catch (_error) {
+            return null;
+          }
+        }
+
+        function readResourceTargetUrl(targetElement) {
+          var urlValue = '';
+          if (!targetElement || typeof targetElement !== 'object') {
+            return '';
+          }
+
+          try {
+            if (
+              typeof targetElement.currentSrc === 'string' &&
+              targetElement.currentSrc
+            ) {
+              urlValue = String(targetElement.currentSrc).trim();
+            }
+            if (!urlValue && typeof targetElement.src === 'string' && targetElement.src) {
+              urlValue = String(targetElement.src).trim();
+            }
+            if (!urlValue && typeof targetElement.href === 'string' && targetElement.href) {
+              urlValue = String(targetElement.href).trim();
+            }
+            if (!urlValue && typeof targetElement.getAttribute === 'function') {
+              urlValue = String(
+                targetElement.getAttribute('src') ||
+                  targetElement.getAttribute('href') ||
+                  ''
+              ).trim();
+            }
+          } catch (_error) {
+            return '';
+          }
+
+          return urlValue;
+        }
+
+        function isLikelyMiniAppRuntimeAssetUrl(urlValue) {
+          var absoluteUrl = toAbsoluteUrl(urlValue);
+          var parsedUrl = null;
+          var pathname = '';
+          var currentOrigin = '';
+
+          if (!absoluteUrl) {
+            return false;
+          }
+
+          try {
+            parsedUrl = new URL(absoluteUrl);
+            pathname = String(parsedUrl.pathname || '');
+            currentOrigin = String(window.location.origin || '');
+          } catch (_error) {
+            return false;
+          }
+
+          if (currentOrigin && parsedUrl.origin !== currentOrigin) {
+            return false;
+          }
+
+          return (
+            pathname.indexOf('/telegram/assets/') === 0 ||
+            pathname.indexOf('/assets/') === 0 ||
+            pathname.indexOf('/telegram/mini-app/assets/') === 0 ||
+            pathname.indexOf('/src/') === 0
+          );
+        }
+
+        function buildDetailsText(runtime) {
+          var lines = [];
+          var rejectionInfo = runtime.entryImportError || null;
+          var stylesheetSummary =
+            runtime.stylesheetAssetUrls && runtime.stylesheetAssetUrls.length > 0
+              ? runtime.stylesheetAssetUrls.join(', ')
+              : 'none';
+
+          lines.push(
+            'HTML identity marker: ' + (runtime.htmlIdentity || 'missing')
+          );
+          lines.push('Build marker: ' + (runtime.buildMarker || 'missing'));
+          lines.push('Stylesheet asset URL(s): ' + stylesheetSummary);
+          lines.push(
+            'Entry resource timing: ' +
+              describePerformanceResource(runtime.entryScriptUrl)
+          );
+          lines.push('Entry URL used: ' + (runtime.entryScriptUrl || 'unknown'));
+          lines.push(
+            'Entry source fetch status: ' +
+              (runtime.entryScriptFetchStatus !== null
+                ? String(runtime.entryScriptFetchStatus)
+                : 'not captured')
+          );
+          lines.push(
+            'Entry source fetch ok: ' +
+              (runtime.entryScriptFetchOk !== null
+                ? String(runtime.entryScriptFetchOk)
+                : 'not captured')
+          );
+          lines.push(
+            'Entry source content-type: ' +
+              (runtime.entryScriptFetchContentType || 'not captured')
+          );
+          lines.push('Entry source fetch error: ' + (runtime.entryScriptFetchError || 'none'));
+          lines.push(
+            'import(entryUrl) attempted: ' +
+              (runtime.entryImportAttempted ? 'yes' : 'no')
+          );
+          lines.push(
+            'import(entryUrl) result: ' +
+              (runtime.entryImportResult || 'not attempted')
+          );
+          lines.push(
+            'import(entryUrl) failure category: ' +
+              (runtime.failureCategory || 'not classified')
+          );
+          lines.push(
+            'Last resource error target: ' +
+              (runtime.lastResourceErrorTagName
+                ? runtime.lastResourceErrorTagName +
+                  ' ' +
+                  (runtime.lastResourceErrorUrl || 'unknown')
+                : 'none')
+          );
+          lines.push(
+            'Last resource error message: ' +
+              (runtime.lastResourceErrorMessage || 'none')
+          );
+          lines.push(
+            'Last resource error treated as fatal: ' +
+              (runtime.lastResourceErrorFatal === null
+                ? 'not recorded'
+                : runtime.lastResourceErrorFatal
+                  ? 'yes'
+                  : 'no')
+          );
+          lines.push(
+            'Exact module responsible: ' +
+              (runtime.exactFailureModuleUrl || 'not isolated')
+          );
+          lines.push(
+            'Immediate import probe count: ' + String(runtime.importProbeResults.length)
+          );
+
+          if (rejectionInfo) {
+            lines.push(
+              'import(entryUrl) rejection name: ' +
+                (rejectionInfo.name || 'unknown')
+            );
+            lines.push(
+              'import(entryUrl) rejection message: ' +
+                (rejectionInfo.message || 'unknown')
+            );
+            lines.push(
+              'import(entryUrl) rejection stack: ' +
+                (rejectionInfo.stack || 'not available')
+            );
+          } else {
+            lines.push('import(entryUrl) rejection name: none');
+            lines.push('import(entryUrl) rejection message: none');
+            lines.push('import(entryUrl) rejection stack: none');
+          }
+
+          var stylesheetStateLines = summarizeTrackedStylesheetStates(runtime);
+          if (stylesheetStateLines.length > 0) {
+            lines.push('');
+            lines.push('Tracked stylesheet request state(s):');
+            for (var stylesheetIndex = 0; stylesheetIndex < stylesheetStateLines.length; stylesheetIndex += 1) {
+              lines.push(stylesheetStateLines[stylesheetIndex]);
+            }
+          }
+
+          if (runtime.parsedEntryImportSpecifiers.length > 0) {
+            lines.push('');
+            lines.push('Parsed immediate import specifiers from entry source:');
+            for (var specifierIndex = 0; specifierIndex < runtime.parsedEntryImportSpecifiers.length; specifierIndex += 1) {
+              lines.push(
+                '- ' + runtime.parsedEntryImportSpecifiers[specifierIndex]
+              );
+            }
+          }
+
+          if (runtime.importProbeResults.length > 0) {
+            lines.push('');
+            lines.push('Immediate import probe results:');
+            for (var probeIndex = 0; probeIndex < runtime.importProbeResults.length; probeIndex += 1) {
+              var probe = runtime.importProbeResults[probeIndex];
+              lines.push(
+                '- [' +
+                  probe.status +
+                  '] ' +
+                  probe.label +
+                  ' -> ' +
+                  probe.url
+              );
+              lines.push(
+                '  category=' + (probe.category || 'not classified')
+              );
+              lines.push(
+                '  resource=' + describePerformanceResource(probe.url)
+              );
+              lines.push('  name=' + (probe.errorName || 'none'));
+              lines.push('  message=' + (probe.errorMessage || 'none'));
+              lines.push('  stack=' + (probe.errorStack || 'none'));
+            }
+          }
+
+          return lines.join('\n');
+        }
+
+        function showShell(runtime, headline) {
+          appendShell();
+          if (!shell) {
+            return;
+          }
+          if (!document.body.contains(shell)) {
+            document.body.appendChild(shell);
+          }
+          shell.style.display = 'block';
+          message.textContent = headline;
+          stage.textContent = 'Last checkpoint: ' + (runtime.lastStage || 'none');
+          details.textContent = buildDetailsText(runtime);
+          renderCheckpoints(runtime);
+        }
+
+        function hideShell() {
+          if (!shell) {
+            return;
+          }
+          shell.style.display = 'none';
+        }
+
+        var runtime = {
+          checkpoints: [],
+          lastStage: null,
+          completed: false,
+          entryScriptUrl: null,
+          entryScriptFetchStatus: null,
+          entryScriptFetchOk: null,
+          entryScriptFetchContentType: null,
+          entryScriptFetchError: null,
+          entrySourceText: null,
+          entrySourceFetchStarted: false,
+          parsedEntryImportSpecifiers: [],
+          immediateImportCandidates: [],
+          importProbeResults: [],
+          entryImportAttempted: false,
+          entryImportResult: 'not attempted',
+          entryImportError: null,
+          failureCategory: null,
+          exactFailureModuleUrl: null,
+          lastResourceErrorTagName: null,
+          lastResourceErrorUrl: null,
+          lastResourceErrorMessage: null,
+          lastResourceErrorFatal: null,
+          htmlIdentity: null,
+          buildMarker: null,
+          stylesheetAssetUrls: [],
+          stylesheetLoadStates: {},
+          stylesheetTrackingScheduled: false,
+          entryImportSettled: false,
+          entryImportTimeoutHandle: null,
+          failureHeadline:
+            'The buyer bootstrap did not complete. The emergency fallback is visible instead of a blank screen.',
+          mark: function (name, detailValue) {
+            this.lastStage = String(name || 'unknown');
+            this.checkpoints.push({
+              stage: this.lastStage,
+              detail: detailValue ? String(detailValue) : null,
+            });
+            renderCheckpoints(this);
+          },
+          markOnce: function (name, detailValue) {
+            if (checkpointMap[name]) {
+              return;
+            }
+            checkpointMap[name] = true;
+            this.mark(name, detailValue);
+          },
+          hasCheckpoint: function (name) {
+            return Boolean(checkpointMap[name]);
+          },
+          shouldDisplayBootstrapFallback: function () {
+            return (
+              !this.completed &&
+              !this.hasCheckpoint('main.jsx before React mount')
+            );
+          },
+          ensureFailureClassification: function () {
+            if (this.failureCategory && this.exactFailureModuleUrl) {
+              return;
+            }
+
+            for (var index = 0; index < this.importProbeResults.length; index += 1) {
+              var probe = this.importProbeResults[index];
+              if (
+                probe.status !== 'rejected' &&
+                probe.status !== 'timed_out'
+              ) {
+                continue;
+              }
+              this.failureCategory = probe.category || this.failureCategory || 'evaluation';
+              this.exactFailureModuleUrl = probe.url || this.exactFailureModuleUrl;
+              return;
+            }
+
+            if (this.entryImportResult === 'rejected') {
+              this.failureCategory =
+                this.failureCategory ||
+                classifyImportFailure(this.entryImportError || { message: 'Unknown import rejection' });
+              this.exactFailureModuleUrl =
+                this.exactFailureModuleUrl || this.entryScriptUrl || null;
+              return;
+            }
+
+            if (this.entryImportResult === 'resolved' && !this.hasCheckpoint('main.jsx before React mount')) {
+              this.failureCategory = this.failureCategory || 'evaluation';
+              this.exactFailureModuleUrl =
+                this.exactFailureModuleUrl || this.entryScriptUrl || null;
+            }
+          },
+          recordResourceErrorObservation: function (
+            targetTagName,
+            targetUrl,
+            messageValue,
+            treatedAsFatal
+          ) {
+            var normalizedTagName = String(targetTagName || '').toUpperCase();
+            var absoluteTargetUrl = toAbsoluteUrl(targetUrl);
+            this.lastResourceErrorTagName = normalizedTagName || null;
+            this.lastResourceErrorUrl = absoluteTargetUrl || null;
+            this.lastResourceErrorMessage = messageValue
+              ? String(messageValue)
+              : null;
+            this.lastResourceErrorFatal = Boolean(treatedAsFatal);
+            this.mark(
+              treatedAsFatal
+                ? 'resource error captured (fatal)'
+                : 'resource error captured (non-fatal)',
+              (normalizedTagName || 'UNKNOWN') +
+                ' -> ' +
+                (absoluteTargetUrl || String(targetUrl || 'unknown'))
+            );
+          },
+          fail: function (name, errorValue) {
+            var normalizedError = normalizeError(errorValue);
+            this.mark(name, normalizedError.message);
+            this.ensureFailureClassification();
+            if (!this.shouldDisplayBootstrapFallback()) {
+              return;
+            }
+            showShell(this, this.failureHeadline);
+          },
+          complete: function () {
+            this.completed = true;
+            this.clearEntryImportTimeout();
+            hideShell();
+          },
+          clearEntryImportTimeout: function () {
+            if (this.entryImportTimeoutHandle !== null) {
+              window.clearTimeout(this.entryImportTimeoutHandle);
+              this.entryImportTimeoutHandle = null;
+            }
+          },
+          armEntryImportTimeout: function (timeoutMs, timeoutHandler) {
+            var runtimeRef = this;
+            runtimeRef.clearEntryImportTimeout();
+            runtimeRef.entryImportTimeoutHandle = window.setTimeout(function () {
+              runtimeRef.entryImportTimeoutHandle = null;
+              timeoutHandler();
+            }, timeoutMs);
+          },
+          recordHtmlIdentity: function () {
+            this.htmlIdentity = readMetaContentByName('telegram-mini-app-html-id');
+            this.markOnce(
+              'html identity marker discovered',
+              this.htmlIdentity || 'missing'
+            );
+          },
+          recordBuildMarker: function () {
+            this.buildMarker = readMetaContentByName(
+              'telegram-mini-app-build-marker'
+            );
+            this.markOnce(
+              'build marker discovered',
+              this.buildMarker || 'missing'
+            );
+          },
+          observeStylesheetLinkElement: function (linkElement, sourceLabel) {
+            var hrefValue =
+              linkElement && typeof linkElement.getAttribute === 'function'
+                ? String(linkElement.getAttribute('href') || '').trim()
+                : '';
+            var absoluteUrl = toAbsoluteUrl(hrefValue);
+            var record = null;
+            var runtimeRef = this;
+
+            if (!absoluteUrl) {
+              return;
+            }
+
+            record = runtimeRef.stylesheetLoadStates[absoluteUrl];
+            if (!record) {
+              record = {
+                url: absoluteUrl,
+                loadState: 'discovered',
+                discoveredVia: [],
+              };
+              runtimeRef.stylesheetLoadStates[absoluteUrl] = record;
+              runtimeRef.mark('stylesheet request discovered', absoluteUrl);
+            }
+
+            if (
+              sourceLabel &&
+              record.discoveredVia.indexOf(String(sourceLabel)) < 0
+            ) {
+              record.discoveredVia.push(String(sourceLabel));
+            }
+
+            if (record.loadState !== 'error' && linkElement.sheet) {
+              record.loadState = 'loaded';
+            }
+
+            if (linkElement.__telegramMiniAppStylesheetObserved) {
+              return;
+            }
+
+            linkElement.__telegramMiniAppStylesheetObserved = true;
+            linkElement.addEventListener(
+              'load',
+              function () {
+                var trackedRecord =
+                  runtimeRef.stylesheetLoadStates[absoluteUrl] || record;
+                trackedRecord.loadState = 'loaded';
+                runtimeRef.mark('stylesheet request completed', absoluteUrl);
+              },
+              { once: true }
+            );
+            linkElement.addEventListener(
+              'error',
+              function () {
+                var trackedRecord =
+                  runtimeRef.stylesheetLoadStates[absoluteUrl] || record;
+                trackedRecord.loadState = 'error';
+                runtimeRef.mark('stylesheet request failed', absoluteUrl);
+              },
+              { once: true }
+            );
+          },
+          captureStylesheetAssetUrls: function (sourceLabel) {
+            var linkElements = [];
+            var index = 0;
+
+            try {
+              linkElements = Array.prototype.slice.call(
+                document.querySelectorAll('link[rel="stylesheet"]')
+              );
+            } catch (_error) {
+              linkElements = [];
+            }
+
+            this.stylesheetAssetUrls = [];
+            for (; index < linkElements.length; index += 1) {
+              var hrefValue = String(
+                linkElements[index].getAttribute('href') || ''
+              ).trim();
+              if (!hrefValue) {
+                continue;
+              }
+              this.stylesheetAssetUrls.push(hrefValue);
+              this.observeStylesheetLinkElement(
+                linkElements[index],
+                sourceLabel || 'scan'
+              );
+            }
+
+            this.mark(
+              'stylesheet asset url discovered',
+              this.stylesheetAssetUrls.length > 0
+                ? this.stylesheetAssetUrls.join(', ')
+                : 'none'
+            );
+          },
+          scheduleStylesheetTracking: function () {
+            var runtimeRef = this;
+
+            if (runtimeRef.stylesheetTrackingScheduled) {
+              return;
+            }
+            runtimeRef.stylesheetTrackingScheduled = true;
+
+            function capture(label) {
+              runtimeRef.captureStylesheetAssetUrls(label);
+            }
+
+            if (document.readyState === 'loading') {
+              runtimeRef.markOnce(
+                'stylesheet asset capture scheduled',
+                'DOMContentLoaded'
+              );
+              document.addEventListener(
+                'DOMContentLoaded',
+                function () {
+                  capture('domcontentloaded');
+                },
+                { once: true }
+              );
+            } else {
+              capture('document-ready');
+            }
+
+            window.addEventListener(
+              'load',
+              function () {
+                capture('window-load');
+              },
+              { once: true }
+            );
+
+            if (typeof MutationObserver !== 'function') {
+              return;
+            }
+
+            new MutationObserver(function (mutations) {
+              var mutationIndex = 0;
+              for (; mutationIndex < mutations.length; mutationIndex += 1) {
+                var mutation = mutations[mutationIndex];
+                if (mutation.type !== 'childList') {
+                  continue;
+                }
+                for (var nodeIndex = 0; nodeIndex < mutation.addedNodes.length; nodeIndex += 1) {
+                  var node = mutation.addedNodes[nodeIndex];
+                  if (
+                    !node ||
+                    node.nodeType !== 1 ||
+                    node.tagName !== 'LINK' ||
+                    String(node.rel || '').toLowerCase() !== 'stylesheet'
+                  ) {
+                    continue;
+                  }
+                  runtimeRef.observeStylesheetLinkElement(node, 'mutation');
+                  capture('mutation');
+                }
+              }
+            }).observe(document.documentElement || document, {
+              childList: true,
+              subtree: true,
+            });
+          },
+          recordEntryModuleUrl: function (entryUrl) {
+            this.entryScriptUrl = entryUrl ? String(entryUrl) : null;
+            this.markOnce(
+              'entry URL discovered',
+              this.entryScriptUrl || 'missing'
+            );
+          },
+          recordEntryImportStarted: function () {
+            this.entryImportAttempted = true;
+            this.entryImportResult = 'pending';
+            this.entryImportError = null;
+            this.entryImportSettled = false;
+            this.markOnce(
+              'import(entryUrl) started',
+              this.entryScriptUrl || 'unknown'
+            );
+          },
+          recordEntryImportResolved: function () {
+            if (this.entryImportSettled) {
+              this.mark(
+                'late import(entryUrl) resolution ignored',
+                this.entryScriptUrl || 'unknown'
+              );
+              return false;
+            }
+
+            this.entryImportAttempted = true;
+            this.entryImportResult = 'resolved';
+            this.entryImportSettled = true;
+            this.clearEntryImportTimeout();
+            this.markOnce(
+              'import(entryUrl) resolved',
+              this.entryScriptUrl || 'unknown'
+            );
+            return true;
+          },
+          recordEntryImportRejected: function (errorValue) {
+            if (this.entryImportSettled) {
+              this.mark(
+                'late import(entryUrl) rejection ignored',
+                this.entryScriptUrl || 'unknown'
+              );
+              return false;
+            }
+
+            this.entryImportAttempted = true;
+            this.entryImportResult = 'rejected';
+            this.entryImportSettled = true;
+            this.clearEntryImportTimeout();
+            this.entryImportError = normalizeError(errorValue);
+            this.failureCategory = classifyImportFailure(this.entryImportError);
+            this.exactFailureModuleUrl =
+              this.exactFailureModuleUrl || this.entryScriptUrl || null;
+            this.mark(
+              'import(entryUrl) rejected',
+              (this.entryImportError.name || 'Error') +
+                ': ' +
+                this.entryImportError.message
+            );
+            return true;
+          },
+          recordEntryImportTimedOut: function (timeoutMs) {
+            if (this.entryImportSettled) {
+              return false;
+            }
+
+            this.entryImportAttempted = true;
+            this.entryImportResult = 'rejected';
+            this.entryImportSettled = true;
+            this.clearEntryImportTimeout();
+            this.entryImportError = normalizeError(
+              createImportTimeoutError(
+                this.exactFailureModuleUrl || this.entryScriptUrl,
+                timeoutMs,
+                'import(entryUrl)'
+              )
+            );
+            this.failureCategory = this.failureCategory || 'timeout';
+            this.exactFailureModuleUrl =
+              this.exactFailureModuleUrl || this.entryScriptUrl || null;
+            this.mark(
+              'import(entryUrl) timed out',
+              this.entryImportError.message
+            );
+            return true;
+          },
+          recordImportProbeResult: function (label, url, status, errorValue) {
+            var normalizedError = errorValue ? normalizeError(errorValue) : null;
+            var category = normalizedError
+              ? classifyImportFailure(normalizedError)
+              : status === 'timed_out'
+                ? 'timeout'
+                : null;
+
+            this.importProbeResults.push({
+              label: String(label || 'probe'),
+              url: url ? String(url) : 'unknown',
+              status: String(status || 'unknown'),
+              category: category,
+              errorName: normalizedError ? normalizedError.name : null,
+              errorMessage: normalizedError ? normalizedError.message : null,
+              errorStack: normalizedError ? normalizedError.stack : null,
+            });
+
+            if (
+              (status === 'rejected' || status === 'timed_out') &&
+              !this.exactFailureModuleUrl
+            ) {
+              this.exactFailureModuleUrl = url ? String(url) : this.entryScriptUrl;
+            }
+            if (
+              (status === 'rejected' || status === 'timed_out') &&
+              !this.failureCategory
+            ) {
+              this.failureCategory = category || 'evaluation';
+            }
+
+            this.mark(
+              'immediate import probe ' + String(status || 'unknown'),
+              String(label || 'probe') + ' -> ' + String(url || 'unknown')
+            );
+          },
+          captureImmediateImportCandidates: function (entryUrl) {
+            var runtimeRef = this;
+            if (!entryUrl) {
+              return Promise.resolve([]);
+            }
+            if (runtimeRef.entrySourceFetchStarted) {
+              return Promise.resolve(runtimeRef.immediateImportCandidates);
+            }
+
+            runtimeRef.entrySourceFetchStarted = true;
+            runtimeRef.markOnce('entry source fetch started', entryUrl);
+
+            return fetch(entryUrl, {
+              credentials: 'same-origin',
+              cache: 'no-store',
+            })
+              .then(function (response) {
+                runtimeRef.entryScriptFetchStatus = response.status;
+                runtimeRef.entryScriptFetchOk = response.ok;
+                runtimeRef.entryScriptFetchContentType =
+                  response.headers && typeof response.headers.get === 'function'
+                    ? response.headers.get('content-type') || 'missing'
+                    : 'missing';
+                runtimeRef.markOnce(
+                  'entry source fetch completed',
+                  'status=' + String(response.status)
+                );
+
+                if (!response.ok) {
+                  throw new Error(
+                    'Entry source fetch returned HTTP ' + String(response.status)
+                  );
+                }
+
+                return response.text();
+              })
+              .then(function (sourceText) {
+                var specifierIndex = 0;
+                var parsedSpecifiers = parseStaticImportSpecifiers(sourceText);
+
+                runtimeRef.entrySourceText = sourceText;
+                runtimeRef.parsedEntryImportSpecifiers = parsedSpecifiers.slice();
+                runtimeRef.immediateImportCandidates = [];
+
+                for (; specifierIndex < parsedSpecifiers.length; specifierIndex += 1) {
+                  var specifier = parsedSpecifiers[specifierIndex];
+                  if (!isProbeableBuiltAsset(entryUrl, specifier)) {
+                    continue;
+                  }
+
+                  var resolvedUrl = resolveImportUrl(entryUrl, specifier);
+                  if (!resolvedUrl) {
+                    continue;
+                  }
+
+                  runtimeRef.immediateImportCandidates.push({
+                    label: 'immediate import ' + String(specifierIndex + 1),
+                    specifier: specifier,
+                    url: resolvedUrl,
+                  });
+                }
+
+                runtimeRef.markOnce(
+                  'entry source imports parsed',
+                  'count=' + String(parsedSpecifiers.length)
+                );
+
+                if (runtimeRef.immediateImportCandidates.length > 0) {
+                  runtimeRef.markOnce(
+                    'probeable immediate imports isolated',
+                    'count=' + String(runtimeRef.immediateImportCandidates.length)
+                  );
+                }
+
+                return runtimeRef.immediateImportCandidates;
+              })
+              .catch(function (error) {
+                runtimeRef.entryScriptFetchError =
+                  error && error.message
+                    ? error.message
+                    : String(error || 'Unknown fetch error');
+                runtimeRef.mark(
+                  'entry source fetch failed',
+                  runtimeRef.entryScriptFetchError
+                );
+                return [];
+              });
+          },
+        };
+
+        window.__TELEGRAM_MINI_APP_BOOTSTRAP__ = runtime;
+        appendShell();
+        runtime.recordHtmlIdentity();
+        runtime.recordBuildMarker();
+        runtime.scheduleStylesheetTracking();
+        runtime.markOnce('telegram-mini-app.html bootstrap initialized');
+
+        window.onerror = function (_message, source, _line, _column, errorValue) {
+          if (source && !runtime.exactFailureModuleUrl) {
+            runtime.exactFailureModuleUrl = String(source);
+          }
+          if (!runtime.failureCategory && errorValue) {
+            runtime.failureCategory = classifyImportFailure(errorValue);
+          }
+          runtime.fail(
+            'window.onerror',
+            errorValue || { message: String(_message || 'Unknown error') }
+          );
+          return false;
+        };
+
+        window.addEventListener(
+          'error',
+          function (event) {
+            var target = event && event.target ? event.target : null;
+            var targetTagName =
+              target && target.tagName
+                ? String(target.tagName).toUpperCase()
+                : '';
+            var targetUrl = readResourceTargetUrl(target);
+            var fallbackResourceUrl = targetUrl || runtime.entryScriptUrl || 'unknown';
+            var eventMessage =
+              event && event.message ? String(event.message).trim() : '';
+            var isScriptOrLinkError =
+              targetTagName === 'SCRIPT' || targetTagName === 'LINK';
+            if (isScriptOrLinkError) {
+              var resourceMessage =
+                (targetTagName === 'LINK'
+                  ? 'Stylesheet load error: '
+                  : 'Script load or evaluation error: ') +
+                String(fallbackResourceUrl);
+              var belongsToMiniAppAsset =
+                targetUrl && isLikelyMiniAppRuntimeAssetUrl(targetUrl);
+              var shouldTreatAsFatal =
+                targetTagName === 'SCRIPT' && Boolean(belongsToMiniAppAsset);
+
+              if (eventMessage) {
+                resourceMessage += ' (' + eventMessage + ')';
+              }
+
+              runtime.recordResourceErrorObservation(
+                targetTagName,
+                targetUrl,
+                resourceMessage,
+                shouldTreatAsFatal
+              );
+
+              if (!shouldTreatAsFatal) {
+                return;
+              }
+
+              runtime.failureCategory = runtime.failureCategory || 'import graph';
+              if (targetUrl && !runtime.exactFailureModuleUrl) {
+                runtime.exactFailureModuleUrl = toAbsoluteUrl(targetUrl) || targetUrl;
+              }
+              if (runtime.entryImportResult === 'pending') {
+                runtime.recordEntryImportRejected({
+                  name: 'ResourceLoadError',
+                  message: resourceMessage,
+                });
+              }
+              runtime.fail('window.addEventListener(error)', {
+                message: resourceMessage,
+              });
+              return;
+            }
+            runtime.fail(
+              'window.addEventListener(error)',
+              event.error || { message: event.message || 'Unknown error' }
+            );
+          },
+          true
+        );
+
+        window.addEventListener(
+          'unhandledrejection',
+          function (event) {
+            var reason = event.reason;
+            runtime.fail(
+              'unhandledrejection',
+              reason && typeof reason === 'object'
+                ? reason
+                : { message: String(reason || 'Unknown rejection') }
+            );
+          },
+          true
+        );
+
+        window.setTimeout(function () {
+          if (!checkpointMap['entry module loader script evaluated']) {
+            runtime.failureCategory = runtime.failureCategory || 'evaluation';
+            runtime.exactFailureModuleUrl =
+              runtime.exactFailureModuleUrl || 'telegram-mini-app.html';
+            runtime.fail('entry module loader script missing', {
+              message:
+                'The explicit module loader inside telegram-mini-app.html never ran, so import(entryUrl) was not attempted.',
+            });
+          }
+        }, 2500);
+
+      })();
+    </script>
+    <meta
+      name="telegram-mini-app-entry-url"
+      content="__TELEGRAM_MINI_APP_ENTRY_URL__"
+    />
+    <script>
+      (function () {
+        var ENTRY_IMPORT_TIMEOUT_MS = 12000;
+        var IMMEDIATE_IMPORT_TIMEOUT_MS = 4000;
+        var runtime = window.__TELEGRAM_MINI_APP_BOOTSTRAP__;
+
+        function createImportTimeoutError(targetUrl, timeoutMs, label) {
+          var error = new Error(
+            String(label || 'import(entryUrl)') +
+              ' timed out after ' +
+              String(timeoutMs || 0) +
+              'ms'
+          );
+          error.name = 'ImportTimeoutError';
+          error.targetUrl = targetUrl ? String(targetUrl) : null;
+          error.timeoutMs = Number(timeoutMs || 0) || 0;
+          return error;
+        }
+
+        function readEntryUrlFromMeta() {
+          var entryMeta = document.querySelector(
+            'meta[name="telegram-mini-app-entry-url"]'
+          );
+          var entryUrl = '';
+
+          if (!entryMeta) {
+            return '';
+          }
+
+          entryUrl = String(entryMeta.getAttribute('content') || '').trim();
+          if (
+            !entryUrl ||
+            entryUrl.indexOf('__TELEGRAM_MINI_APP_ENTRY_URL') === 0
+          ) {
+            return '';
+          }
+
+          return entryUrl;
+        }
+
+        function importWithTimeout(targetUrl, timeoutMs) {
+          return new Promise(function (resolve, reject) {
+            var settled = false;
+            var timeoutHandle = window.setTimeout(function () {
+              if (settled) {
+                return;
+              }
+              settled = true;
+              reject(
+                createImportTimeoutError(
+                  targetUrl,
+                  timeoutMs,
+                  'import(' + String(targetUrl || 'unknown') + ')'
+                )
+              );
+            }, timeoutMs);
+
+            Promise.resolve()
+              .then(function () {
+                return import(/* @vite-ignore */ targetUrl);
+              })
+              .then(function (moduleValue) {
+                if (settled) {
+                  return;
+                }
+                settled = true;
+                window.clearTimeout(timeoutHandle);
+                resolve(moduleValue);
+              })
+              .catch(function (error) {
+                if (settled) {
+                  return;
+                }
+                settled = true;
+                window.clearTimeout(timeoutHandle);
+                reject(error);
+              });
+          });
+        }
+
+        function runImmediateImportProbes(entryUrl, timeoutMs) {
+          return runtime.captureImmediateImportCandidates(entryUrl).then(function (
+            candidates
+          ) {
+            var sequence = Promise.resolve();
+
+            if (!candidates || !candidates.length) {
+              runtime.markOnce(
+                'no probeable immediate imports found',
+                entryUrl || 'unknown'
+              );
+              return sequence;
+            }
+
+            for (var index = 0; index < candidates.length; index += 1) {
+              (function (candidate) {
+                sequence = sequence.then(function () {
+                  runtime.markOnce(
+                    'immediate import probe started',
+                    candidate.url
+                  );
+                  return importWithTimeout(
+                    candidate.url,
+                    timeoutMs || IMMEDIATE_IMPORT_TIMEOUT_MS
+                  )
+                    .then(function () {
+                      runtime.recordImportProbeResult(
+                        candidate.label,
+                        candidate.url,
+                        'resolved',
+                        null
+                      );
+                    })
+                    .catch(function (error) {
+                      runtime.recordImportProbeResult(
+                        candidate.label,
+                        candidate.url,
+                        error &&
+                          String(error.name || '').toLowerCase() ===
+                            'importtimeouterror'
+                          ? 'timed_out'
+                          : 'rejected',
+                        error
+                      );
+                    });
+                });
+              })(candidates[index]);
+            }
+
+            return sequence;
+          });
+        }
+
+        if (!runtime) {
+          return;
+        }
+
+        runtime.markOnce('entry module loader script evaluated');
+
+        var entryUrl = readEntryUrlFromMeta();
+
+        runtime.recordEntryModuleUrl(entryUrl);
+
+        if (!entryUrl) {
+          runtime.failureCategory = 'import graph';
+          runtime.exactFailureModuleUrl = 'telegram-mini-app.html';
+          runtime.fail('entry URL missing', {
+            message:
+              'Unable to discover the buyer entry URL from telegram-mini-app.html.',
+          });
+          return;
+        }
+
+        function startEntryImport() {
+          if (runtime.entryImportAttempted) {
+            return;
+          }
+
+          runtime.captureStylesheetAssetUrls('entry-import-start');
+          runtime.recordEntryImportStarted();
+          runtime.armEntryImportTimeout(ENTRY_IMPORT_TIMEOUT_MS, function () {
+            if (runtime.completed || runtime.hasCheckpoint('main.jsx before React mount')) {
+              return;
+            }
+
+            runtime.captureStylesheetAssetUrls('entry-import-timeout');
+            runImmediateImportProbes(entryUrl, IMMEDIATE_IMPORT_TIMEOUT_MS).then(
+              function () {
+                runtime.ensureFailureClassification();
+                if (!runtime.recordEntryImportTimedOut(ENTRY_IMPORT_TIMEOUT_MS)) {
+                  return;
+                }
+                runtime.fail('bootstrap timeout before React mount', {
+                  message:
+                    runtime.exactFailureModuleUrl &&
+                    runtime.exactFailureModuleUrl !== runtime.entryScriptUrl
+                      ? 'import(entryUrl) timed out while waiting on a downstream module. Immediate import probes isolated the stalled module.'
+                      : 'import(entryUrl) did not settle before the buyer bootstrap timeout elapsed.',
+                });
+              }
+            );
+          });
+
+          Promise.resolve()
+            .then(function () {
+              return import(/* @vite-ignore */ entryUrl);
+            })
+            .then(function () {
+              if (!runtime.recordEntryImportResolved()) {
+                return null;
+              }
+
+              if (!runtime.hasCheckpoint('main.jsx before React mount')) {
+                runtime.markOnce(
+                  'entry import resolved before main checkpoint',
+                  entryUrl
+                );
+                return runImmediateImportProbes(
+                  entryUrl,
+                  IMMEDIATE_IMPORT_TIMEOUT_MS
+                ).then(function () {
+                  runtime.ensureFailureClassification();
+                  if (!runtime.hasCheckpoint('main.jsx before React mount')) {
+                    runtime.fail('entry import resolved without main checkpoint', {
+                      message:
+                        'import(entryUrl) resolved, but main.jsx still never marked its pre-React checkpoint.',
+                    });
+                  }
+                });
+              }
+
+              return runtime.captureImmediateImportCandidates(entryUrl);
+            })
+            .catch(function (error) {
+              if (!runtime.recordEntryImportRejected(error)) {
+                return;
+              }
+
+              return runImmediateImportProbes(
+                entryUrl,
+                IMMEDIATE_IMPORT_TIMEOUT_MS
+              ).then(function () {
+                runtime.ensureFailureClassification();
+                runtime.fail('entry import rejected after probe isolation', error);
+              });
+            });
+        }
+
+        if (document.readyState === 'loading') {
+          runtime.markOnce(
+            'entry import waiting for DOMContentLoaded',
+            entryUrl
+          );
+          document.addEventListener('DOMContentLoaded', startEntryImport, {
+            once: true,
+          });
+        } else {
+          startEntryImport();
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

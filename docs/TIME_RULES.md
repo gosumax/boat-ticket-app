@@ -1,62 +1,31 @@
-# TIME RULES
+# Time Rules
 
-## Time Source
+This file is a narrow reference for time-related invariants.
 
-- Используется только серверное время.
-- Client-time и timezone guessing запрещены.
+## Core Rules
 
----
+- Use server time for runtime decisions.
+- Do not rely on client-side time or timezone guessing for enforcement.
+- Cutoff calculations must use server-side trip date/time data.
 
-## Cutoff Logic
+## Cutoff Rules
 
-### `seller_cutoff_minutes`
-- `NULL` -> нет cutoff.
-- `number` -> закрытие продажи за `N` минут до старта рейса.
+- `seller_cutoff_minutes`
+  - `NULL` means no seller cutoff.
+  - numeric value means seller sales close `N` minutes before trip start.
+- `dispatcher_cutoff_minutes`
+  - must be greater than or equal to `seller_cutoff_minutes` when both are set.
+  - may be `NULL`.
 
-### `dispatcher_cutoff_minutes`
-- Всегда `>= seller_cutoff_minutes`.
-- Может быть `NULL`.
+## Weekly Rule
 
-### Formula
-
-- `trip_datetime = datetime(trip_date + trip_time)`
-- `seller_cutoff_time = trip_datetime - seller_cutoff_minutes`
-- `dispatcher_cutoff_time = trip_datetime - dispatcher_cutoff_minutes`
-
-### Check
-
-- Если `now >= seller_cutoff_time`, роль `SELLER` продавать не может.
-- Если `now >= dispatcher_cutoff_time`, роль `DISPATCHER` продавать не может.
-
----
-
-## Week Rule (ISO)
-
-- Для weekly мотивации используется ISO-формат `YYYY-Www`.
-- Границы недели: понедельник ... воскресенье (включительно).
-- Неделя может выходить за границы календарного года.
-  Пример: `2026-W01` = `2025-12-29` ... `2026-01-04`.
-
----
+- Weekly motivation uses ISO week format `YYYY-Www`.
+- Week boundaries are Monday through Sunday, inclusive.
 
 ## Season Rule
 
-### Current Runtime Rule
+- Current production contract uses `season_id=YYYY`.
+- Current API contract treats the season as the calendar year unless a future contract explicitly changes that behavior.
 
-- По умолчанию сезон для `season_id=YYYY` считается как:
-  `YYYY-01-01` ... `YYYY-12-31` (обе границы включительно).
-- В `GET /api/owner/motivation/season` это отражается в
-  `meta.season_rule = "calendar_year_jan01_dec31"`.
-
-### Owner Settings (Omni) Boundary Model
-
-- Поддерживаемая модель конфигурации границ сезона:
-  `season_start_mmdd` и `season_end_mmdd` в формате `MM-DD`.
-- Год сезона всегда определяется выбранным `season_id`.
-  Пример для `season_id=2026`:
-  `season_start = 2026-<season_start_mmdd>`, `season_end = 2026-<season_end_mmdd>`.
-- Правило включения границ: `start` и `end` включительно.
-- Сезон считается только в пределах одного календарного года.
-  Переход через Новый год не допускается.
-- Если настройки не заданы, используется fallback:
-  `01-01 ... 12-31`.
+For contract details, see `docs/API_CONTRACT.md`.
+For business meaning, see `docs/BUSINESS_RULES.md`.

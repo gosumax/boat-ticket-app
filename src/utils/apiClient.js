@@ -1,10 +1,26 @@
 // src/utils/apiClient.js
 import { addNetworkLog } from './bugReporter';
+import {
+  getLocalStorageSafe,
+  getStorageItemSafe,
+  removeStorageItemSafe,
+  setStorageItemSafe,
+} from './safeWebStorage.js';
 
 const API_BASE = '/api';
 
 function safeJsonParse(text) {
   try { return JSON.parse(text); } catch { return null; }
+}
+
+function unwrapTelegramRouteOperationResult(response) {
+  if (response && typeof response === 'object' && !Array.isArray(response)) {
+    const summary = response.operation_result_summary;
+    if (summary && typeof summary === 'object' && !Array.isArray(summary)) {
+      return summary;
+    }
+  }
+  return response;
 }
 
 class ApiClient {
@@ -14,25 +30,28 @@ class ApiClient {
 
   setToken(token) {
     this.token = token;
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem('token', token);
-    }
+    const storage = getLocalStorageSafe();
+    setStorageItemSafe(storage, 'token', token);
   }
 
   clearToken() {
     this.token = null;
-    if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem('token');
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('jwt');
-    }
+    const storage = getLocalStorageSafe();
+    removeStorageItemSafe(storage, 'token');
+    removeStorageItemSafe(storage, 'authToken');
+    removeStorageItemSafe(storage, 'jwt');
   }
 
   async request(url, options = {}) {
     const method = options.method || 'GET';
     const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
 
-    const token = this.token || (typeof localStorage !== 'undefined' ? (localStorage.getItem('token') || localStorage.getItem('authToken') || localStorage.getItem('jwt')) : null);
+    const storage = getLocalStorageSafe();
+    const token =
+      this.token ||
+      getStorageItemSafe(storage, 'token') ||
+      getStorageItemSafe(storage, 'authToken') ||
+      getStorageItemSafe(storage, 'jwt');
     if (token) headers.Authorization = `Bearer ${token}`;
 
     // If body is an object, auto-JSON it
@@ -462,6 +481,326 @@ class ApiClient {
   // ---------------- OWNER ----------------
   getOwnerDashboard() {
     return this.request('/owner/dashboard');
+  }
+
+  getOwnerSellersList() {
+    return this.request('/owner/sellers/list');
+  }
+
+  // ---------------- TELEGRAM OWNER MANUAL FALLBACK ----------------
+  getOwnerTelegramManualFallbackQueue({ limit, queueState } = {}) {
+    const params = new URLSearchParams();
+    const normalizedLimit = Number(limit);
+    if (Number.isInteger(normalizedLimit) && normalizedLimit > 0) {
+      params.set('limit', String(normalizedLimit));
+    }
+    if (queueState) {
+      params.set('queue_state', String(queueState));
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/telegram/owner/manual-fallback/queue${query}`);
+  }
+
+  getOwnerTelegramManualFallbackRequestStatesActive({ limit } = {}) {
+    const normalizedLimit = Number(limit);
+    const query =
+      Number.isInteger(normalizedLimit) && normalizedLimit > 0
+        ? `?limit=${normalizedLimit}`
+        : '';
+    return this.request(`/telegram/owner/manual-fallback/request-states/active${query}`);
+  }
+
+  getOwnerTelegramManualFallbackRequestState(bookingRequestId) {
+    return this.request(
+      `/telegram/owner/manual-fallback/request-states/${encodeURIComponent(bookingRequestId)}`
+    );
+  }
+
+  recordOwnerTelegramManualFallbackAction({
+    bookingRequestId,
+    actionType,
+    idempotencyKey,
+    actionPayload = {},
+  }) {
+    return this.request(
+      `/telegram/owner/manual-fallback/queue/${encodeURIComponent(bookingRequestId)}/actions`,
+      {
+        method: 'POST',
+        body: {
+          action_type: actionType,
+          idempotency_key: idempotencyKey,
+          action_payload: actionPayload,
+        },
+      }
+    );
+  }
+
+  // ---------------- TELEGRAM LIVE SMOKE PILOT ----------------
+  async getTelegramLiveSmokePilotChecklist({ pilotRunReference } = {}) {
+    const params = new URLSearchParams();
+    if (pilotRunReference) {
+      params.set('pilot_run_reference', String(pilotRunReference));
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const response = await this.request(`/telegram/smoke-pilot/checklist${query}`);
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async captureTelegramLiveSmokePilotResults({
+    pilotRunReference,
+    scenarioResults = [],
+  } = {}) {
+    const response = await this.request('/telegram/smoke-pilot/report', {
+      method: 'POST',
+      body: {
+        pilot_run_reference: pilotRunReference,
+        scenario_results: Array.isArray(scenarioResults) ? scenarioResults : [],
+      },
+    });
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  // ---------------- TELEGRAM SELLER QUEUE ----------------
+  getSellerTelegramWorkQueue({ limit } = {}) {
+    const normalizedLimit = Number(limit);
+    const query = Number.isInteger(normalizedLimit) && normalizedLimit > 0
+      ? `?limit=${normalizedLimit}`
+      : '';
+    return this.request(`/telegram/seller/work-queue${query}`);
+  }
+
+  recordSellerTelegramWorkQueueAction({
+    bookingRequestId,
+    actionType,
+    idempotencyKey,
+    actionPayload = {},
+  }) {
+    return this.request(`/telegram/seller/work-queue/${encodeURIComponent(bookingRequestId)}/actions`, {
+      method: 'POST',
+      body: {
+        action_type: actionType,
+        idempotency_key: idempotencyKey,
+        action_payload: actionPayload,
+      },
+    });
+  }
+
+  // ---------------- TELEGRAM ADMIN CONTENT MANAGEMENT ----------------
+  async getTelegramAdminServiceMessageTemplates({ templateType, enabled } = {}) {
+    const params = new URLSearchParams();
+    if (templateType) {
+      params.set('template_type', String(templateType));
+    }
+    if (enabled === true || enabled === false) {
+      params.set('enabled', enabled ? 'true' : 'false');
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const response = await this.request(`/telegram/admin/service-message-templates${query}`);
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async getTelegramAdminServiceMessageTemplate(templateReference) {
+    const response = await this.request(
+      `/telegram/admin/service-message-templates/${encodeURIComponent(templateReference)}`
+    );
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async updateTelegramAdminServiceMessageTemplate(templateReference, payload) {
+    const response = await this.request(
+      `/telegram/admin/service-message-templates/${encodeURIComponent(templateReference)}`,
+      {
+        method: 'PATCH',
+        body: payload,
+      }
+    );
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async setTelegramAdminServiceMessageTemplateEnabled(
+    templateReference,
+    { enabled, expectedVersion = null } = {}
+  ) {
+    const action = enabled ? 'enable' : 'disable';
+    const body = {};
+    if (expectedVersion !== null && expectedVersion !== undefined) {
+      body.expected_version = expectedVersion;
+    }
+    const response = await this.request(
+      `/telegram/admin/service-message-templates/${encodeURIComponent(templateReference)}/${action}`,
+      {
+        method: 'POST',
+        body,
+      }
+    );
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async getTelegramAdminManagedContent({ contentGroups } = {}) {
+    const params = new URLSearchParams();
+    const groups = Array.isArray(contentGroups)
+      ? contentGroups.filter(Boolean)
+      : contentGroups
+        ? [contentGroups]
+        : [];
+    for (const group of groups) {
+      params.append('content_group', String(group));
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const response = await this.request(`/telegram/admin/managed-content${query}`);
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async getTelegramAdminManagedContentItem(contentReference) {
+    const response = await this.request(
+      `/telegram/admin/managed-content/${encodeURIComponent(contentReference)}`
+    );
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async updateTelegramAdminManagedContentItem(contentReference, payload) {
+    const response = await this.request(
+      `/telegram/admin/managed-content/${encodeURIComponent(contentReference)}`,
+      {
+        method: 'PATCH',
+        body: payload,
+      }
+    );
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async setTelegramAdminManagedContentEnabled(
+    contentReference,
+    { enabled, expectedVersion = null } = {}
+  ) {
+    const action = enabled ? 'enable' : 'disable';
+    const body = {};
+    if (expectedVersion !== null && expectedVersion !== undefined) {
+      body.expected_version = expectedVersion;
+    }
+    const response = await this.request(
+      `/telegram/admin/managed-content/${encodeURIComponent(contentReference)}/${action}`,
+      {
+        method: 'POST',
+        body,
+      }
+    );
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async getTelegramAdminFaq({ contentGrouping } = {}) {
+    const params = new URLSearchParams();
+    const groups = Array.isArray(contentGrouping)
+      ? contentGrouping.filter(Boolean)
+      : contentGrouping
+        ? [contentGrouping]
+        : [];
+    for (const group of groups) {
+      params.append('content_grouping', String(group));
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const response = await this.request(`/telegram/admin/faq${query}`);
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async getTelegramAdminUsefulContentFeed({ contentGrouping } = {}) {
+    const params = new URLSearchParams();
+    const groups = Array.isArray(contentGrouping)
+      ? contentGrouping.filter(Boolean)
+      : contentGrouping
+        ? [contentGrouping]
+        : [];
+    for (const group of groups) {
+      params.append('content_grouping', String(group));
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const response = await this.request(`/telegram/admin/useful-content${query}`);
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  // ---------------- TELEGRAM ADMIN SOURCE/QR MANAGEMENT ----------------
+  async getTelegramAdminSourceRegistryItems({ sourceFamily, enabled } = {}) {
+    const params = new URLSearchParams();
+    if (sourceFamily) {
+      params.set('source_family', String(sourceFamily));
+    }
+    if (enabled === true || enabled === false) {
+      params.set('enabled', enabled ? 'true' : 'false');
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const response = await this.request(`/telegram/admin/source-registry${query}`);
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async getTelegramAdminSourceRegistryItem(sourceReference) {
+    const response = await this.request(
+      `/telegram/admin/source-registry/${encodeURIComponent(sourceReference)}`
+    );
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async createTelegramAdminSourceRegistryItem(payload) {
+    const response = await this.request('/telegram/admin/source-registry', {
+      method: 'POST',
+      body: payload,
+    });
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async updateTelegramAdminSourceRegistryItem(sourceReference, payload) {
+    const response = await this.request(
+      `/telegram/admin/source-registry/${encodeURIComponent(sourceReference)}`,
+      {
+        method: 'PATCH',
+        body: payload,
+      }
+    );
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async setTelegramAdminSourceRegistryItemEnabled(sourceReference, { enabled } = {}) {
+    const action = enabled ? 'enable' : 'disable';
+    const response = await this.request(
+      `/telegram/admin/source-registry/${encodeURIComponent(sourceReference)}/${action}`,
+      {
+        method: 'POST',
+      }
+    );
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async getTelegramAdminSourceQrExportPayload(sourceReference) {
+    const response = await this.request(
+      `/telegram/admin/source-registry/${encodeURIComponent(sourceReference)}/qr-export-payload`
+    );
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async getTelegramAdminSourceQrExportPayloads() {
+    const response = await this.request('/telegram/admin/source-registry/qr-export-payloads');
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async getTelegramAdminSourceAnalyticsSummaries({ enabled } = {}) {
+    const params = new URLSearchParams();
+    if (enabled === true || enabled === false) {
+      params.set('enabled', enabled ? 'true' : 'false');
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const response = await this.request(`/telegram/admin/source-analytics${query}`);
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async getTelegramAdminSourceAnalyticsReport(sourceReference) {
+    const response = await this.request(
+      `/telegram/admin/source-analytics/${encodeURIComponent(sourceReference)}`
+    );
+    return unwrapTelegramRouteOperationResult(response);
+  }
+
+  async getTelegramAdminSourceAnalyticsFunnelSummary() {
+    const response = await this.request('/telegram/admin/source-analytics/funnel-summary');
+    return unwrapTelegramRouteOperationResult(response);
   }
 }
 

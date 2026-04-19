@@ -11,6 +11,8 @@ CREATE TABLE users (
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL CHECK(role IN ('seller', 'dispatcher', 'admin', 'owner')),
     is_active INTEGER NOT NULL DEFAULT 1,
+    public_display_name TEXT NULL,
+    public_phone_e164 TEXT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
 

@@ -75,6 +75,11 @@ graph TD
 - **Password Security**: bcrypt hashing
 - **Data**: Mocked in-memory data for business logic, SQLite for user management
 
+## Project Documentation
+
+- Core project docs: `docs/`
+- Telegram development structure and future module boundaries: `docs/telegram/README.md`
+
 ## Components Structure
 
 ```

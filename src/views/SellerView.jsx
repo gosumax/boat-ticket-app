@@ -14,6 +14,7 @@ import {
   SellerTopbar,
   sellerContentClass,
 } from '../components/seller/sellerUi';
+import SellerTelegramGlobalAlertBanner from '../components/seller/telegram/SellerTelegramGlobalAlertBanner';
 import apiClient from '../utils/apiClient';
 
 function todayISO() {
@@ -397,6 +398,8 @@ const SellerView = () => {
           </button>
         </div>
 
+        <SellerTelegramGlobalAlertBanner />
+
         <div className="p-4 max-w-md mx-auto">
           <SalesHistory onBack={() => setShowSalesHistory(false)} />
         </div>
@@ -417,6 +420,8 @@ const SellerView = () => {
             Выйти
           </button>
         </div>
+
+        <SellerTelegramGlobalAlertBanner />
 
         <div className="bg-white border-b border-gray-200">
           <div className="max-w-md mx-auto px-4 py-3">
@@ -441,6 +446,8 @@ const SellerView = () => {
         onBack={currentStep <= 1 ? () => navigate('/seller/home') : handleBack}
         onLogout={handleLogout}
       />
+
+      <SellerTelegramGlobalAlertBanner />
 
       <div className={`${sellerContentClass} space-y-3`}>
         <SellerStepper steps={wizardSteps} currentStep={currentStep} onStepClick={handleStepperStepClick} />

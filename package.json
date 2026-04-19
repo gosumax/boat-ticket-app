@@ -23,6 +23,9 @@
     "e2e:ui": "playwright test --project=chrome --ui",
     "e2e:headed": "playwright test --project=chrome --headed",
     "diag": "node diag-simple.mjs",
+    "telegram:ngrok:helper": "node scripts/telegram-ngrok-helper.mjs",
+    "telegram:webhook:helper": "node scripts/telegram-webhook-helper.mjs",
+    "telegram:launch:helper": "node scripts/telegram-launch-helper.mjs",
     "ai:ticket": "node scripts/ai-ticket.mjs"
   },
   "dependencies": {
@@ -35,6 +38,7 @@
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.575.0",
     "node-cron": "^4.2.1",
+    "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.11.0",

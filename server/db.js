@@ -6,6 +6,7 @@ import fs from "fs";
 import { ensureOwnerRoleAndUser } from "./ownerSetup.mjs";
 import { ensureCanonicalShiftClosureColumns } from "./shift-closure-schema.mjs";
 import { ensureSellerCalibrationStateSchema } from "./motivation/seller-calibration-state.mjs";
+import { ensureTelegramSchema } from "./telegram/persistence/telegram-schema.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,6 +51,8 @@ try {
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL CHECK(role IN ('seller', 'dispatcher', 'admin', 'owner')),
       is_active INTEGER NOT NULL DEFAULT 1,
+      public_display_name TEXT NULL,
+      public_phone_e164 TEXT NULL,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -184,6 +187,12 @@ try {
   // Check if users table needs migration (add zone column for seller motivation)
   const usersColumns = db.prepare("PRAGMA table_info(users)").all();
   const hasZoneColumn = usersColumns.some(column => column.name === 'zone');
+  const hasPublicDisplayNameColumn = usersColumns.some(
+    (column) => column.name === 'public_display_name'
+  );
+  const hasPublicPhoneColumn = usersColumns.some(
+    (column) => column.name === 'public_phone_e164'
+  );
 
   if (!hasZoneColumn) {
     try {
@@ -192,6 +201,24 @@ try {
     } catch (error) {
       // Column might already exist, ignore error
       console.log('zone column may already exist in users table');
+    }
+  }
+
+  if (!hasPublicDisplayNameColumn) {
+    try {
+      db.exec('ALTER TABLE users ADD COLUMN public_display_name TEXT NULL');
+      console.log('Added public_display_name column to users table');
+    } catch (error) {
+      console.log('public_display_name column may already exist in users table');
+    }
+  }
+
+  if (!hasPublicPhoneColumn) {
+    try {
+      db.exec('ALTER TABLE users ADD COLUMN public_phone_e164 TEXT NULL');
+      console.log('Added public_phone_e164 column to users table');
+    } catch (error) {
+      console.log('public_phone_e164 column may already exist in users table');
     }
   }
 
@@ -1503,6 +1530,13 @@ try {
   }
 } catch (e) {
   console.log('[PRESALES_SELLER_ID] Warning:', e?.message || e);
+}
+
+try {
+  ensureTelegramSchema(db);
+  console.log('[TELEGRAM_SCHEMA] Telegram schema ensured');
+} catch (e) {
+  console.log('[TELEGRAM_SCHEMA] ensure skipped:', e?.message || e);
 }
 
 export default db;

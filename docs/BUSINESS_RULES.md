@@ -1,97 +1,57 @@
-# BUSINESS RULES — Boat Ticket App
+# Business Rules
+
+This file is the business source of truth for protected runtime behavior.
+
+## Protected Runtime Domains
+
+- seller flow
+- dispatcher flow
+- owner flow
+- admin flow where it affects production behavior
+- financial logic and reporting
+
+## Core Truths
+
+- `money_ledger` is the financial source of truth.
+- Existing seller flow must not be broken by unrelated work.
+- Existing dispatcher and owner flows must not be changed silently.
+- Manual and generated slots must follow the same business rules unless a documented rule explicitly says otherwise.
 
 ## Roles
 
-### Seller (Продавец)
-- Продавец может продавать билеты только до `seller_cutoff_minutes`.
-- Если `seller_cutoff_minutes = NULL`, ограничений по cutoff нет.
-- Продавец не может продавать после cutoff.
-- Продавец не может переопределять правила.
+### Seller
 
-### Dispatcher (Диспетчер)
-- Диспетчер может продавать билеты до `dispatcher_cutoff_minutes`.
-- `dispatcher_cutoff_minutes` всегда `>= seller_cutoff_minutes`.
-- Диспетчер может продавать, даже если продавец уже не может.
+- Seller sales are limited by `seller_cutoff_minutes`.
+- If `seller_cutoff_minutes` is `NULL`, there is no seller cutoff.
+- Seller cannot override cutoff rules.
+
+### Dispatcher
+
+- Dispatcher sales are limited by `dispatcher_cutoff_minutes`.
+- `dispatcher_cutoff_minutes` must not be stricter than seller access when both are configured.
+- Dispatcher may retain access after seller access closes when business rules allow it.
 
 ### Admin
-- Управляет шаблонами, лодками, настройками.
 
----
+- Admin configuration work must not silently change protected production behavior.
 
-## Trips / Slots
+## Sales And Slots
 
-### Типы рейсов
-- `manual` slot — создан вручную.
-- `generated` slot — создан из шаблона.
+- Sales are created through `presale` flows.
+- Sales are bound to `slotUid`.
+- Slot origin (`manual` or `generated`) does not change the business rules by itself.
 
-Тип рейса не влияет на правила закрытия: manual и generated должны вести себя одинаково.
+## Time And Period Semantics
 
----
+- Weekly motivation uses ISO week semantics.
+- Season reporting follows the current production season contract.
+- Server time is authoritative for runtime enforcement.
 
-## Закрытие рейса
+## Funds And Invariants
 
-Рейс считается закрытым только если текущее серверное время `>= cutoff_time`.
+- Weekly and season fund reporting must remain consistent with `money_ledger`.
+- Delete flows with prepayment must preserve the current `REFUND | FUND` business meaning.
+- Financial totals, withholds, and invariants must not drift silently.
 
-Запрещено закрывать рейс:
-- по типу (`generated`/`manual`);
-- по отсутствию шаблона;
-- по предположениям.
-
----
-
-## Продажа билетов
-
-- Продажа оформляется как `presale`.
-- Продажа всегда привязана к `slotUid`.
-- Ошибки должны быть явными и структурированными.
-
----
-
-## Неделя и Сезон
-
-### Неделя (weekly motivation)
-- Используется ISO-неделя `YYYY-Www`.
-- Границы недели: понедельник–воскресенье (включительно).
-- Неделя может пересекать календарный год.
-  Пример: `2026-W01` = `2025-12-29` ... `2026-01-04`.
-
-### Сезон (season motivation, текущее правило)
-- По умолчанию и в текущей реализации API сезон для `season_id=YYYY` считается как:
-  `YYYY-01-01 ... YYYY-12-31` (обе границы включительно).
-- В ответе `GET /api/owner/motivation/season` это отражается как
-  `meta.season_rule = "calendar_year_jan01_dec31"`.
-
-### Сезон (Owner Settings Omni: модель поддерживаемой конфигурации)
-- Поддерживаемая модель границ сезона: `season_start_mmdd` и `season_end_mmdd` в формате `MM-DD`.
-- Год сезона задается выбранным `season_id` (например, `2026`):
-  `season_start = 2026-<season_start_mmdd>`, `season_end = 2026-<season_end_mmdd>`.
-- Границы `start` и `end` включительные.
-- Сезон рассчитывается только внутри одного календарного года (без перехода через Новый год).
-- Если настройки не заданы, используется дефолт `01-01 ... 12-31`.
-
----
-
-## Фонды и Delete с Предоплатой
-
-### Источник истины фондов
-- `money_ledger` — единственный источник истины для фондов и финансовых итогов.
-
-### Состав сезонного фонда
-- Сезонный фонд (`season_pool_total_ledger`) считается как сумма типов:
-  `WITHHOLD_SEASON + SEASON_PREPAY_DELETE`.
-- `SEASON_PREPAY_DELETE` — это явный перевод предоплаты в сезонный фонд при удалении с решением `decision=FUND`.
-
-### Dispatcher delete с предоплатой
-- Поддерживаемые решения: `decision=REFUND | FUND`.
-- Полное удаление заказа (`presale` удалён полностью / удален последний активный билет):
-  при `decision=FUND` предоплата переводится в сезонный фонд (`SEASON_PREPAY_DELETE`).
-- Частичное удаление (в заказе остаются активные пассажиры):
-  предоплата остается в заказе, перевод в сезонный фонд не создается.
-
----
-
-## Инварианты Мотивации/Фондов
-
-- Инвариант 1 (Weekly): `money_ledger(WITHHOLD_WEEKLY)` ↔ `API.weekly_pool_total_ledger` ↔ `UI.weekly_pool_total_current`.
-- Инвариант 2 (Season): `money_ledger(WITHHOLD_SEASON + SEASON_PREPAY_DELETE)` ↔ `API.season_pool_total_ledger` ↔ `UI.season_pool_total_current`.
-- Инвариант 3 (Консистентность расчета): `*_pool_total_ledger` должен сходиться с `*_pool_total_daily_sum`; отклонения отражаются в `*_pool_is_consistent=false` и считаются регрессией.
+For exact endpoint compatibility, see `docs/API_CONTRACT.md`.
+For shift-close specifics, see `docs/dispatcher-shift-close.md`.

@@ -14,6 +14,72 @@ const requireAdminRole = (req, res, next) => {
   next();
 };
 
+function normalizeString(value) {
+  const normalized = String(value ?? '').trim();
+  return normalized || null;
+}
+
+function normalizeOptionalSellerPhone(value) {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return null;
+  }
+  if (!/^\+[1-9]\d{7,14}$/.test(normalized)) {
+    throw new Error('Seller phone must be a valid E.164 phone number');
+  }
+  return normalized;
+}
+
+function pickSellerPublicDisplayName(payload = {}) {
+  return (
+    payload.public_display_name ??
+    payload.publicDisplayName ??
+    payload.seller_display_name ??
+    payload.sellerDisplayName ??
+    null
+  );
+}
+
+function pickSellerPublicPhone(payload = {}) {
+  return (
+    payload.public_phone_e164 ??
+    payload.publicPhoneE164 ??
+    payload.seller_phone_e164 ??
+    payload.sellerPhoneE164 ??
+    null
+  );
+}
+
+function serializeAdminUser(user) {
+  if (!user) {
+    return null;
+  }
+
+  return {
+    ...user,
+    public_display_name: normalizeString(user.public_display_name),
+    public_phone_e164: normalizeString(user.public_phone_e164),
+  };
+}
+
+function readAdminUserById(id) {
+  return serializeAdminUser(
+    db.prepare(
+      `
+        SELECT
+          id,
+          username,
+          role,
+          is_active,
+          public_display_name,
+          public_phone_e164
+        FROM users
+        WHERE id = ?
+      `
+    ).get(id)
+  );
+}
+
 // GET /api/admin/boats - Get all boats
 router.get('/boats', authenticateToken, requireAdminRole, (req, res) => {
   try {
@@ -272,13 +338,34 @@ router.get('/users', authenticateToken, requireAdminRole, (req, res) => {
     let params = [];
     
     if (roleFilter) {
-      query = 'SELECT id, username, role, is_active FROM users WHERE role = ? ORDER BY username';
+      query = `
+        SELECT
+          id,
+          username,
+          role,
+          is_active,
+          public_display_name,
+          public_phone_e164
+        FROM users
+        WHERE role = ?
+        ORDER BY username
+      `;
       params = [roleFilter];
     } else {
-      query = 'SELECT id, username, role, is_active FROM users ORDER BY role, username';
+      query = `
+        SELECT
+          id,
+          username,
+          role,
+          is_active,
+          public_display_name,
+          public_phone_e164
+        FROM users
+        ORDER BY role, username
+      `;
     }
     
-    const users = db.prepare(query).all(...params);
+    const users = db.prepare(query).all(...params).map(serializeAdminUser);
     
     res.json(users);
   } catch (error) {
@@ -312,17 +399,32 @@ router.post('/users', authenticateToken, requireAdminRole, async (req, res) => {
     const bcrypt = await import('bcrypt');
     const saltRounds = 10;
     const hashedPassword = await bcrypt.default.hash(password, saltRounds);
+    const publicDisplayName =
+      role === 'seller' ? normalizeString(pickSellerPublicDisplayName(req.body)) : null;
+    const publicPhoneE164 =
+      role === 'seller' ? normalizeOptionalSellerPhone(pickSellerPublicPhone(req.body)) : null;
     
-    const result = db.prepare('INSERT INTO users (username, password_hash, role, is_active) VALUES (?, ?, ?, 1)').run(
-      username, 
-      hashedPassword, 
-      role
-    );
+    const result = db.prepare(
+      `
+        INSERT INTO users (
+          username,
+          password_hash,
+          role,
+          is_active,
+          public_display_name,
+          public_phone_e164
+        )
+        VALUES (?, ?, ?, 1, ?, ?)
+      `
+    ).run(username, hashedPassword, role, publicDisplayName, publicPhoneE164);
     
-    const newUser = db.prepare('SELECT id, username, role, is_active FROM users WHERE id = ?').get(result.lastInsertRowid);
+    const newUser = readAdminUserById(result.lastInsertRowid);
     
     res.status(201).json(newUser);
   } catch (error) {
+    if (error?.message === 'Seller phone must be a valid E.164 phone number') {
+      return res.status(400).json({ error: error.message });
+    }
     console.error('Error creating user:', error);
     res.status(500).json({ error: 'Failed to create user' });
   }
@@ -332,22 +434,66 @@ router.post('/users', authenticateToken, requireAdminRole, async (req, res) => {
 router.patch('/users/:id', authenticateToken, requireAdminRole, (req, res) => {
   try {
     const { id } = req.params;
-    const { is_active } = req.body;
-    
-    if (typeof is_active !== 'number' || (is_active !== 0 && is_active !== 1)) {
-      return res.status(400).json({ error: 'is_active must be 0 or 1' });
+    const targetUser = db.prepare(
+      `
+        SELECT id, role
+        FROM users
+        WHERE id = ?
+      `
+    ).get(id);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
     }
-    
-    const result = db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(is_active, id);
+
+    const updates = [];
+    const params = [];
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'is_active')) {
+      const { is_active } = req.body;
+      if (typeof is_active !== 'number' || (is_active !== 0 && is_active !== 1)) {
+        return res.status(400).json({ error: 'is_active must be 0 or 1' });
+      }
+      updates.push('is_active = ?');
+      params.push(is_active);
+    }
+
+    const shouldUpdateSellerPublicProfile =
+      Object.prototype.hasOwnProperty.call(req.body, 'public_display_name') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'publicDisplayName') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'seller_display_name') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'sellerDisplayName') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'public_phone_e164') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'publicPhoneE164') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'seller_phone_e164') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'sellerPhoneE164');
+
+    if (shouldUpdateSellerPublicProfile && targetUser.role === 'seller') {
+      updates.push('public_display_name = ?');
+      updates.push('public_phone_e164 = ?');
+      params.push(normalizeString(pickSellerPublicDisplayName(req.body)));
+      params.push(normalizeOptionalSellerPhone(pickSellerPublicPhone(req.body)));
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'Nothing to update' });
+    }
+
+    const result = db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(
+      ...params,
+      id
+    );
     
     if (result.changes === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
     
-    const updatedUser = db.prepare('SELECT id, username, role, is_active FROM users WHERE id = ?').get(id);
+    const updatedUser = readAdminUserById(id);
     
     res.json(updatedUser);
   } catch (error) {
+    if (error?.message === 'Seller phone must be a valid E.164 phone number') {
+      return res.status(400).json({ error: error.message });
+    }
     console.error('Error updating user:', error);
     res.status(500).json({ error: 'Failed to update user' });
   }

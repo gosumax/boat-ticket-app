@@ -7,6 +7,231 @@
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+    <script>
+      (function () {
+        var MINI_APP_PATH = '/telegram/mini-app';
+        var checkpointMap = {};
+        var shell = null;
+        var details = null;
+        var message = null;
+        var stage = null;
+        var list = null;
+
+        function getPathname() {
+          try {
+            return String((window.location && window.location.pathname) || '');
+          } catch (_error) {
+            return '';
+          }
+        }
+
+        function isMiniAppPath() {
+          return getPathname().indexOf(MINI_APP_PATH) === 0;
+        }
+
+        function appendShell() {
+          if (!document.body || shell || !isMiniAppPath()) {
+            return;
+          }
+
+          shell = document.createElement('div');
+          shell.id = 'telegram-mini-app-bootstrap-fallback';
+          shell.style.cssText = [
+            'display:none',
+            'position:fixed',
+            'inset:0',
+            'z-index:2147483647',
+            'overflow:auto',
+            'padding:24px',
+            'background:#f8fafc',
+            'color:#0f172a',
+            'font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+          ].join(';');
+
+          var card = document.createElement('div');
+          card.style.cssText = [
+            'max-width:720px',
+            'margin:0 auto',
+            'border:1px solid #fecaca',
+            'border-radius:16px',
+            'background:#ffffff',
+            'padding:20px',
+            'box-shadow:0 18px 40px rgba(15,23,42,0.08)',
+          ].join(';');
+
+          var eyebrow = document.createElement('p');
+          eyebrow.textContent = 'Telegram Mini App bootstrap';
+          eyebrow.style.cssText = 'margin:0;font-size:12px;font-weight:700;letter-spacing:0.08em;';
+
+          var heading = document.createElement('h1');
+          heading.textContent = 'Buyer UI failed before first render';
+          heading.style.cssText = 'margin:12px 0 8px;font-size:28px;';
+
+          message = document.createElement('p');
+          message.style.cssText = 'margin:0;line-height:1.5;';
+
+          stage = document.createElement('pre');
+          stage.style.cssText = [
+            'margin:16px 0 0',
+            'padding:12px',
+            'border-radius:12px',
+            'background:#fff7ed',
+            'color:#9a3412',
+            'white-space:pre-wrap',
+            'overflow-x:auto',
+          ].join(';');
+
+          details = document.createElement('pre');
+          details.style.cssText = [
+            'margin:12px 0 0',
+            'padding:12px',
+            'border-radius:12px',
+            'background:#fff1f2',
+            'color:#9f1239',
+            'white-space:pre-wrap',
+            'overflow-x:auto',
+          ].join(';');
+
+          list = document.createElement('ol');
+          list.style.cssText = 'margin:16px 0 0;padding-left:20px;line-height:1.5;';
+
+          card.appendChild(eyebrow);
+          card.appendChild(heading);
+          card.appendChild(message);
+          card.appendChild(stage);
+          card.appendChild(details);
+          card.appendChild(list);
+          shell.appendChild(card);
+          document.body.appendChild(shell);
+        }
+
+        function renderCheckpoints(runtime) {
+          if (!list) {
+            return;
+          }
+          list.innerHTML = '';
+          for (var index = 0; index < runtime.checkpoints.length; index += 1) {
+            var item = runtime.checkpoints[index];
+            var line = document.createElement('li');
+            line.textContent = item.stage + (item.detail ? ' - ' + item.detail : '');
+            list.appendChild(line);
+          }
+        }
+
+        function showShell(runtime, headline, errorText) {
+          appendShell();
+          if (!shell) {
+            return;
+          }
+          shell.style.display = 'block';
+          message.textContent = headline;
+          stage.textContent = 'Last checkpoint: ' + (runtime.lastStage || 'none');
+          details.textContent = errorText || 'No exception details were captured.';
+          renderCheckpoints(runtime);
+        }
+
+        function hideShell() {
+          if (!shell) {
+            return;
+          }
+          shell.style.display = 'none';
+        }
+
+        var runtime = {
+          checkpoints: [],
+          lastStage: null,
+          completed: false,
+          mark: function (name, detailValue) {
+            if (!isMiniAppPath()) {
+              return;
+            }
+            this.lastStage = name;
+            this.checkpoints.push({
+              stage: String(name || 'unknown'),
+              detail: detailValue ? String(detailValue) : null,
+            });
+            renderCheckpoints(this);
+          },
+          markOnce: function (name, detailValue) {
+            if (checkpointMap[name]) {
+              return;
+            }
+            checkpointMap[name] = true;
+            this.mark(name, detailValue);
+          },
+          fail: function (name, errorValue) {
+            if (!isMiniAppPath()) {
+              return;
+            }
+            this.mark(name, errorValue && errorValue.message ? errorValue.message : null);
+            showShell(
+              this,
+              'The buyer bootstrap did not complete. The emergency fallback is visible instead of a blank screen.',
+              errorValue && errorValue.stack
+                ? errorValue.stack
+                : errorValue && errorValue.message
+                  ? errorValue.message
+                  : String(errorValue || 'Unknown startup failure')
+            );
+          },
+          complete: function () {
+            this.completed = true;
+            hideShell();
+          },
+        };
+
+        window.__TELEGRAM_MINI_APP_BOOTSTRAP__ = runtime;
+
+        if (!isMiniAppPath()) {
+          return;
+        }
+
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', appendShell, { once: true });
+        } else {
+          appendShell();
+        }
+
+        runtime.markOnce('index.html bootstrap initialized');
+
+        window.onerror = function (_message, _source, _line, _column, errorValue) {
+          runtime.fail('window.onerror', errorValue || { message: String(_message || 'Unknown error') });
+          return false;
+        };
+
+        window.addEventListener(
+          'error',
+          function (event) {
+            runtime.fail('window.addEventListener(error)', event.error || { message: event.message || 'Unknown error' });
+          },
+          true
+        );
+
+        window.addEventListener(
+          'unhandledrejection',
+          function (event) {
+            var reason = event.reason;
+            runtime.fail(
+              'unhandledrejection',
+              reason && typeof reason === 'object' ? reason : { message: String(reason || 'Unknown rejection') }
+            );
+          },
+          true
+        );
+
+        window.setTimeout(function () {
+          if (!runtime.completed && !checkpointMap['main.jsx before React mount']) {
+            runtime.fail('bootstrap timeout before React mount', {
+              message: 'main.jsx never executed. This usually means the first JavaScript bundle failed to parse or load.',
+            });
+          }
+        }, 4000);
+      })();
+    </script>
+    <script
+      type="module"
+      src="/src/desktop-main.jsx"
+      onerror="window.__TELEGRAM_MINI_APP_BOOTSTRAP__ && window.__TELEGRAM_MINI_APP_BOOTSTRAP__.fail('main module script error', { message: 'The main buyer bundle failed to load or evaluate.' })"
+    ></script>
   </body>
 </html>

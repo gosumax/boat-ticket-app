@@ -1,0 +1,1615 @@
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+  background: #040814;
+}
+
+body {
+  color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.tg-mini-app {
+  --tg-bg-top: #040913;
+  --tg-bg-mid: #081222;
+  --tg-bg-bottom: #091525;
+  --tg-surface: rgba(8, 17, 30, 0.88);
+  --tg-surface-strong: rgba(8, 17, 30, 0.96);
+  --tg-surface-soft: rgba(14, 25, 44, 0.82);
+  --tg-surface-elevated: rgba(16, 31, 54, 0.96);
+  --tg-border: rgba(148, 163, 184, 0.16);
+  --tg-border-strong: rgba(148, 163, 184, 0.28);
+  --tg-text: #f8fbff;
+  --tg-muted: #8fa4be;
+  --tg-muted-strong: #d5dfeb;
+  --tg-accent: #60a5fa;
+  --tg-accent-strong: #2563eb;
+  --tg-success: #34d399;
+  --tg-warning: #fbbf24;
+  --tg-danger: #fb7185;
+  min-height: 100vh;
+  padding: 18px 14px 34px;
+  color: var(--tg-text);
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.26), transparent 34%),
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.16), transparent 22%),
+    radial-gradient(circle at 50% 120%, rgba(29, 78, 216, 0.18), transparent 28%),
+    linear-gradient(180deg, var(--tg-bg-top) 0%, var(--tg-bg-mid) 42%, var(--tg-bg-bottom) 100%);
+  font-family: 'Avenir Next', 'SF Pro Display', 'Segoe UI', sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tg-mini-app__shell {
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.tg-mini-app__hero {
+  margin-bottom: 18px;
+  padding: 20px;
+  border-radius: 32px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.24), transparent 26%),
+    radial-gradient(circle at bottom left, rgba(14, 165, 233, 0.18), transparent 20%),
+    linear-gradient(145deg, rgba(4, 9, 19, 0.98) 0%, rgba(8, 18, 34, 0.98) 38%, rgba(11, 31, 58, 0.95) 100%);
+  box-shadow:
+    0 30px 70px -34px rgba(2, 6, 23, 0.92),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.tg-mini-app__hero-head,
+.tg-mini-app__section-header,
+.tg-mini-app__list-card-header,
+.tg-mini-app__ticket-headline,
+.tg-mini-app__list-card-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.tg-mini-app__hero-copy,
+.tg-mini-app__section-copy {
+  min-width: 0;
+}
+
+.tg-mini-app__hero-pills,
+.tg-mini-app__section-aside {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.tg-mini-app__hero-ribbon {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.tg-mini-app__hero-ribbon-item {
+  padding: 14px 15px;
+  border-radius: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.tg-mini-app__hero-ribbon-label,
+.tg-mini-app__eyebrow,
+.tg-mini-app__section-eyebrow,
+.tg-mini-app__field > span,
+.tg-mini-app__info-label,
+.tg-mini-app__metric-label,
+.tg-mini-app__meta-label {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--tg-muted);
+}
+
+.tg-mini-app__hero-ribbon-value {
+  display: block;
+  margin-top: 7px;
+  color: var(--tg-text);
+  font-size: 0.98rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.tg-mini-app__title,
+.tg-mini-app__section-title,
+.tg-mini-app__list-title {
+  margin: 0;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.tg-mini-app__title {
+  font-size: clamp(2rem, 5.2vw, 2.8rem);
+  line-height: 0.98;
+}
+
+.tg-mini-app__section-title {
+  font-size: 1.2rem;
+  line-height: 1.18;
+}
+
+.tg-mini-app__section-title--result {
+  margin-top: 10px;
+}
+
+.tg-mini-app__list-title {
+  font-size: 1.08rem;
+  line-height: 1.24;
+}
+
+.tg-mini-app__subtitle,
+.tg-mini-app__section-description,
+.tg-mini-app__list-subtitle,
+.tg-mini-app__hint,
+.tg-mini-app__empty-description {
+  margin: 0;
+  color: var(--tg-muted);
+}
+
+.tg-mini-app__subtitle {
+  margin-top: 10px;
+  max-width: 46rem;
+  font-size: 1rem;
+  line-height: 1.58;
+  color: var(--tg-muted-strong);
+}
+
+.tg-mini-app__section-description,
+.tg-mini-app__body,
+.tg-mini-app__note {
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.tg-mini-app__hero-grid,
+.tg-mini-app__action-grid,
+.tg-mini-app__diagnostic-grid,
+.tg-mini-app__metric-grid,
+.tg-mini-app__info-grid,
+.tg-mini-app__controls,
+.tg-mini-app__form,
+.tg-mini-app__list,
+.tg-mini-app__detail-list,
+.tg-mini-app__meta-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.tg-mini-app__hero-grid {
+  margin-top: 18px;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+}
+
+.tg-mini-app__controls {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tg-mini-app__controls--hero {
+  gap: 12px;
+}
+
+.tg-mini-app__action-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 14px;
+}
+
+.tg-mini-app__field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tg-mini-app__field--action {
+  justify-content: flex-end;
+}
+
+.tg-mini-app__field-card {
+  padding: 14px;
+  border-radius: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.tg-mini-app__field-card--action {
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.18), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025));
+}
+
+.tg-mini-app__field-note {
+  color: var(--tg-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.tg-mini-app__field-note--warning {
+  color: #fecdd3;
+}
+
+.tg-mini-app__field-status,
+.tg-mini-app__button-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.tg-mini-app__panel {
+  margin-bottom: 18px;
+  padding: 18px;
+  border-radius: 28px;
+  border: 1px solid var(--tg-border);
+  background: var(--tg-surface);
+  box-shadow:
+    0 26px 56px -36px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(20px);
+}
+
+.tg-mini-app__panel--hero-subtle {
+  margin-bottom: 0;
+  background: linear-gradient(180deg, rgba(12, 24, 42, 0.84), rgba(8, 17, 30, 0.86));
+}
+
+.tg-mini-app__panel--control-dock,
+.tg-mini-app__panel--overview,
+.tg-mini-app__panel--catalog,
+.tg-mini-app__panel--tickets,
+.tg-mini-app__panel--booking,
+.tg-mini-app__panel--feature-card,
+.tg-mini-app__panel--ticket-view,
+.tg-mini-app__panel--result-card {
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
+.tg-mini-app__panel--feature-card,
+.tg-mini-app__panel--result-card {
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 26%),
+    linear-gradient(180deg, rgba(10, 20, 37, 0.95), rgba(8, 16, 29, 0.98));
+}
+
+.tg-mini-app__panel--date-filter {
+  padding: 14px 16px;
+}
+
+.tg-mini-app__date-filter {
+  display: grid;
+  gap: 10px;
+}
+
+.tg-mini-app__date-filter-field {
+  display: grid;
+  gap: 8px;
+}
+
+.tg-mini-app__date-filter-label {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--tg-muted);
+}
+
+.tg-mini-app__date-filter-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tg-mini-app__panel--diagnostic {
+  background: rgba(8, 14, 24, 0.82);
+  border-style: dashed;
+}
+
+.tg-mini-app__section-header {
+  margin-bottom: 16px;
+}
+
+.tg-mini-app__section-header--centered {
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+}
+
+.tg-mini-app__section-header--centered .tg-mini-app__section-aside {
+  justify-content: center;
+}
+
+.tg-mini-app__input,
+.tg-mini-app__button,
+.tg-mini-app__nav-button,
+.tg-mini-app__date-filter-chip,
+.tg-mini-app__copy-action {
+  font: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.tg-mini-app__input {
+  width: 100%;
+  min-height: 50px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 18px;
+  padding: 13px 15px;
+  color: var(--tg-text);
+  background: rgba(3, 10, 19, 0.72);
+  box-sizing: border-box;
+  outline: none;
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
+}
+
+.tg-mini-app__input::placeholder {
+  color: rgba(156, 175, 197, 0.65);
+}
+
+.tg-mini-app__input:focus {
+  border-color: rgba(96, 165, 250, 0.58);
+  background: rgba(7, 16, 28, 0.88);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.16);
+}
+
+.tg-mini-app__input[type='date']::-webkit-calendar-picker-indicator {
+  filter: invert(0.9) saturate(0) brightness(1.2);
+  opacity: 0.9;
+}
+
+.tg-mini-app__input[type='date']::-webkit-date-and-time-value {
+  text-align: left;
+}
+
+.tg-mini-app__input--compact {
+  min-height: 46px;
+  padding: 11px 14px;
+}
+
+.tg-mini-app__button,
+.tg-mini-app__nav-button,
+.tg-mini-app__date-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    background 0.18s ease,
+    border-color 0.18s ease,
+    opacity 0.18s ease,
+    filter 0.18s ease;
+}
+
+.tg-mini-app__button {
+  width: 100%;
+  min-height: 50px;
+  padding: 12px 16px;
+  border-radius: 18px;
+  font-weight: 700;
+}
+
+.tg-mini-app__date-filter-chip {
+  min-height: 38px;
+  padding: 9px 14px;
+  border-radius: 999px;
+  color: var(--tg-muted-strong);
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.tg-mini-app__button--primary {
+  color: #ffffff;
+  background: linear-gradient(135deg, #0f172a 0%, #17325d 52%, #2563eb 100%);
+  box-shadow: 0 24px 40px -26px rgba(37, 99, 235, 0.88);
+}
+
+.tg-mini-app__button--secondary {
+  color: var(--tg-text);
+  border-color: var(--tg-border-strong);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+}
+
+.tg-mini-app__button--ghost {
+  color: var(--tg-muted-strong);
+  border-color: rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.tg-mini-app__button:hover,
+.tg-mini-app__nav-button:hover,
+.tg-mini-app__date-filter-chip:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.03);
+}
+
+.tg-mini-app__button:disabled,
+.tg-mini-app__nav-button:disabled,
+.tg-mini-app__date-filter-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+  box-shadow: none;
+  filter: none;
+}
+
+.tg-mini-app__button:focus-visible,
+.tg-mini-app__nav-button:focus-visible,
+.tg-mini-app__date-filter-chip:focus-visible,
+.tg-mini-app__copy-action:focus-visible,
+.tg-mini-app__link:focus-visible {
+  outline: 2px solid rgba(125, 211, 252, 0.9);
+  outline-offset: 2px;
+}
+
+.tg-mini-app__nav {
+  position: static;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 18px;
+  padding: 8px;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(5, 11, 20, 0.7);
+  box-shadow: 0 16px 32px -28px rgba(2, 6, 23, 0.75);
+  backdrop-filter: blur(12px);
+}
+
+.tg-mini-app__nav-button {
+  min-height: 42px;
+  padding: 8px 10px;
+  border-radius: 16px;
+  color: var(--tg-muted-strong);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.tg-mini-app__nav-button.is-active {
+  color: #ffffff;
+  background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 100%);
+  box-shadow: 0 20px 34px -24px rgba(37, 99, 235, 0.86);
+}
+
+.tg-mini-app__date-filter-chip.is-active {
+  color: #ffffff;
+  border-color: rgba(96, 165, 250, 0.42);
+  background: linear-gradient(135deg, #10203b 0%, #1d4ed8 100%);
+  box-shadow: 0 16px 32px -24px rgba(37, 99, 235, 0.82);
+}
+
+.tg-mini-app__nav-label {
+  font-size: 0.84rem;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.tg-mini-app__list-state-copy {
+  margin: 10px 0 0;
+  color: var(--tg-muted-strong);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.tg-mini-app__metric-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tg-mini-app__metric-grid--overview {
+  gap: 12px;
+}
+
+.tg-mini-app__metric-grid--secondary {
+  margin-top: 6px;
+}
+
+.tg-mini-app__metric-card,
+.tg-mini-app__info-card,
+.tg-mini-app__action-card,
+.tg-mini-app__diagnostic-card,
+.tg-mini-app__detail-list li,
+.tg-mini-app__empty-state,
+.tg-mini-app__list-card,
+.tg-mini-app__meta-item,
+.tg-mini-app__subpanel {
+  border: 1px solid var(--tg-border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.025));
+}
+
+.tg-mini-app__metric-card,
+.tg-mini-app__info-card,
+.tg-mini-app__meta-item {
+  padding: 15px;
+  border-radius: 20px;
+}
+
+.tg-mini-app__action-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.025));
+}
+
+.tg-mini-app__action-card--type-selection {
+  min-height: 234px;
+  padding: 20px 18px 18px;
+  gap: 18px;
+}
+
+.tg-mini-app__action-card--type-selection.is-speed {
+  border-color: rgba(59, 130, 246, 0.32);
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.18), transparent 30%),
+    linear-gradient(180deg, rgba(15, 33, 58, 0.96), rgba(8, 18, 31, 0.98));
+}
+
+.tg-mini-app__action-card--type-selection.is-cruise {
+  border-color: rgba(45, 212, 191, 0.3);
+  background:
+    radial-gradient(circle at top right, rgba(45, 212, 191, 0.14), transparent 30%),
+    linear-gradient(180deg, rgba(9, 36, 42, 0.96), rgba(8, 20, 27, 0.98));
+}
+
+.tg-mini-app__action-card--type-selection.is-banana {
+  border-color: rgba(251, 191, 36, 0.34);
+  background:
+    radial-gradient(circle at top right, rgba(251, 191, 36, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(40, 26, 8, 0.96), rgba(24, 17, 8, 0.98));
+}
+
+.tg-mini-app__action-card.is-success {
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+.tg-mini-app__action-card.is-accent {
+  border-color: rgba(96, 165, 250, 0.3);
+}
+
+.tg-mini-app__action-card-title {
+  margin: 0;
+  color: var(--tg-text);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.24;
+}
+
+.tg-mini-app__action-card-description {
+  margin: 8px 0 0;
+  color: var(--tg-muted);
+  font-size: 0.9rem;
+  line-height: 1.52;
+}
+
+.tg-mini-app__type-selection-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.tg-mini-app__type-selection-kicker {
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.tg-mini-app__type-selection-meta {
+  margin: 14px 0 0;
+  color: var(--tg-text);
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.tg-mini-app__subpanel {
+  padding: 16px;
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02));
+}
+
+.tg-mini-app__subpanel--hero {
+  background:
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.16), transparent 24%),
+    linear-gradient(180deg, rgba(16, 31, 54, 0.94), rgba(9, 20, 35, 0.96));
+}
+
+.tg-mini-app__subpanel--hero .tg-mini-app__ticket-headline {
+  margin-bottom: 14px;
+}
+
+.tg-mini-app__subpanel--hero .tg-mini-app__meta-grid {
+  margin-top: 2px;
+}
+
+.tg-mini-app__subpanel--contact {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tg-mini-app__subpanel--buyer-flow {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  border-color: rgba(96, 165, 250, 0.24);
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(14, 28, 49, 0.94), rgba(9, 20, 35, 0.96));
+}
+
+.tg-mini-app__ticket-view-stack {
+  display: grid;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.tg-mini-app__ticket-view-stack .tg-mini-app__subpanel {
+  margin: 0;
+}
+
+.tg-mini-app__ticket-view-stack .tg-mini-app__subpanel--buyer-flow {
+  margin-top: 0;
+}
+
+.tg-mini-app__buyer-flow-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.tg-mini-app__buyer-flow-head--with-timer {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 12px;
+}
+
+.tg-mini-app__buyer-flow-timer {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.tg-mini-app__buyer-flow-timer-card {
+  width: min(100%, 260px);
+}
+
+.tg-mini-app__buyer-flow-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+  counter-reset: buyer-flow-step;
+}
+
+.tg-mini-app__buyer-flow-list li {
+  position: relative;
+  padding-left: 34px;
+  color: var(--tg-muted-strong);
+  font-size: 0.94rem;
+  line-height: 1.55;
+}
+
+.tg-mini-app__buyer-flow-list li::before {
+  counter-increment: buyer-flow-step;
+  content: counter(buyer-flow-step);
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  color: #e0f2fe;
+  border: 1px solid rgba(96, 165, 250, 0.32);
+  background: rgba(37, 99, 235, 0.22);
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.tg-mini-app__trip-price-card {
+  position: relative;
+  margin-top: 18px;
+  padding: 18px;
+  padding-right: 58px;
+  border-radius: 24px;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.14), transparent 30%),
+    linear-gradient(180deg, rgba(12, 26, 46, 0.94), rgba(8, 18, 31, 0.96));
+}
+
+.tg-mini-app__trip-price-card--centered {
+  max-width: none;
+  margin-left: -8px;
+  margin-right: -8px;
+  text-align: center;
+}
+
+.tg-mini-app__trip-price-card--centered .tg-mini-app__trip-price-list {
+  max-width: none;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.tg-mini-app__trip-price-head,
+.tg-mini-app__trip-price-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.tg-mini-app__trip-price-caption {
+  margin-top: 6px;
+  color: var(--tg-muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.tg-mini-app__trip-price-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.tg-mini-app__trip-price-row {
+  padding: 14px 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.tg-mini-app__trip-price-row-label {
+  color: var(--tg-muted-strong);
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.tg-mini-app__trip-price-row-value {
+  color: var(--tg-text);
+  font-size: 0.96rem;
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.tg-mini-app__price-hint {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  min-width: 0;
+}
+
+.tg-mini-app__price-hint summary {
+  list-style: none;
+}
+
+.tg-mini-app__price-hint summary::-webkit-details-marker {
+  display: none;
+}
+
+.tg-mini-app__price-hint-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: var(--tg-muted-strong);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.92rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tg-mini-app__price-hint-trigger:focus-visible {
+  outline: 2px solid rgba(125, 211, 252, 0.9);
+  outline-offset: 2px;
+}
+
+.tg-mini-app__price-hint-body {
+  margin-top: 12px;
+  max-width: 320px;
+  color: var(--tg-muted-strong);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.tg-mini-app__subpanel-title {
+  margin: 0 0 12px;
+  color: var(--tg-text);
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+
+.tg-mini-app__trip-card-status-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.tg-mini-app__subpanel--trip-card,
+.tg-mini-app__subpanel--booking-summary {
+  display: grid;
+  gap: 16px;
+}
+
+.tg-mini-app__trip-card-heading,
+.tg-mini-app__booking-trip-head {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  text-align: center;
+}
+
+.tg-mini-app__trip-card-title,
+.tg-mini-app__booking-trip-title {
+  margin: 0;
+  color: var(--tg-text);
+  font-size: 1.26rem;
+  font-weight: 700;
+  line-height: 1.14;
+  letter-spacing: -0.03em;
+}
+
+.tg-mini-app__trip-card-facts,
+.tg-mini-app__catalog-card-facts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+.tg-mini-app__trip-card-fact,
+.tg-mini-app__catalog-card-fact {
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  color: var(--tg-muted-strong);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.tg-mini-app__metric-card.is-success,
+.tg-mini-app__info-card.is-success,
+.tg-mini-app__meta-item.is-success {
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+.tg-mini-app__metric-card.is-warning,
+.tg-mini-app__info-card.is-warning,
+.tg-mini-app__meta-item.is-warning {
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
+.tg-mini-app__metric-card.is-accent,
+.tg-mini-app__info-card.is-accent,
+.tg-mini-app__meta-item.is-accent {
+  border-color: rgba(96, 165, 250, 0.34);
+}
+
+.tg-mini-app__metric-card--featured,
+.tg-mini-app__info-card--spotlight {
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.2), transparent 30%),
+    linear-gradient(180deg, rgba(17, 36, 63, 0.96), rgba(9, 19, 33, 0.98));
+  border-color: rgba(96, 165, 250, 0.3);
+}
+
+.tg-mini-app__metric-value,
+.tg-mini-app__info-value,
+.tg-mini-app__meta-value {
+  margin-top: 8px;
+  color: var(--tg-text);
+  font-size: 1.08rem;
+  font-weight: 700;
+  line-height: 1.22;
+}
+
+.tg-mini-app__metric-value {
+  font-size: 1.32rem;
+}
+
+.tg-mini-app__metric-caption {
+  margin-top: 6px;
+  color: var(--tg-muted);
+  font-size: 0.83rem;
+  line-height: 1.4;
+}
+
+.tg-mini-app__meta-extra {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.tg-mini-app__meta-item--centered .tg-mini-app__meta-extra {
+  justify-items: center;
+}
+
+.tg-mini-app__copy-action {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  width: auto;
+  color: var(--tg-accent);
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 700;
+  line-height: 1.35;
+  box-shadow: none;
+}
+
+.tg-mini-app__copy-action:hover {
+  transform: none;
+  filter: none;
+  color: #93c5fd;
+  text-decoration: underline;
+}
+
+.tg-mini-app__copy-feedback {
+  color: var(--tg-success);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.tg-mini-app__meta-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tg-mini-app__meta-grid--buyer-flow {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.tg-mini-app__info-grid--post-request {
+  margin-top: 8px;
+  gap: 16px;
+}
+
+.tg-mini-app__info-card--centered,
+.tg-mini-app__meta-item--centered {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+}
+
+.tg-mini-app__pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.tg-mini-app__pill--neutral {
+  color: var(--tg-muted-strong);
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tg-mini-app__pill--accent {
+  color: #e0f2fe;
+  border-color: rgba(96, 165, 250, 0.32);
+  background: rgba(37, 99, 235, 0.18);
+}
+
+.tg-mini-app__pill--success {
+  color: #dcfce7;
+  border-color: rgba(52, 211, 153, 0.32);
+  background: rgba(16, 185, 129, 0.14);
+}
+
+.tg-mini-app__pill--warning {
+  color: #fef3c7;
+  border-color: rgba(251, 191, 36, 0.34);
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.tg-mini-app__pill--danger {
+  color: #ffe4e6;
+  border-color: rgba(251, 113, 133, 0.34);
+  background: rgba(244, 63, 94, 0.14);
+}
+
+.tg-mini-app__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tg-mini-app__list-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 26px;
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.1), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02));
+}
+
+.tg-mini-app__list-card--catalog {
+  border-color: rgba(96, 165, 250, 0.18);
+}
+
+.tg-mini-app__list-card--catalog .tg-mini-app__list-card-topline {
+  justify-content: flex-end;
+}
+
+.tg-mini-app__list-card--catalog .tg-mini-app__list-card-header {
+  justify-content: center;
+}
+
+.tg-mini-app__list-card--ticket {
+  border-color: rgba(148, 163, 184, 0.18);
+}
+
+.tg-mini-app__list-card--compact {
+  padding: 14px;
+}
+
+.tg-mini-app__list-card-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.tg-mini-app__list-card-main--buyer-flow-clean {
+  width: 100%;
+  align-self: stretch;
+  align-items: center;
+}
+
+.tg-mini-app__list-card-status {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.tg-mini-app__meta-grid--buyer-flow-clean {
+  width: 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.tg-mini-app__meta-grid--buyer-flow-clean .tg-mini-app__meta-item {
+  width: 100%;
+}
+
+.tg-mini-app__list-card-actions {
+  width: min(220px, 100%);
+  flex: 0 0 auto;
+}
+
+.tg-mini-app__list-card-price {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.tg-mini-app__list-card-price-label {
+  color: var(--tg-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tg-mini-app__list-card-price-value,
+.tg-mini-app__list-card-reference {
+  margin-top: 0;
+  color: var(--tg-text);
+  font-size: 0.96rem;
+  font-weight: 700;
+}
+
+.tg-mini-app__list-card-reference {
+  margin-top: 0;
+  color: var(--tg-muted-strong);
+}
+
+.tg-mini-app__list-title--catalog {
+  text-align: center;
+  font-size: 1.18rem;
+  line-height: 1.16;
+}
+
+.tg-mini-app__booking-live-summary,
+.tg-mini-app__ticket-counter-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.tg-mini-app__booking-live-summary {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.tg-mini-app__booking-mix-value,
+.tg-mini-app__booking-inline-value,
+.tg-mini-app__booking-total-price {
+  margin-top: 8px;
+  color: var(--tg-text);
+  font-weight: 700;
+}
+
+.tg-mini-app__booking-mix-value {
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.tg-mini-app__booking-inline-value {
+  font-size: 1.08rem;
+  line-height: 1.2;
+}
+
+.tg-mini-app__booking-total-price {
+  font-size: 1.3rem;
+  line-height: 1.1;
+}
+
+.tg-mini-app__booking-total-card {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.tg-mini-app__booking-total-card .tg-mini-app__booking-total-price {
+  margin-top: 0;
+}
+
+.tg-mini-app__ticket-counter-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tg-mini-app__ticket-counter-card {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border-radius: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.1), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+}
+
+.tg-mini-app__ticket-counter-card.is-disabled {
+  opacity: 0.68;
+}
+
+.tg-mini-app__ticket-counter-head {
+  display: grid;
+  gap: 6px;
+}
+
+.tg-mini-app__ticket-counter-label {
+  color: var(--tg-text);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.24;
+}
+
+.tg-mini-app__ticket-counter-price {
+  color: var(--tg-muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.tg-mini-app__ticket-counter-controls {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 10px;
+  align-items: center;
+}
+
+.tg-mini-app__ticket-counter-button {
+  min-height: 46px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  color: var(--tg-text);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 1.4rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.tg-mini-app__ticket-counter-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tg-mini-app__ticket-counter-value {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  color: var(--tg-text);
+  background: rgba(3, 10, 19, 0.52);
+  font-size: 1.08rem;
+  font-weight: 700;
+}
+
+.tg-mini-app__detail-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+}
+
+.tg-mini-app__detail-list--result {
+  margin-top: 2px;
+}
+
+.tg-mini-app__detail-list li {
+  padding: 13px 15px;
+  border-radius: 18px;
+  color: var(--tg-muted-strong);
+}
+
+.tg-mini-app__body {
+  margin: 10px 0 0;
+  color: var(--tg-muted-strong);
+}
+
+.tg-mini-app__note {
+  margin: 14px 0 0;
+  color: var(--tg-muted-strong);
+}
+
+.tg-mini-app__subpanel--buyer-flow .tg-mini-app__note {
+  margin-top: 0;
+}
+
+.tg-mini-app__ticket-reference {
+  margin: 12px 0 0;
+  color: var(--tg-text);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.tg-mini-app__boarding-qr-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.tg-mini-app__subpanel--boarding-qr {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+  border-color: rgba(96, 165, 250, 0.26);
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.18), transparent 26%),
+    linear-gradient(180deg, rgba(13, 28, 49, 0.96), rgba(8, 18, 31, 0.98));
+}
+
+.tg-mini-app__boarding-qr-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 260px;
+  padding: 16px;
+  border-radius: 24px;
+  background: #ffffff;
+}
+
+.tg-mini-app__boarding-qr-image {
+  display: block;
+  width: min(100%, 280px);
+  height: auto;
+  border-radius: 18px;
+}
+
+.tg-mini-app__empty-state {
+  padding: 17px;
+  border-radius: 24px;
+}
+
+.tg-mini-app__empty-title {
+  color: var(--tg-text);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.tg-mini-app__empty-description {
+  margin-top: 6px;
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.tg-mini-app__hint {
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.tg-mini-app__error {
+  margin: 0;
+  color: #fecdd3;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.tg-mini-app__link {
+  color: #d7ecff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.tg-mini-app__link--phone {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.tg-mini-app__result {
+  border-width: 2px;
+}
+
+.tg-mini-app__result--success {
+  border-color: rgba(52, 211, 153, 0.34);
+}
+
+.tg-mini-app__result--warning {
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
+.tg-mini-app__result--neutral {
+  border-color: var(--tg-border-strong);
+}
+
+.tg-mini-app__panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.tg-mini-app__panel-actions--stacked {
+  margin-top: 0;
+}
+
+.tg-mini-app__panel-actions--ticket-view {
+  margin-top: 20px;
+}
+
+.tg-mini-app__panel-actions.tg-mini-app__panel-actions--stacked .tg-mini-app__button {
+  width: 100%;
+  min-width: 0;
+}
+
+.tg-mini-app__panel-actions--catalog-tools {
+  margin-bottom: 16px;
+}
+
+.tg-mini-app__panel-actions .tg-mini-app__button {
+  width: auto;
+  min-width: 170px;
+}
+
+.tg-mini-app__booking-submit-helper {
+  margin-top: -4px;
+}
+
+.tg-mini-app__form {
+  max-width: 700px;
+}
+
+.tg-mini-app__diagnostic-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.tg-mini-app__supporting-meta {
+  margin-top: 14px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.tg-mini-app__diagnostic-card {
+  padding: 14px;
+  border-radius: 20px;
+}
+
+.tg-mini-app__diagnostic-card h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  color: var(--tg-text);
+}
+
+.tg-mini-app__diagnostic-lines {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+  font-size: 0.83rem;
+  color: var(--tg-muted);
+}
+
+.tg-mini-app__diagnostic-lines li {
+  word-break: break-word;
+}
+
+@media (min-width: 721px) {
+  .tg-mini-app__type-selection-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .tg-mini-app__hero-grid,
+  .tg-mini-app__action-grid,
+  .tg-mini-app__diagnostic-grid,
+  .tg-mini-app__metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tg-mini-app__hero-ribbon {
+    grid-template-columns: 1fr;
+  }
+
+  .tg-mini-app__nav {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .tg-mini-app {
+    padding: 14px 12px 26px;
+  }
+
+  .tg-mini-app__hero,
+  .tg-mini-app__panel {
+    padding: 16px;
+    border-radius: 26px;
+  }
+
+  .tg-mini-app__hero-head,
+  .tg-mini-app__section-header,
+  .tg-mini-app__list-card,
+  .tg-mini-app__buyer-flow-head,
+  .tg-mini-app__ticket-headline,
+  .tg-mini-app__list-card-topline,
+  .tg-mini-app__boarding-qr-head {
+    flex-direction: column;
+  }
+
+  .tg-mini-app__hero-pills,
+  .tg-mini-app__section-aside {
+    justify-content: flex-start;
+  }
+
+  .tg-mini-app__controls,
+  .tg-mini-app__action-grid,
+  .tg-mini-app__metric-grid,
+  .tg-mini-app__meta-grid,
+  .tg-mini-app__info-grid,
+  .tg-mini-app__booking-live-summary,
+  .tg-mini-app__ticket-counter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tg-mini-app__list-card-actions,
+  .tg-mini-app__panel-actions .tg-mini-app__button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .tg-mini-app__list-card-main--buyer-flow-clean .tg-mini-app__list-card-status,
+  .tg-mini-app__list-card-main--buyer-flow-clean .tg-mini-app__meta-grid--buyer-flow-clean {
+    width: min(100%, 340px);
+    margin-inline: auto;
+  }
+
+  .tg-mini-app__trip-price-row {
+    flex-direction: column;
+  }
+
+  .tg-mini-app__trip-price-row-value {
+    text-align: left;
+  }
+
+  .tg-mini-app__trip-card-facts,
+  .tg-mini-app__catalog-card-facts {
+    gap: 8px;
+  }
+}
+
+@media (max-width: 520px) {
+  .tg-mini-app__title {
+    font-size: 1.82rem;
+  }
+
+  .tg-mini-app__subtitle {
+    font-size: 0.94rem;
+  }
+
+  .tg-mini-app__field-card,
+  .tg-mini-app__subpanel,
+  .tg-mini-app__list-card,
+  .tg-mini-app__metric-card,
+  .tg-mini-app__info-card,
+  .tg-mini-app__meta-item {
+    padding: 14px;
+    border-radius: 20px;
+  }
+
+  .tg-mini-app__nav {
+    gap: 6px;
+    padding: 6px;
+  }
+
+  .tg-mini-app__nav-button {
+    min-height: 38px;
+    padding: 7px 8px;
+    border-radius: 14px;
+  }
+
+  .tg-mini-app__nav-label {
+    font-size: 0.78rem;
+  }
+
+  .tg-mini-app__trip-card-title,
+  .tg-mini-app__booking-trip-title {
+    font-size: 1.14rem;
+  }
+
+  .tg-mini-app__trip-card-fact,
+  .tg-mini-app__catalog-card-fact {
+    width: 100%;
+    text-align: center;
+  }
+}
