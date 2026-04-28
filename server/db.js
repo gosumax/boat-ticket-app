@@ -1562,6 +1562,8 @@ try {
         type TEXT NOT NULL,
         method TEXT NULL,
         amount INTEGER NOT NULL,
+        cash_amount INTEGER NULL,
+        card_amount INTEGER NULL,
         status TEXT NOT NULL DEFAULT 'POSTED',
         seller_id INTEGER NULL,
         event_time TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -1584,6 +1586,45 @@ try {
   }
 } catch (e) {
   console.log('[MONEY_LEDGER] Warning:', e?.message || e);
+}
+
+// ONE-TIME MONEY_LEDGER CASH/CARD SPLIT COLUMNS ADDITION - RUN ONLY ONCE
+// Additive-only: allows immutable per-ledger-row cash/card split for MIXED payments.
+try {
+  const moneyLedgerSplitColsCheck = db.prepare("SELECT COUNT(*) as count FROM settings WHERE key = 'money_ledger_split_columns_v1'").get();
+  if (moneyLedgerSplitColsCheck.count === 0) {
+    console.log('[MONEY_LEDGER_SPLIT_COLS] Running one-time money_ledger split columns addition...');
+
+    try {
+      const cols = db.prepare("PRAGMA table_info(money_ledger)").all().map((r) => r.name);
+      if (!cols.includes('cash_amount')) {
+        db.exec("ALTER TABLE money_ledger ADD COLUMN cash_amount INTEGER NULL");
+        console.log('[MONEY_LEDGER_SPLIT_COLS] Added cash_amount column');
+      } else {
+        console.log('[MONEY_LEDGER_SPLIT_COLS] cash_amount column already exists');
+      }
+
+      if (!cols.includes('card_amount')) {
+        db.exec("ALTER TABLE money_ledger ADD COLUMN card_amount INTEGER NULL");
+        console.log('[MONEY_LEDGER_SPLIT_COLS] Added card_amount column');
+      } else {
+        console.log('[MONEY_LEDGER_SPLIT_COLS] card_amount column already exists');
+      }
+    } catch (error) {
+      console.log('[MONEY_LEDGER_SPLIT_COLS] Column add failed:', error?.message || error);
+    }
+
+    try {
+      db.prepare("INSERT INTO settings (key, value) VALUES ('money_ledger_split_columns_v1', 'true')").run();
+      console.log('[MONEY_LEDGER_SPLIT_COLS] Column addition completed and marked as done');
+    } catch (markerError) {
+      console.log('[MONEY_LEDGER_SPLIT_COLS] Marker write skipped:', markerError?.message || markerError);
+    }
+  } else {
+    console.log('[MONEY_LEDGER_SPLIT_COLS] money_ledger split columns addition already ran, skipping...');
+  }
+} catch (e) {
+  console.log('[MONEY_LEDGER_SPLIT_COLS] Warning:', e?.message || e);
 }
 
 // ONE-TIME MONEY_LEDGER TRIP_DAY BACKFILL - RUN ONLY ONCE
@@ -1907,6 +1948,9 @@ try {
   try { db.exec("CREATE INDEX IF NOT EXISTS idx_sales_tx_status ON sales_transactions(status)"); } catch {}
   try { db.exec("CREATE INDEX IF NOT EXISTS idx_sales_tx_ticket_id ON sales_transactions(ticket_id)"); } catch {}
   try { db.exec("CREATE INDEX IF NOT EXISTS idx_sales_tx_day_status ON sales_transactions(business_day, status)"); } catch {}
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_stc_status_date_presale ON sales_transactions_canonical(status, DATE(business_day), presale_id)"); } catch {}
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_money_ledger_status_kind_date_type_seller ON money_ledger(status, kind, DATE(business_day), type, seller_id)"); } catch {}
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_money_ledger_fund_type_status_date ON money_ledger(kind, type, status, DATE(business_day))"); } catch {}
 
   // tickets indexes (only if columns exist)
   try {
@@ -1920,6 +1964,38 @@ try {
     if (tCols.includes('status')) {
       db.exec("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status)");
     }
+    if (tCols.includes('presale_id') && tCols.includes('ticket_code')) {
+      db.exec("CREATE INDEX IF NOT EXISTS idx_tickets_presale_ticket_code ON tickets(presale_id, ticket_code)");
+    }
+    if (tCols.includes('boat_slot_id') && tCols.includes('status')) {
+      db.exec("CREATE INDEX IF NOT EXISTS idx_tickets_boat_slot_status ON tickets(boat_slot_id, status)");
+    }
+  } catch {}
+
+  // presales indexes for dispatcher slot views and seller-scoped history
+  try {
+    const pCols = db.prepare("PRAGMA table_info(presales)").all().map(r => r.name);
+    if (pCols.includes('slot_uid') && pCols.includes('created_at')) {
+      db.exec("CREATE INDEX IF NOT EXISTS idx_presales_slot_uid_created_at ON presales(slot_uid, created_at DESC)");
+    }
+    if (pCols.includes('seller_id') && pCols.includes('created_at')) {
+      db.exec("CREATE INDEX IF NOT EXISTS idx_presales_seller_created_at ON presales(seller_id, created_at DESC)");
+    }
+    if (pCols.includes('created_at')) {
+      db.exec("CREATE INDEX IF NOT EXISTS idx_presales_created_at ON presales(created_at DESC)");
+    }
+  } catch {}
+
+  // Telegram Mini App list projections frequently read one guest ordered by recency.
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_tg_booking_requests_guest_created_id
+      ON telegram_booking_requests(guest_profile_id, created_at DESC, booking_request_id DESC)
+    `);
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_tg_booking_events_request_id
+      ON telegram_booking_request_events(booking_request_id, booking_request_event_id)
+    `);
   } catch {}
 } catch (e) {
   console.log('[INDEXES] setup failed:', e?.message || e);

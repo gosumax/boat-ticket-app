@@ -46,6 +46,205 @@ function countRefundedBySql(slotUid) {
   return row.count;
 }
 
+function seedActiveTelegramHoldForSlot({
+  slotUid,
+  requestedSeats,
+  sellerUserId,
+  telegramUserId,
+  holdExpiresAtIso,
+}) {
+  const nowIso = new Date().toISOString();
+  const parsedSlotId = Number(String(slotUid || '').split(':')[1] || 0);
+  const slotRow = db
+    .prepare(
+      `
+        SELECT trip_date, time
+        FROM generated_slots
+        WHERE id = ?
+      `
+    )
+    .get(parsedSlotId);
+  const requestedTripDate = slotRow?.trip_date || getTodayLocal(db);
+  const requestedTimeSlot = slotRow?.time || '10:00';
+  const qrSuffix = `${telegramUserId}-${Date.now()}`;
+
+  const guestProfileResult = db
+    .prepare(
+      `
+        INSERT INTO telegram_guest_profiles
+          (
+            telegram_user_id,
+            display_name,
+            username,
+            language_code,
+            phone_e164,
+            consent_status,
+            profile_status
+          )
+        VALUES (?, ?, ?, 'ru', ?, 'GRANTED', 'ACTIVE')
+      `
+    )
+    .run(
+      telegramUserId,
+      `Guest ${telegramUserId}`,
+      `guest_${telegramUserId}`,
+      `+7999${String(Math.floor(Math.random() * 9000000) + 1000000)}`
+    );
+  const guestProfileId = Number(guestProfileResult.lastInsertRowid);
+
+  const trafficSourceResult = db
+    .prepare(
+      `
+        INSERT INTO telegram_traffic_sources
+          (source_code, source_type, source_name, default_seller_id, is_active)
+        VALUES (?, 'qr', ?, ?, 1)
+      `
+    )
+    .run(
+      `src-${qrSuffix}`,
+      `Source ${qrSuffix}`,
+      sellerUserId
+    );
+  const trafficSourceId = Number(trafficSourceResult.lastInsertRowid);
+
+  const qrCodeResult = db
+    .prepare(
+      `
+        INSERT INTO telegram_source_qr_codes
+          (qr_token, traffic_source_id, seller_id, entry_context, is_active)
+        VALUES (?, ?, ?, '{}', 1)
+      `
+    )
+    .run(
+      `qr-${qrSuffix}`,
+      trafficSourceId,
+      sellerUserId
+    );
+  const sourceQrId = Number(qrCodeResult.lastInsertRowid);
+
+  const attributionSessionResult = db
+    .prepare(
+      `
+        INSERT INTO telegram_seller_attribution_sessions
+          (
+            guest_profile_id,
+            traffic_source_id,
+            source_qr_code_id,
+            seller_id,
+            starts_at,
+            expires_at,
+            attribution_status,
+            binding_reason
+          )
+        VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', 'source_qr_entry')
+      `
+    )
+    .run(
+      guestProfileId,
+      trafficSourceId,
+      sourceQrId,
+      sellerUserId,
+      nowIso,
+      new Date(Date.now() + 30 * 60 * 1000).toISOString()
+    );
+  const sellerAttributionSessionId = Number(attributionSessionResult.lastInsertRowid);
+
+  const bookingRequestResult = db
+    .prepare(
+      `
+        INSERT INTO telegram_booking_requests
+          (
+            guest_profile_id,
+            seller_attribution_session_id,
+            requested_trip_date,
+            requested_time_slot,
+            requested_seats,
+            requested_ticket_mix,
+            contact_phone_e164,
+            request_status,
+            created_at,
+            last_status_at
+          )
+        VALUES (?, ?, ?, ?, ?, '{}', '+79990001122', 'HOLD_ACTIVE', ?, ?)
+      `
+    )
+    .run(
+      guestProfileId,
+      sellerAttributionSessionId,
+      requestedTripDate,
+      requestedTimeSlot,
+      requestedSeats,
+      nowIso,
+      nowIso
+    );
+  const bookingRequestId = Number(bookingRequestResult.lastInsertRowid);
+
+  const holdResult = db
+    .prepare(
+      `
+        INSERT INTO telegram_booking_holds
+          (
+            booking_request_id,
+            hold_scope,
+            hold_expires_at,
+            hold_status,
+            requested_amount,
+            currency,
+            started_at
+          )
+        VALUES (?, 'booking_request', ?, 'ACTIVE', 0, 'RUB', ?)
+      `
+    )
+    .run(
+      bookingRequestId,
+      holdExpiresAtIso,
+      nowIso
+    );
+  const bookingHoldId = Number(holdResult.lastInsertRowid);
+
+  db.prepare(
+    `
+      INSERT INTO telegram_booking_request_events
+        (
+          booking_request_id,
+          booking_hold_id,
+          seller_attribution_session_id,
+          event_type,
+          event_at,
+          actor_type,
+          actor_id,
+          event_payload
+        )
+      VALUES (?, ?, ?, 'REQUEST_CREATED', ?, 'telegram_guest', ?, ?)
+    `
+  ).run(
+    bookingRequestId,
+    bookingHoldId,
+    sellerAttributionSessionId,
+    nowIso,
+    telegramUserId,
+    JSON.stringify({
+      creation_result: {
+        requested_trip_slot_reference: {
+          slot_uid: slotUid,
+          requested_trip_date: requestedTripDate,
+          requested_time_slot: requestedTimeSlot,
+        },
+      },
+      requested_trip_slot_reference: {
+        slot_uid: slotUid,
+        requested_trip_date: requestedTripDate,
+        requested_time_slot: requestedTimeSlot,
+      },
+    })
+  );
+
+  return {
+    bookingRequestId,
+    bookingHoldId,
+  };
+}
+
 beforeAll(async () => {
   // STEP 1: Reset test DB
   resetTestDb();
@@ -305,5 +504,80 @@ describe('SELLER vs DISPATCHER SEAT SYNC', () => {
     
     console.log('[PASS] REFUNDED tickets correctly excluded from seat count');
     console.log('[PASS] Endpoints match SQL: dispatcher=', dispatcherOccupied, 'seller=', sellerOccupied, 'sql=', occupiedSql);
+  });
+
+  it('applies active Telegram hold to seller+dispatcher availability and restores seats after hold expiry', async () => {
+    const slotUid = 'generated:195';
+    const holdSeats = 2;
+    const holdExpiryIso = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const seededHold = seedActiveTelegramHoldForSlot({
+      slotUid,
+      requestedSeats: holdSeats,
+      sellerUserId: sellerId,
+      telegramUserId: `tg-hold-${Date.now()}`,
+      holdExpiresAtIso: holdExpiryIso,
+    });
+
+    const sellerWithHoldRes = await request(app)
+      .get('/api/selling/boats/speed/slots')
+      .set('Authorization', `Bearer ${sellerToken}`);
+    expect(sellerWithHoldRes.status).toBe(200);
+
+    const dispatcherWithHoldRes = await request(app)
+      .get('/api/selling/dispatcher/slots')
+      .set('Authorization', `Bearer ${dispatcherToken}`);
+    expect(dispatcherWithHoldRes.status).toBe(200);
+
+    const sellerWithHoldSlot = (sellerWithHoldRes.body?.slots || []).find(
+      (slot) => slot.slot_uid === slotUid
+    );
+    const dispatcherWithHoldSlot = (Array.isArray(dispatcherWithHoldRes.body) ? dispatcherWithHoldRes.body : []).find(
+      (slot) => slot.slot_uid === slotUid
+    );
+
+    expect(sellerWithHoldSlot).toBeDefined();
+    expect(dispatcherWithHoldSlot).toBeDefined();
+
+    expect(Number(sellerWithHoldSlot.seats_left)).toBe(1);
+    expect(Number(dispatcherWithHoldSlot.seats_left)).toBe(1);
+    expect(Number(sellerWithHoldSlot.telegram_active_hold_seats)).toBe(holdSeats);
+    expect(Number(dispatcherWithHoldSlot.telegram_active_hold_seats)).toBe(holdSeats);
+    expect(String(sellerWithHoldSlot.telegram_hold_expires_at || '')).toBe(holdExpiryIso);
+    expect(String(dispatcherWithHoldSlot.telegram_hold_expires_at || '')).toBe(holdExpiryIso);
+
+    db.prepare(
+      `
+        UPDATE telegram_booking_holds
+        SET hold_expires_at = datetime('now', '-1 minute')
+        WHERE booking_hold_id = ?
+      `
+    ).run(seededHold.bookingHoldId);
+
+    const sellerAfterExpiryRes = await request(app)
+      .get('/api/selling/boats/speed/slots')
+      .set('Authorization', `Bearer ${sellerToken}`);
+    expect(sellerAfterExpiryRes.status).toBe(200);
+
+    const dispatcherAfterExpiryRes = await request(app)
+      .get('/api/selling/dispatcher/slots')
+      .set('Authorization', `Bearer ${dispatcherToken}`);
+    expect(dispatcherAfterExpiryRes.status).toBe(200);
+
+    const sellerAfterExpirySlot = (sellerAfterExpiryRes.body?.slots || []).find(
+      (slot) => slot.slot_uid === slotUid
+    );
+    const dispatcherAfterExpirySlot = (Array.isArray(dispatcherAfterExpiryRes.body) ? dispatcherAfterExpiryRes.body : []).find(
+      (slot) => slot.slot_uid === slotUid
+    );
+
+    expect(sellerAfterExpirySlot).toBeDefined();
+    expect(dispatcherAfterExpirySlot).toBeDefined();
+
+    expect(Number(sellerAfterExpirySlot.seats_left)).toBe(3);
+    expect(Number(dispatcherAfterExpirySlot.seats_left)).toBe(3);
+    expect(Number(sellerAfterExpirySlot.telegram_active_hold_seats || 0)).toBe(0);
+    expect(Number(dispatcherAfterExpirySlot.telegram_active_hold_seats || 0)).toBe(0);
+    expect(sellerAfterExpirySlot.telegram_hold_expires_at).toBeNull();
+    expect(dispatcherAfterExpirySlot.telegram_hold_expires_at).toBeNull();
   });
 });

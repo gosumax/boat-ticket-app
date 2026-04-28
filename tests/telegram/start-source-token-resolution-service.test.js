@@ -141,6 +141,21 @@ describe('telegram start-source token resolution service', () => {
       });
   });
 
+  it('classifies composite handoff payload by extracted source token', () => {
+    const service = new TelegramStartSourceTokenResolutionService();
+
+    const result = service.resolveStartSourceToken(
+      normalizeStart('/start seller-direct-link-7__p321')
+    );
+
+    expect(result).toMatchObject({
+      resolution_status: 'resolved_seller_source',
+      normalized_source_token: 'seller-direct-link-7',
+      source_family: 'seller_direct_link',
+      source_resolution_reason: 'source_token_matches_seller_family_prefix',
+    });
+  });
+
   it('keeps no-source-token results stable for empty or non-token start payloads', () => {
     const service = new TelegramStartSourceTokenResolutionService();
 

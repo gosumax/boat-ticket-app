@@ -282,6 +282,17 @@ body {
     linear-gradient(180deg, rgba(10, 20, 37, 0.95), rgba(8, 16, 29, 0.98));
 }
 
+.tg-mini-app__panel--useful {
+  background:
+    radial-gradient(circle at top right, rgba(56, 189, 248, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(11, 24, 41, 0.95), rgba(8, 18, 31, 0.98));
+}
+
+.tg-mini-app__panel--contact {
+  display: grid;
+  gap: 12px;
+}
+
 .tg-mini-app__panel--date-filter {
   padding: 14px 16px;
 }
@@ -650,6 +661,21 @@ body {
   gap: 8px;
 }
 
+.tg-mini-app__subpanel--ticket-centered {
+  text-align: center;
+}
+
+.tg-mini-app__subpanel--ticket-centered .tg-mini-app__section-eyebrow,
+.tg-mini-app__subpanel--ticket-centered .tg-mini-app__subpanel-title,
+.tg-mini-app__subpanel--ticket-centered .tg-mini-app__note {
+  text-align: center;
+}
+
+.tg-mini-app__panel--ticket-view .tg-mini-app__subpanel--boarding-qr + .tg-mini-app__subpanel--ticket-centered,
+.tg-mini-app__panel--ticket-view .tg-mini-app__subpanel--ticket-centered + .tg-mini-app__subpanel--contact {
+  margin-top: 8px;
+}
+
 .tg-mini-app__subpanel--buyer-flow {
   display: grid;
   gap: 14px;
@@ -965,6 +991,27 @@ body {
   justify-items: center;
 }
 
+.tg-mini-app__list-card-header--centered {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.tg-mini-app__list-card-copy--centered {
+  text-align: center;
+}
+
+.tg-mini-app__list-card-header--ready-ticket {
+  align-items: flex-start;
+}
+
+.tg-mini-app__meta-item--next-step {
+  min-height: 68px;
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
 .tg-mini-app__copy-action {
   min-height: 0;
   padding: 0;
@@ -1001,6 +1048,10 @@ body {
 .tg-mini-app__meta-grid--buyer-flow {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.tg-mini-app__meta-grid--single {
+  grid-template-columns: 1fr;
 }
 
 .tg-mini-app__info-grid--post-request {
@@ -1064,6 +1115,174 @@ body {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+.tg-mini-app__weather-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.tg-mini-app__weather-card,
+.tg-mini-app__useful-card {
+  border: 1px solid var(--tg-border);
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.1), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02));
+}
+
+.tg-mini-app__weather-card {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  min-height: 118px;
+  padding: 18px 14px;
+  border-radius: 22px;
+  border-color: rgba(148, 163, 184, 0.22);
+  text-align: center;
+  box-shadow:
+    0 20px 34px -30px rgba(4, 11, 23, 0.92),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+.tg-mini-app__weather-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    165deg,
+    rgba(255, 255, 255, 0.18) 0%,
+    rgba(255, 255, 255, 0.06) 28%,
+    rgba(255, 255, 255, 0) 58%
+  );
+}
+
+.tg-mini-app__weather-card--accent {
+  border-color: rgba(96, 165, 250, 0.42);
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.26), transparent 32%),
+    linear-gradient(180deg, rgba(15, 33, 58, 0.96), rgba(8, 18, 31, 0.98));
+  box-shadow:
+    0 22px 36px -30px rgba(37, 99, 235, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.tg-mini-app__weather-label {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--tg-muted);
+}
+
+.tg-mini-app__weather-value {
+  margin: 10px 0 0;
+  color: var(--tg-text);
+  font-size: 1.24rem;
+  font-weight: 700;
+  line-height: 1.22;
+}
+
+.tg-mini-app__hint--useful-location {
+  margin-top: 12px;
+}
+
+.tg-mini-app__useful-cards {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.tg-mini-app__useful-card {
+  padding: 16px;
+  border-radius: 22px;
+}
+
+.tg-mini-app__useful-card .tg-mini-app__list-subtitle {
+  margin-top: 8px;
+  color: var(--tg-muted-strong);
+}
+
+.tg-mini-app__faq-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.tg-mini-app__faq-item {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.12), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02));
+  overflow: hidden;
+}
+
+.tg-mini-app__faq-summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.tg-mini-app__faq-summary::-webkit-details-marker {
+  display: none;
+}
+
+.tg-mini-app__faq-question {
+  margin: 0;
+  color: var(--tg-text);
+  font-size: 0.95rem;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.tg-mini-app__faq-toggle {
+  margin-top: 1px;
+  min-width: 22px;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: var(--tg-muted-strong);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1;
+  transition: transform 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.tg-mini-app__faq-item[open] {
+  border-color: rgba(96, 165, 250, 0.34);
+}
+
+.tg-mini-app__faq-item[open] .tg-mini-app__faq-toggle {
+  transform: rotate(45deg);
+  color: #e0f2fe;
+  border-color: rgba(96, 165, 250, 0.48);
+}
+
+.tg-mini-app__faq-answer {
+  margin: 0;
+  padding: 0 16px 14px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  color: var(--tg-muted-strong);
+  font-size: 0.9rem;
+  line-height: 1.55;
 }
 
 .tg-mini-app__list-card {
@@ -1313,6 +1532,159 @@ body {
   margin-top: 0;
 }
 
+.tg-mini-app__subpanel--how-to-get {
+  margin-top: 8px;
+  border-color: rgba(96, 165, 250, 0.22);
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.14), transparent 30%),
+    linear-gradient(180deg, rgba(11, 25, 44, 0.95), rgba(8, 18, 31, 0.98));
+}
+
+.tg-mini-app__how-to-get-summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.tg-mini-app__how-to-get-summary::-webkit-details-marker {
+  display: none;
+}
+
+.tg-mini-app__how-to-get-summary .tg-mini-app__subpanel-title {
+  margin: 0;
+}
+
+.tg-mini-app__how-to-get-head {
+  min-width: 0;
+}
+
+.tg-mini-app__how-to-get-hint {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--tg-muted);
+}
+
+.tg-mini-app__how-to-get-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: var(--tg-muted-strong);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.tg-mini-app__how-to-get-content {
+  margin-top: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.tg-mini-app__how-to-get-content--standalone {
+  margin-top: 0;
+}
+
+.tg-mini-app__how-to-get-image-button {
+  display: block;
+  width: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.tg-mini-app__how-to-get-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  object-fit: contain;
+  object-position: center;
+  background: rgba(2, 6, 23, 0.55);
+}
+
+.tg-mini-app__how-to-get-note {
+  margin-top: 0;
+  text-align: left;
+}
+
+.tg-mini-app__subpanel--how-to-get-standalone .tg-mini-app__how-to-get-hint,
+.tg-mini-app__subpanel--how-to-get-standalone .tg-mini-app__how-to-get-note {
+  text-align: center;
+}
+
+.tg-mini-app__how-to-get-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.tg-mini-app__how-to-get-link {
+  text-decoration: none;
+}
+
+.tg-mini-app__subpanel--ticket-datetime {
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+
+.tg-mini-app__subpanel--ticket-datetime .tg-mini-app__subpanel-title {
+  margin-bottom: 0;
+}
+
+.tg-mini-app__image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  background: rgba(2, 6, 23, 0.88);
+}
+
+.tg-mini-app__image-lightbox-content {
+  position: relative;
+  width: min(100%, 1120px);
+  max-height: calc(100dvh - 24px);
+  outline: none;
+}
+
+.tg-mini-app__image-lightbox-close {
+  position: absolute;
+  top: -12px;
+  right: -8px;
+  z-index: 1;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 999px;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.92);
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tg-mini-app__image-lightbox-image {
+  display: block;
+  width: 100%;
+  max-height: calc(100dvh - 24px);
+  border-radius: 16px;
+  object-fit: contain;
+}
+
 .tg-mini-app__ticket-reference {
   margin: 12px 0 0;
   color: var(--tg-text);
@@ -1323,9 +1695,11 @@ body {
 
 .tg-mini-app__boarding-qr-head {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
 }
 
 .tg-mini-app__subpanel--boarding-qr {
@@ -1536,6 +1910,7 @@ body {
   .tg-mini-app__action-grid,
   .tg-mini-app__metric-grid,
   .tg-mini-app__meta-grid,
+  .tg-mini-app__weather-grid,
   .tg-mini-app__info-grid,
   .tg-mini-app__booking-live-summary,
   .tg-mini-app__ticket-counter-grid {

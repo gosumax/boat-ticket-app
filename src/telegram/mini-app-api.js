@@ -8,6 +8,7 @@ const MINI_APP_API_DIAGNOSTIC_KEYS = Object.freeze({
   catalog: 'catalog',
   myRequests: 'myRequests',
 });
+const MINI_APP_API_DEFAULT_TIMEOUT_MS = 8000;
 const MINI_APP_API_DEBUG_QUERY_KEYS = Object.freeze([
   'mini_app_debug',
   'miniAppDebug',
@@ -103,6 +104,31 @@ function updateMiniAppApiDiagnostic(diagnosticKey, diagnostic) {
   emitMiniAppApiDiagnostics();
 }
 
+function emitMiniAppApiRuntimeTrace(diagnostic) {
+  if (!isMiniAppApiDiagnosticsEnabled()) {
+    return;
+  }
+  try {
+    console.info('[MiniApp API]', {
+      endpoint: normalizeString(diagnostic?.requestUrl),
+      method: normalizeString(diagnostic?.method),
+      status: Number.isFinite(Number(diagnostic?.status)) ? Number(diagnostic.status) : null,
+      durationMs: Number.isFinite(Number(diagnostic?.durationMs))
+        ? Number(diagnostic.durationMs)
+        : null,
+      timedOut: Boolean(diagnostic?.timedOut),
+      requestFailed: Boolean(diagnostic?.requestFailed),
+      retryAttempted: Boolean(diagnostic?.retryAttempted),
+      routeStatus: normalizeString(diagnostic?.routeStatus),
+      rejectionReason: normalizeString(diagnostic?.rejectionReason),
+      fetchErrorName: normalizeString(diagnostic?.fetchErrorName),
+      fetchErrorMessage: normalizeString(diagnostic?.fetchErrorMessage),
+    });
+  } catch {
+    // Never break buyer flows because of debug tracing failures.
+  }
+}
+
 export function subscribeMiniAppApiDiagnostics(listener) {
   if (typeof listener !== 'function') {
     return () => {};
@@ -153,8 +179,10 @@ function createMiniAppApiDiagnostic({
   headers,
   cacheMode,
   credentialsMode,
+  timeoutMs,
 }) {
   const startedAtIso = new Date().toISOString();
+  const startedAtMs = Date.now();
   return {
     diagnosticKey,
     requestUrl,
@@ -179,25 +207,47 @@ function createMiniAppApiDiagnostic({
     initDataHeaderAttached: Boolean(headers['x-telegram-webapp-init-data']),
     cacheMode: normalizeString(cacheMode),
     credentialsMode: normalizeString(credentialsMode),
+    timeoutMs: Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : null,
+    timedOut: false,
+    durationMs: null,
+    requestFailed: false,
+    retryAttempted: false,
     startedAtIso,
+    startedAtMs,
     completedAtIso: null,
   };
 }
 
 function finalizeMiniAppApiDiagnostic(diagnostic, patch = {}) {
+  const completedAtMs = Date.now();
+  const startedAtMs = Number(diagnostic?.startedAtMs);
+  const durationMs =
+    Number.isFinite(startedAtMs) && startedAtMs > 0
+      ? Math.max(0, completedAtMs - startedAtMs)
+      : null;
+  const fetchErrorName = normalizeString(patch.fetchErrorName ?? diagnostic?.fetchErrorName);
+  const fetchErrorMessage = normalizeString(
+    patch.fetchErrorMessage ?? diagnostic?.fetchErrorMessage
+  );
   return {
     ...diagnostic,
     ...patch,
+    durationMs,
+    requestFailed: Boolean(fetchErrorName || fetchErrorMessage),
+    completedAtMs,
     completedAtIso: patch.completedAtIso || new Date().toISOString(),
   };
 }
 
 async function requestTelegramMiniApp(
   path,
-  { method = 'GET', body, diagnosticKey = null } = {}
+  { method = 'GET', body, diagnosticKey = null, timeoutMs = MINI_APP_API_DEFAULT_TIMEOUT_MS } = {}
 ) {
   const normalizedMethod = normalizeString(method)?.toUpperCase() || 'GET';
   const requestUrl = resolveMiniAppRequestUrl(path);
+  const resolvedTimeoutMs = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
+    ? Math.trunc(Number(timeoutMs))
+    : MINI_APP_API_DEFAULT_TIMEOUT_MS;
   const headers = {
     accept: 'application/json',
   };
@@ -222,6 +272,21 @@ async function requestTelegramMiniApp(
     cache: 'no-store',
     credentials: 'same-origin',
   };
+  const abortController =
+    typeof AbortController === 'function' ? new AbortController() : null;
+  let fetchTimeoutId = null;
+  if (abortController) {
+    fetchOptions.signal = abortController.signal;
+    fetchTimeoutId = setTimeout(() => {
+      try {
+        abortController.abort(
+          new Error(`Telegram Mini App request timeout after ${resolvedTimeoutMs}ms`)
+        );
+      } catch {
+        abortController.abort();
+      }
+    }, resolvedTimeoutMs);
+  }
   let diagnostic = createMiniAppApiDiagnostic({
     diagnosticKey,
     requestUrl,
@@ -229,20 +294,43 @@ async function requestTelegramMiniApp(
     headers,
     cacheMode: fetchOptions.cache,
     credentialsMode: fetchOptions.credentials,
+    timeoutMs: resolvedTimeoutMs,
   });
   updateMiniAppApiDiagnostic(diagnosticKey, diagnostic);
 
   let response = null;
   try {
     response = await fetch(requestUrl, fetchOptions);
+    if (fetchTimeoutId !== null) {
+      clearTimeout(fetchTimeoutId);
+      fetchTimeoutId = null;
+    }
   } catch (error) {
+    if (fetchTimeoutId !== null) {
+      clearTimeout(fetchTimeoutId);
+      fetchTimeoutId = null;
+    }
+    const timeoutTriggered =
+      Boolean(abortController?.signal?.aborted) &&
+      (normalizeString(error?.name) === 'AbortError' ||
+        String(error?.message || '').includes('timeout'));
     diagnostic = finalizeMiniAppApiDiagnostic(diagnostic, {
-      fetchErrorName: normalizeString(error?.name),
-      fetchErrorMessage:
-        normalizeString(error?.message) || normalizeString(String(error)),
+      fetchErrorName: timeoutTriggered ? 'TimeoutError' : normalizeString(error?.name),
+      fetchErrorMessage: timeoutTriggered
+        ? `Request timeout after ${resolvedTimeoutMs}ms`
+        : normalizeString(error?.message) || normalizeString(String(error)),
+      timedOut: timeoutTriggered,
       jsonParseSucceeded: false,
     });
     updateMiniAppApiDiagnostic(diagnosticKey, diagnostic);
+    emitMiniAppApiRuntimeTrace(diagnostic);
+    if (timeoutTriggered) {
+      const timeoutError = new Error(
+        `Telegram Mini App request timeout after ${resolvedTimeoutMs}ms`
+      );
+      timeoutError.name = 'TimeoutError';
+      throw timeoutError;
+    }
     throw error;
   }
 
@@ -275,6 +363,7 @@ async function requestTelegramMiniApp(
     responsePreview: normalizeString(String(responseText || '').slice(0, 280)),
   });
   updateMiniAppApiDiagnostic(diagnosticKey, diagnostic);
+  emitMiniAppApiRuntimeTrace(diagnostic);
 
   return {
     response,
@@ -525,6 +614,37 @@ export async function fetchMiniAppTicketView({
   });
   const { response, payload, diagnostic } = await requestTelegramMiniApp(
     `/mini-app/my-tickets/${normalizedBookingRequestId}${query}`
+  );
+  return readOperationResultOrThrow(
+    response,
+    payload,
+    'Не удалось загрузить билет',
+    diagnostic
+  );
+}
+
+export async function fetchMiniAppTicketViewByCanonicalPresale({
+  telegramUserId,
+  canonicalPresaleId,
+  buyerTicketCode = null,
+  sourceToken = null,
+} = {}) {
+  const normalizedCanonicalPresaleId = Number(canonicalPresaleId);
+  if (
+    !Number.isInteger(normalizedCanonicalPresaleId) ||
+    normalizedCanonicalPresaleId <= 0
+  ) {
+    throw new Error('canonicalPresaleId должен быть положительным целым числом');
+  }
+
+  const query = buildQueryString({
+    telegram_user_id: resolveTelegramUserIdForRequest(telegramUserId),
+    canonical_presale_id: normalizedCanonicalPresaleId,
+    buyer_ticket_code: normalizeString(buyerTicketCode),
+    source_token: normalizeString(sourceToken),
+  });
+  const { response, payload, diagnostic } = await requestTelegramMiniApp(
+    `/mini-app/ticket-view${query}`
   );
   return readOperationResultOrThrow(
     response,

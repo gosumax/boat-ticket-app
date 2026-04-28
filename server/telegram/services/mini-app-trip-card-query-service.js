@@ -110,7 +110,12 @@ export class TelegramMiniAppTripCardQueryService {
       rejectTripCard,
       { requireDateTime: false }
     );
-    const row = readMiniAppTripRowByReference(this.db, tripSlotReference, rejectTripCard);
+    const row = readMiniAppTripRowByReference(
+      this.db,
+      tripSlotReference,
+      rejectTripCard,
+      nowIso
+    );
     const projectionItem = projectMiniAppTripItem(row, nowIso);
 
     return freezeTelegramHandoffValue({

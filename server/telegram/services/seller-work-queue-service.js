@@ -47,11 +47,21 @@ const PRESALE_QUEUE_COLUMNS = Object.freeze([
   'updated_at',
   'tickets_json',
 ]);
+const SUPPORTED_BRIDGE_PAYMENT_METHODS = new Set(['CASH', 'CARD', 'MIXED']);
 
 function normalizePositiveInteger(value, label) {
   const normalized = Number(value);
   if (!Number.isInteger(normalized) || normalized <= 0) {
     throw new Error(`[TELEGRAM_SELLER_WORK_QUEUE] ${label} must be a positive integer`);
+  }
+
+  return normalized;
+}
+
+function normalizeNonNegativeInteger(value, label) {
+  const normalized = Number(value);
+  if (!Number.isInteger(normalized) || normalized < 0) {
+    throw new Error(`[TELEGRAM_SELLER_WORK_QUEUE] ${label} must be a non-negative integer`);
   }
 
   return normalized;
@@ -84,6 +94,14 @@ function normalizeIdempotencyKey(idempotencyKey) {
   return normalized;
 }
 
+function normalizeActionPayload(actionPayload) {
+  if (!actionPayload || typeof actionPayload !== 'object' || Array.isArray(actionPayload)) {
+    return Object.freeze({});
+  }
+
+  return Object.freeze({ ...actionPayload });
+}
+
 function compareFrozenValues(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -112,6 +130,9 @@ export class TelegramSellerWorkQueueService {
     sellerAttributionSessions,
     guestProfiles,
     bookingRequestService,
+    presaleHandoffService = null,
+    realPresaleHandoffOrchestratorService = null,
+    bridgePresaleOnPrepaymentConfirmed = true,
     now = () => new Date(),
   }) {
     this.bookingRequests = bookingRequests;
@@ -120,6 +141,10 @@ export class TelegramSellerWorkQueueService {
     this.sellerAttributionSessions = sellerAttributionSessions;
     this.guestProfiles = guestProfiles;
     this.bookingRequestService = bookingRequestService;
+    this.presaleHandoffService = presaleHandoffService;
+    this.realPresaleHandoffOrchestratorService = realPresaleHandoffOrchestratorService;
+    this.bridgePresaleOnPrepaymentConfirmed =
+      bridgePresaleOnPrepaymentConfirmed === true;
     this.now = now;
   }
 
@@ -134,8 +159,20 @@ export class TelegramSellerWorkQueueService {
         'sellerAttributionSessions',
         'guestProfiles',
         'bookingRequestService',
+        'presaleHandoffService',
+        'realPresaleHandoffOrchestratorService',
       ],
     });
+  }
+
+  setPrepaymentBridgeServices({
+    presaleHandoffService = null,
+    realPresaleHandoffOrchestratorService = null,
+  } = {}) {
+    this.presaleHandoffService = presaleHandoffService;
+    this.realPresaleHandoffOrchestratorService =
+      realPresaleHandoffOrchestratorService;
+    return this;
   }
 
   nowIso() {
@@ -232,6 +269,7 @@ export class TelegramSellerWorkQueueService {
       actions.push(TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.call_started);
       actions.push(TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.not_reached);
       actions.push(TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.prepayment_confirmed);
+      actions.push(TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.cancel_request);
     }
 
     if (this.isHoldExtendable(bookingRequest, bookingHold)) {
@@ -411,10 +449,17 @@ export class TelegramSellerWorkQueueService {
     });
   }
 
-  buildActionMetadata({ action, sellerId, idempotencyKey, actionSignature }) {
+  buildActionMetadata({
+    action,
+    eventAction = action,
+    sellerId,
+    idempotencyKey,
+    actionSignature,
+  }) {
     return freezeTelegramHandoffValue({
       idempotency_key: idempotencyKey,
-      seller_work_queue_action: action,
+      seller_work_queue_action: eventAction,
+      seller_work_queue_action_raw: action,
       action_source: 'telegram_seller_work_queue',
       seller_id: sellerId,
       action_signature: actionSignature,
@@ -496,7 +541,184 @@ export class TelegramSellerWorkQueueService {
     });
   }
 
-  applyAction({ bookingRequest, action, actorType, actorId, eventMetadata }) {
+  recordNotReachedNote({ bookingRequest, attribution, actorType, actorId, eventMetadata }) {
+    this.assertActionBeforePrepaymentFinal(
+      bookingRequest,
+      TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.not_reached
+    );
+
+    const eventAt = this.nowIso();
+    const updatedRequest = CALL_STARTED_MUTABLE_REQUEST_STATUSES.has(
+      bookingRequest.request_status
+    )
+      ? this.bookingRequests.updateById(bookingRequest.booking_request_id, {
+          request_status: 'CONTACT_IN_PROGRESS',
+          last_status_at: eventAt,
+        })
+      : bookingRequest;
+    const bookingHold = this.getHoldForRequest(bookingRequest.booking_request_id);
+    const event = this.bookingRequestEvents.create({
+      booking_request_id: bookingRequest.booking_request_id,
+      booking_hold_id: bookingHold?.booking_hold_id || null,
+      seller_attribution_session_id: attribution.seller_attribution_session_id,
+      event_type: 'SELLER_NOT_REACHED_NOTE',
+      event_at: eventAt,
+      actor_type: actorType,
+      actor_id: actorId,
+      event_payload: {
+        ...eventMetadata,
+        seller_not_reached_note: true,
+        prior_request_status: bookingRequest.request_status,
+        request_status: updatedRequest.request_status,
+      },
+    });
+
+    return Object.freeze({
+      bookingRequest: updatedRequest,
+      bookingHold,
+      event,
+    });
+  }
+
+  resolveAcceptedPrepaymentAmount(actionPayload) {
+    const rawValue =
+      actionPayload?.accepted_prepayment_amount ?? actionPayload?.acceptedPrepaymentAmount;
+    if (rawValue === null || rawValue === undefined || rawValue === '') {
+      return null;
+    }
+    return normalizeNonNegativeInteger(
+      rawValue,
+      'actionPayload.accepted_prepayment_amount'
+    );
+  }
+
+  resolveBridgeSlotUid(actionPayload = {}, handoffPrepared = null) {
+    const rawValue =
+      actionPayload?.slot_uid ??
+      actionPayload?.slotUid ??
+      handoffPrepared?.handoff_snapshot?.trip?.slot_uid ??
+      null;
+    const normalized = String(rawValue ?? '').trim();
+    return normalized || null;
+  }
+
+  resolveBridgePaymentInput({
+    actionPayload = {},
+    requestedPrepaymentAmount = 0,
+  } = {}) {
+    const rawPaymentMethod =
+      actionPayload?.payment_method ?? actionPayload?.paymentMethod ?? null;
+    const normalizedRawMethod = String(rawPaymentMethod ?? '')
+      .trim()
+      .toUpperCase();
+    const paymentMethod =
+      normalizedRawMethod === 'CASHLESS'
+        ? 'CARD'
+        : normalizedRawMethod || null;
+    if (paymentMethod && !SUPPORTED_BRIDGE_PAYMENT_METHODS.has(paymentMethod)) {
+      throw new Error(
+        `[TELEGRAM_SELLER_WORK_QUEUE] actionPayload.payment_method must be CASH, CARD, or MIXED`
+      );
+    }
+
+    const normalizedRequestedPrepaymentAmount = Number(requestedPrepaymentAmount || 0);
+    const positivePrepaymentAmount = Number.isFinite(normalizedRequestedPrepaymentAmount)
+      ? Math.max(0, normalizedRequestedPrepaymentAmount)
+      : 0;
+    const effectivePaymentMethod =
+      paymentMethod || (positivePrepaymentAmount > 0 ? 'CASH' : null);
+
+    const rawCashAmount = actionPayload?.cash_amount ?? actionPayload?.cashAmount;
+    const rawCardAmount = actionPayload?.card_amount ?? actionPayload?.cardAmount;
+    const cashAmount =
+      rawCashAmount === undefined || rawCashAmount === null || rawCashAmount === ''
+        ? null
+        : normalizeNonNegativeInteger(rawCashAmount, 'actionPayload.cash_amount');
+    const cardAmount =
+      rawCardAmount === undefined || rawCardAmount === null || rawCardAmount === ''
+        ? null
+        : normalizeNonNegativeInteger(rawCardAmount, 'actionPayload.card_amount');
+
+    return Object.freeze({
+      paymentMethod: effectivePaymentMethod,
+      cashAmount,
+      cardAmount,
+    });
+  }
+
+  maybeBridgeConfirmedPrepayment({
+    bookingRequest,
+    bookingHold,
+    actorType,
+    actorId,
+    actionPayload,
+    acceptedPrepaymentAmount,
+  }) {
+    if (
+      this.bridgePresaleOnPrepaymentConfirmed !== true ||
+      !this.presaleHandoffService ||
+      !this.realPresaleHandoffOrchestratorService
+    ) {
+      return Object.freeze({
+        bookingRequest,
+        bookingHold,
+      });
+    }
+
+    const handoffPrepared = this.presaleHandoffService.prepareHandoff(
+      bookingRequest.booking_request_id,
+      {
+        actorType,
+        actorId,
+      }
+    );
+    const slotUid = this.resolveBridgeSlotUid(actionPayload, handoffPrepared);
+    if (!slotUid) {
+      return Object.freeze({
+        bookingRequest,
+        bookingHold,
+      });
+    }
+
+    const bridgePaymentInput = this.resolveBridgePaymentInput({
+      actionPayload,
+      requestedPrepaymentAmount:
+        acceptedPrepaymentAmount ??
+        bookingHold?.requested_amount ??
+        bookingRequest.requested_prepayment_amount ??
+        0,
+    });
+    const bridgeReadback = this.realPresaleHandoffOrchestratorService.orchestrate(
+      bookingRequest.booking_request_id,
+      {
+        actorType,
+        actorId,
+        slotUid,
+        paymentMethod: bridgePaymentInput.paymentMethod,
+        cashAmount: bridgePaymentInput.cashAmount,
+        cardAmount: bridgePaymentInput.cardAmount,
+      }
+    );
+    const bridgedBookingRequest = this.getBookingRequestOrThrow(
+      bookingRequest.booking_request_id
+    );
+    if (
+      !bridgedBookingRequest.confirmed_presale_id ||
+      bridgedBookingRequest.request_status !== 'CONFIRMED_TO_PRESALE'
+    ) {
+      throw new Error(
+        `[TELEGRAM_SELLER_WORK_QUEUE] Cannot apply seller action because canonical bridge did not create a confirmed presale linkage`
+      );
+    }
+
+    return Object.freeze({
+      bookingRequest: bridgedBookingRequest,
+      bookingHold: this.getHoldForRequest(bookingRequest.booking_request_id),
+      bridgeReadback,
+    });
+  }
+
+  applyAction({ bookingRequest, action, actorType, actorId, eventMetadata, actionPayload }) {
     if (action === TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.call_started) {
       return this.recordCallStarted({
         bookingRequest,
@@ -531,31 +753,57 @@ export class TelegramSellerWorkQueueService {
     }
 
     if (action === TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.not_reached) {
-      this.assertActionBeforePrepaymentFinal(bookingRequest, action);
-      const result = this.bookingRequestService.markSellerNotReached(
-        bookingRequest.booking_request_id,
-        {
-          actorType,
-          actorId,
-          eventMetadata,
-        }
-      );
-      const event = this.resolveIdempotentActionEvent({
-        bookingRequestId: bookingRequest.booking_request_id,
-        idempotencyKey: eventMetadata.idempotency_key,
-        actionSignature: eventMetadata.action_signature,
-      });
-
-      return Object.freeze({
-        bookingRequest: result.bookingRequest,
-        bookingHold: result.bookingHold,
-        event,
+      return this.recordNotReachedNote({
+        bookingRequest,
+        attribution: this.getSellerAttributionOrThrow(bookingRequest),
+        actorType,
+        actorId,
+        eventMetadata,
       });
     }
 
     if (action === TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.prepayment_confirmed) {
       this.assertActionBeforePrepaymentFinal(bookingRequest, action);
+      const acceptedPrepaymentAmount = this.resolveAcceptedPrepaymentAmount(actionPayload);
+      const prepaymentEventMetadata =
+        acceptedPrepaymentAmount === null
+          ? eventMetadata
+          : freezeTelegramHandoffValue({
+              ...eventMetadata,
+              accepted_prepayment_amount: acceptedPrepaymentAmount,
+            });
       const result = this.bookingRequestService.confirmPrepayment(
+        bookingRequest.booking_request_id,
+        {
+          actorType,
+          actorId,
+          eventMetadata: prepaymentEventMetadata,
+        }
+      );
+      const event = this.resolveIdempotentActionEvent({
+        bookingRequestId: bookingRequest.booking_request_id,
+        idempotencyKey: prepaymentEventMetadata.idempotency_key,
+        actionSignature: prepaymentEventMetadata.action_signature,
+      });
+      const bridgedResult = this.maybeBridgeConfirmedPrepayment({
+        bookingRequest: result.bookingRequest,
+        bookingHold: result.bookingHold,
+        actorType,
+        actorId,
+        actionPayload,
+        acceptedPrepaymentAmount,
+      });
+
+      return Object.freeze({
+        bookingRequest: bridgedResult.bookingRequest,
+        bookingHold: bridgedResult.bookingHold,
+        event,
+      });
+    }
+
+    if (action === TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.cancel_request) {
+      this.assertActionBeforePrepaymentFinal(bookingRequest, action);
+      const result = this.bookingRequestService.cancelRequestByGuest(
         bookingRequest.booking_request_id,
         {
           actorType,
@@ -608,6 +856,7 @@ export class TelegramSellerWorkQueueService {
       );
       const normalizedAction = normalizeAction(action);
       const normalizedIdempotencyKey = normalizeIdempotencyKey(idempotencyKey);
+      const normalizedActionPayload = normalizeActionPayload(actionPayload);
       const normalizedActorId = actorId ?? String(normalizedSellerId);
       const bookingRequest = this.getBookingRequestOrThrow(normalizedBookingRequestId);
       this.assertSellerOwnsRequest(bookingRequest, normalizedSellerId);
@@ -616,7 +865,7 @@ export class TelegramSellerWorkQueueService {
         action: normalizedAction,
         sellerId: normalizedSellerId,
         bookingRequestId: normalizedBookingRequestId,
-        actionPayload,
+        actionPayload: normalizedActionPayload,
       });
       const idempotentEvent = this.resolveIdempotentActionEvent({
         bookingRequestId: normalizedBookingRequestId,
@@ -636,6 +885,10 @@ export class TelegramSellerWorkQueueService {
 
       const eventMetadata = this.buildActionMetadata({
         action: normalizedAction,
+        eventAction:
+          normalizedAction === TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.not_reached
+            ? 'not_reached_note'
+            : normalizedAction,
         sellerId: normalizedSellerId,
         idempotencyKey: normalizedIdempotencyKey,
         actionSignature,
@@ -646,6 +899,7 @@ export class TelegramSellerWorkQueueService {
         actorType,
         actorId: String(normalizedActorId),
         eventMetadata,
+        actionPayload: normalizedActionPayload,
       });
 
       return this.buildActionResult({

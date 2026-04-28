@@ -304,7 +304,10 @@ export class TelegramBookingRequestService {
     return updatedHold;
   }
 
-  cancelRequestByGuest(bookingRequestId, { actorType = 'guest', actorId = null } = {}) {
+  cancelRequestByGuest(
+    bookingRequestId,
+    { actorType = 'guest', actorId = null, eventMetadata = {} } = {}
+  ) {
     const bookingRequest = this.getRequestOrThrow(bookingRequestId);
     const nowIso = this.nowIso();
 
@@ -331,6 +334,7 @@ export class TelegramBookingRequestService {
       actorType,
       actorId,
       eventPayload: {
+        ...eventMetadata,
         request_status: updatedRequest.request_status,
       },
       eventAt: nowIso,

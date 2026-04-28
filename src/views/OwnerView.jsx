@@ -1,15 +1,15 @@
 import { useAuth } from "../contexts/AuthContext";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import apiClient from "../utils/apiClient.js";
-import OwnerMoneyView from "./OwnerMoneyView";
-import OwnerBoatsView from "./OwnerBoatsView";
-import OwnerSellersView from "./OwnerSellersView";
-import OwnerMotivationView from "./OwnerMotivationView";
-import OwnerSettingsView from "./OwnerSettingsView";
-import OwnerLoadView from "../components/owner/OwnerLoadView.jsx";
-import OwnerExportView from "./OwnerExportView";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import DateFieldPicker from "../components/ui/DateFieldPicker.jsx";
+
+const OwnerMoneyView = lazy(() => import("./OwnerMoneyView"));
+const OwnerBoatsView = lazy(() => import("./OwnerBoatsView"));
+const OwnerSellersView = lazy(() => import("./OwnerSellersView"));
+const OwnerMotivationView = lazy(() => import("./OwnerMotivationView"));
+const OwnerSettingsView = lazy(() => import("./OwnerSettingsView"));
+const OwnerLoadView = lazy(() => import("../components/owner/OwnerLoadView.jsx"));
+const OwnerExportView = lazy(() => import("./OwnerExportView"));
 
 /**
  * OwnerView.jsx
@@ -254,6 +254,7 @@ function UnifiedLineChart({ compareMode, chartMode, setChartMode, fromA, toA, fr
   const [err, setErr] = useState("");
   const [data, setData] = useState(null);
   const [warnings, setWarnings] = useState([]);
+  const [chartComponents, setChartComponents] = useState(null);
 
   const parseDate = (s) => new Date(s + 'T00:00:00');
   const activeFrom = compareMode === 'revenue' ? fromA : entityFrom;
@@ -350,6 +351,27 @@ function UnifiedLineChart({ compareMode, chartMode, setChartMode, fromA, toA, fr
 
   const hasData = points.some(p => p.A > 0 || p.B > 0);
 
+  useEffect(() => {
+    if (!hasData || chartComponents) return;
+    let cancelled = false;
+    import("./ownerRecharts.js").then((module) => {
+      if (!cancelled) setChartComponents(module);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasData, chartComponents]);
+
+  const {
+    LineChart,
+    Line,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip,
+    ResponsiveContainer,
+  } = chartComponents || {};
+
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
@@ -378,7 +400,11 @@ function UnifiedLineChart({ compareMode, chartMode, setChartMode, fromA, toA, fr
         <div className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-500">Нет данных за выбранный период</div>
       )}
 
-      {!busy && hasData && (
+      {!busy && hasData && !chartComponents && (
+        <div className="rounded-2xl border border-neutral-800 p-4 text-sm text-neutral-500">Загрузка...</div>
+      )}
+
+      {!busy && hasData && chartComponents && (
         <div className="rounded-2xl border border-neutral-800 p-3">
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs text-neutral-500">
@@ -651,14 +677,16 @@ export default function OwnerView() {
         Выйти
       </button>
       <main className="pt-14 pb-24">
-        {tab === "money" && <div data-testid="owner-screen-money"><OwnerMoneyView /></div>}
-        {tab === "compare" && <div data-testid="owner-screen-compare"><OwnerComparePeriodsView /></div>}
-        {tab === "boats" && <div data-testid="owner-screen-boats"><OwnerBoatsView /></div>}
-        {tab === "sellers" && <div data-testid="owner-screen-sellers"><OwnerSellersView /></div>}
-        {tab === "motivation" && <div data-testid="owner-screen-motivation"><OwnerMotivationView onOpenSettings={() => setTab("settings")} settingsRefreshKey={settingsRefreshKey} /></div>}
-        {tab === "settings" && <div data-testid="owner-screen-settings"><OwnerSettingsView onSettingsSaved={handleSettingsSaved} /></div>}
-        {tab === "load" && <div data-testid="owner-screen-load"><OwnerLoadView /></div>}
-        {tab === "export" && <div data-testid="owner-screen-export"><OwnerExportView /></div>}
+        <Suspense fallback={null}>
+          {tab === "money" && <div data-testid="owner-screen-money"><OwnerMoneyView /></div>}
+          {tab === "compare" && <div data-testid="owner-screen-compare"><OwnerComparePeriodsView /></div>}
+          {tab === "boats" && <div data-testid="owner-screen-boats"><OwnerBoatsView /></div>}
+          {tab === "sellers" && <div data-testid="owner-screen-sellers"><OwnerSellersView /></div>}
+          {tab === "motivation" && <div data-testid="owner-screen-motivation"><OwnerMotivationView onOpenSettings={() => setTab("settings")} settingsRefreshKey={settingsRefreshKey} /></div>}
+          {tab === "settings" && <div data-testid="owner-screen-settings"><OwnerSettingsView onSettingsSaved={handleSettingsSaved} /></div>}
+          {tab === "load" && <div data-testid="owner-screen-load"><OwnerLoadView /></div>}
+          {tab === "export" && <div data-testid="owner-screen-export"><OwnerExportView /></div>}
+        </Suspense>
       </main>
 
       <OwnerBottomTabs tab={tab} setTab={setTab} />

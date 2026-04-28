@@ -25,8 +25,8 @@ const ENTRYPOINT_CONTENT = Object.freeze({
     placeholder: false,
   }),
   useful_content: Object.freeze({
-    title: 'Полезная информация',
-    body: 'Подготовка к поездке и подсказки с учётом погоды.',
+    title: 'Полезное в Архипо-Осиповке',
+    body: 'Погода, температура воды и подборка мест для отдыха рядом с морем.',
     placeholder: false,
   }),
   faq: Object.freeze({
@@ -60,3 +60,4 @@ export function resolveTelegramMiniAppEntrypointContent(entrypointKey) {
     ...content,
   });
 }
+

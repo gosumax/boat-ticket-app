@@ -105,6 +105,53 @@ export function normalizeTimestampSummary(iso) {
   });
 }
 
+function normalizeEventTimestampCandidate(value) {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const parsed = Date.parse(normalized);
+  if (Number.isNaN(parsed)) {
+    return null;
+  }
+
+  return new Date(parsed).toISOString();
+}
+
+function buildSyntheticLifecycleEvent({
+  bookingRequest,
+  bookingHold = null,
+  eventType,
+  fallbackReason,
+}) {
+  const eventAt =
+    normalizeEventTimestampCandidate(bookingRequest?.last_status_at) ||
+    normalizeEventTimestampCandidate(bookingHold?.hold_expires_at) ||
+    normalizeEventTimestampCandidate(bookingHold?.started_at) ||
+    normalizeEventTimestampCandidate(bookingRequest?.created_at);
+  if (!eventAt) {
+    return null;
+  }
+
+  return freezeSortedLifecycleValue({
+    booking_request_event_id: null,
+    booking_request_id: bookingRequest.booking_request_id,
+    booking_hold_id: bookingHold?.booking_hold_id || null,
+    seller_attribution_session_id: bookingRequest.seller_attribution_session_id,
+    event_type: eventType,
+    event_at: eventAt,
+    actor_type: 'system',
+    actor_id: 'telegram-lifecycle-projection-fallback',
+    event_payload: freezeSortedLifecycleValue({
+      projection_fallback: true,
+      projection_fallback_reason: fallbackReason,
+      request_status: normalizeString(bookingRequest?.request_status),
+      hold_status: normalizeString(bookingHold?.hold_status),
+    }),
+  });
+}
+
 export function findLatestEvent(events = [], eventTypes = []) {
   const eventTypeSet = new Set(eventTypes);
   for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -477,7 +524,14 @@ export function deriveLifecycleState({
         );
       }
 
-      const holdExpiredEvent = findLatestEvent(events, HOLD_EXPIRED_EVENT_TYPES);
+      const holdExpiredEvent =
+        findLatestEvent(events, HOLD_EXPIRED_EVENT_TYPES) ||
+        buildSyntheticLifecycleEvent({
+          bookingRequest,
+          bookingHold,
+          eventType: TELEGRAM_BOOKING_REQUEST_HOLD_EXPIRED_EVENT_TYPE,
+          fallbackReason: 'missing_hold_expired_event',
+        });
       if (!holdExpiredEvent) {
         reject(
           `Booking request lifecycle event is missing for projection: ${bookingRequestId}`

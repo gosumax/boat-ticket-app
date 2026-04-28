@@ -68,6 +68,44 @@ function getLoadAccent(percent, seatsLeft, sold, capacity) {
   };
 }
 
+function getActiveTelegramHoldSeats(trip) {
+  const rawValue =
+    trip?.telegram_active_hold_seats ??
+    trip?.active_hold_seats ??
+    trip?.hold_seats ??
+    0;
+  const normalized = Number(rawValue);
+  if (!Number.isFinite(normalized)) {
+    return 0;
+  }
+  const seats = Math.trunc(normalized);
+  return seats > 0 ? seats : 0;
+}
+
+function formatHoldExpirySummary(holdExpiresAtIso, nowMs = Date.now()) {
+  const parsedMs = Date.parse(String(holdExpiresAtIso || ''));
+  if (!Number.isFinite(parsedMs)) {
+    return null;
+  }
+
+  const remainingMs = Math.max(0, parsedMs - nowMs);
+  const totalMinutes = Math.ceil(remainingMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const remainingLabel =
+    totalMinutes <= 0
+      ? 'expires now'
+      : hours > 0
+        ? `~${hours}h ${minutes}m`
+        : `~${totalMinutes}m`;
+  const clockLabel = new Date(parsedMs).toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  return { remainingLabel, clockLabel };
+}
+
 function getTripCategorySurfaceClass(trip) {
   const type = String(trip?.boat_type || trip?.type || '').toLowerCase();
   const name = String(trip?.boat_name || '').toLowerCase();
@@ -180,6 +218,10 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
                 : typeof trip.duration === 'number'
                   ? trip.duration
                   : null;
+            const holdSeats = getActiveTelegramHoldSeats(trip);
+            const holdExpirySummary = formatHoldExpirySummary(
+              trip?.telegram_hold_expires_at
+            );
             const accent = getLoadAccent(percent, seatsLeft, sold, capacity);
 
             return (
@@ -228,6 +270,27 @@ const SelectTrip = ({ trips, onSelect, onBack, loading, selectedDate, onDateChan
                             <span data-testid={`seller-trip-capacity-${trip.slot_uid}`}>{capacity}</span>
                           </span>
                         </div>
+                        {holdSeats > 0 && (
+                          <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50/80 px-2.5 py-2 text-xs text-amber-900">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-medium">Temporary hold</span>
+                              <span
+                                data-testid={`seller-trip-hold-seats-${trip.slot_uid}`}
+                                className="font-semibold"
+                              >
+                                {holdSeats}
+                              </span>
+                            </div>
+                            {holdExpirySummary && (
+                              <div
+                                data-testid={`seller-trip-hold-expiry-${trip.slot_uid}`}
+                                className="mt-1 text-[11px] text-amber-800"
+                              >
+                                Until {holdExpirySummary.clockLabel} ({holdExpirySummary.remainingLabel})
+                              </div>
+                            )}
+                          </div>
+                        )}
                         <div className="mt-2 flex items-center justify-between gap-3 text-xs font-medium text-slate-500">
                           <span>Заполнено</span>
                           <span data-testid={`seller-trip-load-${trip.slot_uid}`}>{percent}%</span>

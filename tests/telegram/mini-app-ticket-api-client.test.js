@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fetchMiniAppCatalog,
   fetchMiniAppMyRequests,
+  fetchMiniAppTicketViewByCanonicalPresale,
   fetchMiniAppTicketViewWithOfflineFallback,
   readMiniAppApiDiagnosticsSnapshot,
   resetMiniAppApiDiagnostics,
@@ -122,6 +123,46 @@ describe('telegram mini app ticket api client fallback behavior', () => {
       ticketViewErrorMessage: null,
     });
     expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads ticket view by canonical presale deep link', async () => {
+    global.fetch.mockResolvedValueOnce(
+      createJsonResponse({
+        ok: true,
+        status: 200,
+        payload: createRoutePayload({
+          operationResultSummary: {
+            linked_canonical_presale_reference: {
+              presale_id: 145,
+            },
+            ticket_status_summary: {
+              deterministic_ticket_state: 'linked_ticket_ready',
+            },
+          },
+        }),
+      })
+    );
+
+    const result = await fetchMiniAppTicketViewByCanonicalPresale({
+      telegramUserId: '777000111',
+      canonicalPresaleId: 145,
+      sourceToken: 'seller-direct-link-42',
+      buyerTicketCode: 'Б46',
+    });
+
+    expect(result).toMatchObject({
+      linked_canonical_presale_reference: {
+        presale_id: 145,
+      },
+      ticket_status_summary: {
+        deterministic_ticket_state: 'linked_ticket_ready',
+      },
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch.mock.calls[0][0]).toContain('/api/telegram/mini-app/ticket-view');
+    expect(global.fetch.mock.calls[0][0]).toContain('canonical_presale_id=145');
+    expect(global.fetch.mock.calls[0][0]).toContain('source_token=seller-direct-link-42');
+    expect(global.fetch.mock.calls[0][0]).toContain('buyer_ticket_code=%D0%9146');
   });
 
   it('falls back to offline snapshot when ticket view endpoint fails', async () => {
@@ -465,6 +506,10 @@ describe('telegram mini app ticket api client fallback behavior', () => {
       responseArrived: true,
       status: 200,
       contentType: 'text/html; charset=utf-8',
+      durationMs: expect.any(Number),
+      timedOut: false,
+      requestFailed: false,
+      retryAttempted: false,
       jsonParseSucceeded: false,
       routeStatus: null,
       rejectionReason: null,

@@ -105,7 +105,7 @@ Future Telegram work must use these paths:
 - This task establishes structure and rules only.
 - No Telegram runtime behavior, routes, bot handlers, UI screens, migrations, or DB changes are introduced here.
 
-## Local Live Test-Bot Tunnel (Cloudflare Quick Tunnel)
+## Local Live Test-Bot Tunnel (Cloudflare Named Tunnel)
 
 Use this only for local Telegram webhook and Mini App live testing. This is a developer/operator helper flow and does not change runtime Telegram business logic.
 
@@ -114,16 +114,25 @@ Recommended one-command flow:
 1. Install `cloudflared` once on Windows:
    - `winget install --id Cloudflare.cloudflared`
    - or download `cloudflared-windows-amd64.exe` and point `CLOUDFLARED_EXE` at it in `start-telegram-miniapp-live.bat`
-2. Run:
+2. Create and bind a named tunnel once:
+   - `cloudflared tunnel create boat-ticket-miniapp`
+   - `cloudflared tunnel route dns boat-ticket-miniapp miniapp.domain.com`
+3. Use named tunnel config (template in repo):
+   - `docs/telegram/cloudflared-named-tunnel.example.yml`
+4. Set stable values in `start-telegram-miniapp-live.bat`:
+   - `CLOUDFLARE_TUNNEL_MODE=named`
+   - `CLOUDFLARE_TUNNEL_NAME=boat-ticket-miniapp`
+   - `TELEGRAM_PUBLIC_BASE_URL=https://miniapp.domain.com`
+   - optional `CLOUDFLARE_TUNNEL_CONFIG=<path-to-config.yml>`
+5. Run:
    - `start-telegram-miniapp-live.bat`
-3. The launcher now:
-   - starts `cloudflared tunnel --url http://127.0.0.1:3001 --edge-ip-version 4 --no-autoupdate`
-   - discovers the clean public `https://...trycloudflare.com` base URL
+6. The launcher now:
+   - starts named tunnel `cloudflared tunnel run <name>`
    - builds the app
-   - starts `server/index.js` with `TELEGRAM_PUBLIC_BASE_URL` set to that clean URL
+   - starts `server/index.js` with stable `TELEGRAM_PUBLIC_BASE_URL`
    - prints the final buyer Mini App URL for desktop/iPhone live checks
 
-Manual tunnel flow:
+Quick tunnel fallback (dev-only, non-persistent):
 
 1. Start the backend on port `3001`.
 2. Start Cloudflare Quick Tunnel:
@@ -151,7 +160,7 @@ Use this helper after the public tunnel is running and `TELEGRAM_PUBLIC_BASE_URL
 1. Print exact webhook registration inputs (no API call):
    - `npm run telegram:webhook:helper`
 2. Optionally override base URL just for one run:
-   - `npm run telegram:webhook:helper -- https://example-name.trycloudflare.com`
+   - `npm run telegram:webhook:helper -- https://miniapp.domain.com`
 3. Register webhook in Telegram:
    - `npm run telegram:webhook:helper -- --register`
 4. Register and immediately check status:

@@ -401,11 +401,12 @@ function getLegacyMixedSplitCorrections({
     bySeller: new Map(),
   };
 
-  if (ledgerHasCashAmount || ledgerHasCardAmount) return empty;
   if (!safeTableExists('money_ledger')) return empty;
   const hasCanonical = safeTableExists('sales_transactions_canonical');
   if (!hasPresales && !hasCanonical) return empty;
 
+  const ledgerCashAmountSelect = ledgerHasCashAmount ? 'ml.cash_amount' : 'NULL';
+  const ledgerCardAmountSelect = ledgerHasCardAmount ? 'ml.card_amount' : 'NULL';
   const mixedRowsToday = safeAll(
     `SELECT
        ml.id,
@@ -413,6 +414,8 @@ function getLegacyMixedSplitCorrections({
        ml.seller_id,
        ml.type,
        ABS(ml.amount) AS amount,
+       ${ledgerCashAmountSelect} AS ledger_cash_amount,
+       ${ledgerCardAmountSelect} AS ledger_card_amount,
        p.payment_cash_amount,
        p.payment_card_amount
      FROM money_ledger ml
@@ -642,12 +645,21 @@ function getLegacyMixedSplitCorrections({
     const rowId = Number(row?.id || 0);
     if (!Number.isFinite(rowId) || rowId <= 0) continue;
 
-    const fallbackCash = hasPresales
-      ? Number(row?.payment_cash_amount ?? row?.amount ?? 0)
-      : Number(row?.amount || 0);
-    const fallbackCard = hasPresales
-      ? Number(row?.payment_card_amount ?? 0)
-      : 0;
+    const ledgerCash = Number(row?.ledger_cash_amount || 0);
+    const ledgerCard = Number(row?.ledger_card_amount || 0);
+    const hasLedgerSplit = Math.abs(ledgerCash) > 0 || Math.abs(ledgerCard) > 0;
+    if (hasLedgerSplit) continue;
+
+    const fallbackCash = hasLedgerSplit
+      ? ledgerCash
+      : hasPresales
+        ? Number(row?.payment_cash_amount ?? row?.amount ?? 0)
+        : Number(row?.amount || 0);
+    const fallbackCard = hasLedgerSplit
+      ? ledgerCard
+      : hasPresales
+        ? Number(row?.payment_card_amount ?? 0)
+        : 0;
 
     const actual = actualMixedSplitByRowId.get(rowId);
     if (!actual) continue;
@@ -697,8 +709,20 @@ export function calcFutureTripsReserveByPaymentDay({ businessDay, ledgerCols, ha
   const ledgerHasCashAmt = hasCol(ledgerCols, 'cash_amount');
   const ledgerHasCardAmt = hasCol(ledgerCols, 'card_amount');
   const tripDayExpr = getReserveTripDayExpr();
-  const mixedCashExpr = ledgerHasCashAmt ? 'COALESCE(ml.cash_amount, 0)' : 'COALESCE(p.payment_cash_amount, ml.amount)';
-  const mixedCardExpr = ledgerHasCardAmt ? 'COALESCE(ml.card_amount, 0)' : 'COALESCE(p.payment_card_amount, 0)';
+  const mixedCashExpr = ledgerHasCashAmt
+    ? `CASE
+         WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+           THEN COALESCE(ml.cash_amount, 0)
+         ELSE COALESCE(p.payment_cash_amount, ml.amount)
+       END`
+    : 'COALESCE(p.payment_cash_amount, ml.amount)';
+  const mixedCardExpr = ledgerHasCardAmt
+    ? `CASE
+         WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+           THEN COALESCE(ml.card_amount, 0)
+         ELSE COALESCE(p.payment_card_amount, 0)
+       END`
+    : 'COALESCE(p.payment_card_amount, 0)';
   const mixedRefundCashExpr = ledgerHasCashAmt
     ? "CASE WHEN COALESCE(ml.cash_amount, 0) > 0 THEN ABS(COALESCE(ml.cash_amount, 0)) ELSE ABS(COALESCE(p.payment_cash_amount, 0)) END"
     : 'ABS(COALESCE(p.payment_cash_amount, 0))';
@@ -818,12 +842,32 @@ export function calcLiveUiLedgerTotals(businessDay) {
   const ledgerHasCashAmount = hasCol(ledgerCols, 'cash_amount');
   const ledgerHasCardAmount = hasCol(ledgerCols, 'card_amount');
   const mixedCashExpr = ledgerHasCashAmount
-    ? 'COALESCE(ml.cash_amount, 0)'
+    ? hasPresales
+    ? `CASE
+         WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+           THEN COALESCE(ml.cash_amount, 0)
+         ELSE COALESCE(p.payment_cash_amount, ml.amount)
+       END`
+    : `CASE
+         WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+           THEN COALESCE(ml.cash_amount, 0)
+         ELSE ml.amount
+       END`
     : hasPresales
     ? 'COALESCE(p.payment_cash_amount, ml.amount)'
     : 'ml.amount';
   const mixedCardExpr = ledgerHasCardAmount
-    ? 'COALESCE(ml.card_amount, 0)'
+    ? hasPresales
+    ? `CASE
+         WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+           THEN COALESCE(ml.card_amount, 0)
+         ELSE COALESCE(p.payment_card_amount, 0)
+       END`
+    : `CASE
+         WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+           THEN COALESCE(ml.card_amount, 0)
+         ELSE 0
+       END`
     : hasPresales
     ? 'COALESCE(p.payment_card_amount, 0)'
     : '0';
@@ -995,13 +1039,23 @@ export function calcLiveUiLedgerTotals(businessDay) {
          ) THEN ABS(ml.amount)
          WHEN ml.type = 'SALE_CANCEL_REVERSE' THEN -ABS(ml.amount)
          ELSE 0
-       END), 0) AS collected_total
+       END), 0) AS collected_total,
+       COALESCE(SUM(CASE
+         WHEN ${ledgerHasKind ? "ml.kind = 'SELLER_SHIFT'" : '1 = 1'}
+          AND ml.type IN (
+            'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
+            'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'
+          ) THEN ABS(ml.amount)
+         WHEN ${ledgerHasKind ? "ml.kind = 'SELLER_SHIFT'" : '1 = 1'}
+          AND ml.type = 'SALE_CANCEL_REVERSE' THEN -ABS(ml.amount)
+         ELSE 0
+       END), 0) AS accepted_seller_shift
      FROM money_ledger ml
      LEFT JOIN presales p ON p.id = ml.presale_id
      JOIN users u ON u.id = ml.seller_id AND u.role = 'seller'
      WHERE ${baseWhereSql}
        AND ml.seller_id IS NOT NULL
-       ${ledgerHasKind ? "AND ml.kind = 'SELLER_SHIFT'" : ''}
+       ${ledgerHasKind ? "AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')" : ''}
        AND ml.type IN (
          'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED',
          'SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED',
@@ -1053,11 +1107,21 @@ export function calcLiveUiLedgerTotals(businessDay) {
       `Seller #${sellerId}`
     );
 
-    const collectedCash = Number(sale.collected_cash || 0);
-    const collectedCard = Number(sale.collected_card || 0);
+    const mixedCorrection = legacyMixedCorrections.bySeller.get(sellerId) || {};
+    const collectedCash = roundMoney(
+      Number(sale.collected_cash || 0) + Number(mixedCorrection.collectedCashDelta || 0)
+    );
+    const collectedCard = roundMoney(
+      Number(sale.collected_card || 0) + Number(mixedCorrection.collectedCardDelta || 0)
+    );
     const collectedTotal = Number(sale.collected_total || (collectedCash + collectedCard));
-    const prepaymentCash = Number(sale.prepayment_cash || 0);
-    const prepaymentCard = Number(sale.prepayment_card || 0);
+    const acceptedSellerShift = Number(sale.accepted_seller_shift ?? collectedTotal);
+    const prepaymentCash = roundMoney(
+      Number(sale.prepayment_cash || 0) + Number(mixedCorrection.prepaymentCashDelta || 0)
+    );
+    const prepaymentCard = roundMoney(
+      Number(sale.prepayment_card || 0) + Number(mixedCorrection.prepaymentCardDelta || 0)
+    );
     const depositCash = Number(dep.deposit_cash || 0);
     const depositCard = Number(dep.deposit_card || 0);
     const depositTotal = Number(dep.deposit_total || 0);
@@ -1071,7 +1135,7 @@ export function calcLiveUiLedgerTotals(businessDay) {
       seller_name: sellerName,
       name: sellerName,
       role: 'seller',
-      accepted: collectedTotal,
+      accepted: acceptedSellerShift,
       deposited: depositTotal,
       balance: totalDue,
       cash_balance: cashDueToOwner,
@@ -1622,8 +1686,20 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
   if (hasLedger && ledgerHasBDay && ledgerHasSeller && ledgerHasType) {
     const ledgerHasCashAmount = hasCol(ledgerCols, 'cash_amount');
     const ledgerHasCardAmount = hasCol(ledgerCols, 'card_amount');
-    const mixedCashExpr = ledgerHasCashAmount ? 'COALESCE(ml.cash_amount, 0)' : 'COALESCE(p.payment_cash_amount, 0)';
-    const mixedCardExpr = ledgerHasCardAmount ? 'COALESCE(ml.card_amount, 0)' : 'COALESCE(p.payment_card_amount, 0)';
+    const mixedCashExpr = ledgerHasCashAmount
+      ? `CASE
+           WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+             THEN COALESCE(ml.cash_amount, 0)
+           ELSE COALESCE(p.payment_cash_amount, 0)
+         END`
+      : 'COALESCE(p.payment_cash_amount, 0)';
+    const mixedCardExpr = ledgerHasCardAmount
+      ? `CASE
+           WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+             THEN COALESCE(ml.card_amount, 0)
+           ELSE COALESCE(p.payment_card_amount, 0)
+         END`
+      : 'COALESCE(p.payment_card_amount, 0)';
 
     // Seller money movement: keep only real sellers (exclude dispatcher/admin/owner users).
     const prepayRows = safeAll(
@@ -1894,9 +1970,17 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
     }
   }).filter(shouldKeepParticipantRow);
   const liveUiTotals = getLiveUiTotals();
+  const liveUiSellerRows = Array.isArray(liveUiTotals?.sellers) ? liveUiTotals.sellers : [];
+  const liveUiSellerIds = new Set(liveUiSellerRows.map((seller) => Number(seller?.seller_id || 0)));
   const baseRowsForResponse = (
-    Array.isArray(liveUiTotals?.sellers) && liveUiTotals.sellers.length > 0
-      ? liveUiTotals.sellers
+    liveUiSellerRows.length > 0
+      ? [
+          ...liveUiSellerRows,
+          ...sellers.filter((seller) => (
+            String(seller?.role || '').toLowerCase() !== 'seller' &&
+            !liveUiSellerIds.has(Number(seller?.seller_id || 0))
+          )),
+        ]
       : sellers
   ).map((seller) => ({ ...seller }));
 
@@ -2008,62 +2092,49 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
       [businessDay]
     );
 
-    // Cash/Card breakdown with MIXED support (same logic as owner.mjs)
-    if (ledgerHasCashAmt && ledgerHasCardAmt) {
-      // money_ledger has cash_amount/card_amount columns
-      collectedCash = safeSum(
-        `SELECT COALESCE(SUM(
-          CASE WHEN method = 'CASH' THEN amount
-               WHEN method = 'MIXED' THEN COALESCE(cash_amount, 0)
-               ELSE 0 END
-        ), 0) AS v FROM money_ledger
-        WHERE status = 'POSTED'
-          AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-          AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
-          AND business_day = ?`,
-        [businessDay]
-      );
-      collectedCard = safeSum(
-        `SELECT COALESCE(SUM(
-          CASE WHEN method = 'CARD' THEN amount
-               WHEN method = 'MIXED' THEN COALESCE(card_amount, 0)
-               ELSE 0 END
-        ), 0) AS v FROM money_ledger
-        WHERE status = 'POSTED'
-          AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-          AND type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
-          AND business_day = ?`,
-        [businessDay]
-      );
-    } else {
-      // Fallback: JOIN with presales for MIXED split
-      collectedCash = safeSum(
-        `SELECT COALESCE(SUM(
-          CASE WHEN ml.method = 'CASH' THEN ml.amount
-               WHEN ml.method = 'MIXED' THEN COALESCE(p.payment_cash_amount, ml.amount)
-               ELSE 0 END
-        ), 0) AS v FROM money_ledger ml
-        LEFT JOIN presales p ON p.id = ml.presale_id
-        WHERE ml.status = 'POSTED'
-          AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-          AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
-          AND ml.business_day = ?`,
-        [businessDay]
-      );
-      collectedCard = safeSum(
-        `SELECT COALESCE(SUM(
-          CASE WHEN ml.method = 'CARD' THEN ml.amount
-               WHEN ml.method = 'MIXED' THEN COALESCE(p.payment_card_amount, 0)
-               ELSE 0 END
-        ), 0) AS v FROM money_ledger ml
-        LEFT JOIN presales p ON p.id = ml.presale_id
-        WHERE ml.status = 'POSTED'
-          AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-          AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
-          AND ml.business_day = ?`,
-        [businessDay]
-      );
-    }
+    // Cash/Card breakdown with MIXED support (same logic as owner.mjs).
+    // When split columns exist but historical rows are empty, fallback to presales split.
+    const mixedCashExpr = (ledgerHasCashAmt && ledgerHasCardAmt)
+      ? `CASE
+           WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+             THEN COALESCE(ml.cash_amount, 0)
+           ELSE COALESCE(p.payment_cash_amount, ml.amount)
+         END`
+      : 'COALESCE(p.payment_cash_amount, ml.amount)';
+    const mixedCardExpr = (ledgerHasCashAmt && ledgerHasCardAmt)
+      ? `CASE
+           WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+             THEN COALESCE(ml.card_amount, 0)
+           ELSE COALESCE(p.payment_card_amount, 0)
+         END`
+      : 'COALESCE(p.payment_card_amount, 0)';
+
+    collectedCash = safeSum(
+      `SELECT COALESCE(SUM(
+        CASE WHEN ml.method = 'CASH' THEN ml.amount
+             WHEN ml.method = 'MIXED' THEN ${mixedCashExpr}
+             ELSE 0 END
+      ), 0) AS v FROM money_ledger ml
+      LEFT JOIN presales p ON p.id = ml.presale_id
+      WHERE ml.status = 'POSTED'
+        AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+        AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+        AND ml.business_day = ?`,
+      [businessDay]
+    );
+    collectedCard = safeSum(
+      `SELECT COALESCE(SUM(
+        CASE WHEN ml.method = 'CARD' THEN ml.amount
+             WHEN ml.method = 'MIXED' THEN ${mixedCardExpr}
+             ELSE 0 END
+      ), 0) AS v FROM money_ledger ml
+      LEFT JOIN presales p ON p.id = ml.presale_id
+      WHERE ml.status = 'POSTED'
+        AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+        AND ml.type IN ('SALE_PREPAYMENT_CASH', 'SALE_PREPAYMENT_CARD', 'SALE_PREPAYMENT_MIXED', 'SALE_ACCEPTED_CASH', 'SALE_ACCEPTED_CARD', 'SALE_ACCEPTED_MIXED')
+        AND ml.business_day = ?`,
+      [businessDay]
+    );
   }
 
   collectedTotal = Number(liveUiTotals?.collected_total ?? collectedTotal ?? 0);
@@ -2163,8 +2234,20 @@ router.get('/summary', authenticateToken, canDispatchManageSlots, (req, res) => 
     // 2) PREPAYMENTS TODAY (for hint) + RESERVE OF FUTURE TRIPS (cash/card/total)
     const ledgerHasCashAmt = hasCol(ledgerCols, 'cash_amount');
     const ledgerHasCardAmt = hasCol(ledgerCols, 'card_amount');
-    const mixedCashExpr = ledgerHasCashAmt ? 'COALESCE(ml.cash_amount, 0)' : 'COALESCE(p.payment_cash_amount, ml.amount)';
-    const mixedCardExpr = ledgerHasCardAmt ? 'COALESCE(ml.card_amount, 0)' : 'COALESCE(p.payment_card_amount, 0)';
+    const mixedCashExpr = ledgerHasCashAmt
+      ? `CASE
+           WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+             THEN COALESCE(ml.cash_amount, 0)
+           ELSE COALESCE(p.payment_cash_amount, ml.amount)
+         END`
+      : 'COALESCE(p.payment_cash_amount, ml.amount)';
+    const mixedCardExpr = ledgerHasCardAmt
+      ? `CASE
+           WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
+             THEN COALESCE(ml.card_amount, 0)
+           ELSE COALESCE(p.payment_card_amount, 0)
+         END`
+      : 'COALESCE(p.payment_card_amount, 0)';
     const prepaymentTodayRow = safeAll(`
       SELECT
         COALESCE(SUM(CASE

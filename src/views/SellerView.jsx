@@ -83,7 +83,7 @@ const SellerView = () => {
       { id: 1, label: 'Тип лодки' },
       { id: 2, label: 'Рейс' },
       { id: 3, label: 'Клиент и оплата' },
-      { id: 4, label: 'Готово' },
+      { id: 4, label: 'Передача' },
     ],
     [],
   );
@@ -183,8 +183,7 @@ const SellerView = () => {
     try {
       setLoading(true);
       const res = await apiClient.createPresale(payload);
-      const presale = res?.presale || res;
-      setTicketInfo(presale);
+      setTicketInfo(res || null);
       setToast({ type: 'success', message: 'Предзаказ создан' });
 
       try {

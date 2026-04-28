@@ -55,7 +55,7 @@ describe('seller telegram queue model', () => {
             guest_profile: {
               display_name: 'Guest Eleven',
             },
-            available_actions: ['call_started', 'hold_extend'],
+            available_actions: ['call_started', 'hold_extend', 'cancel_request'],
           },
         ],
       },
@@ -64,6 +64,8 @@ describe('seller telegram queue model', () => {
 
     expect(model.activeCount).toBe(2);
     expect(model.bannerUrgency).toBe('near_expiry');
+    expect(model.hasBanner).toBe(true);
+    expect(model.unacknowledgedCount).toBe(2);
     expect(model.items[0]).toMatchObject({
       bookingRequestId: 11,
       guestName: 'Guest Eleven',
@@ -72,17 +74,52 @@ describe('seller telegram queue model', () => {
       requestedPrepaymentAmount: 700,
       requestedTripDate: '2036-04-11',
       requestedTimeSlot: '13:00',
-      requestStatusLabel: 'Hold active',
+      requestStatusLabel: 'Hold активен',
       urgency: 'near_expiry',
-      availableActions: ['call_started', 'hold_extend'],
+      availableActions: ['call_started', 'hold_extend', 'cancel_request'],
     });
     expect(model.items[1].urgency).toBe('urgent');
+  });
+
+  it('hides banner when all active requests are acknowledged', () => {
+    const nowMs = Date.parse('2036-04-10T10:00:00.000Z');
+    const model = buildSellerTelegramQueueModel(
+      {
+        items: [
+          {
+            booking_request: {
+              booking_request_id: 21,
+              request_status: 'HOLD_ACTIVE',
+              requested_trip_date: '2036-04-11',
+              requested_time_slot: '12:00',
+              requested_seats: 2,
+              requested_prepayment_amount: 1200,
+              contact_phone_e164: '+79990000021',
+            },
+            booking_hold: {
+              hold_expires_at: '2036-04-10T10:09:00.000Z',
+              requested_amount: 1200,
+            },
+            guest_profile: {
+              display_name: 'Guest Twenty One',
+            },
+            available_actions: ['prepayment_confirmed'],
+          },
+        ],
+      },
+      { nowMs, acknowledgedRequestIds: [21] }
+    );
+
+    expect(model.activeCount).toBe(1);
+    expect(model.hasRequests).toBe(true);
+    expect(model.hasBanner).toBe(false);
+    expect(model.unacknowledgedCount).toBe(0);
   });
 
   it('renders timer labels for live and expired requests', () => {
     expect(formatSellerTelegramTimer(65_000)).toBe('01:05');
     expect(formatSellerTelegramTimer(3_661_000)).toBe('01:01:01');
-    expect(formatSellerTelegramTimer(0)).toBe('Expired');
-    expect(formatSellerTelegramTimer(-1000)).toBe('Expired');
+    expect(formatSellerTelegramTimer(0)).toBe('Истек');
+    expect(formatSellerTelegramTimer(-1000)).toBe('Истек');
   });
 });

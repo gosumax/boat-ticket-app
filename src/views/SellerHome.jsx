@@ -8,7 +8,9 @@ import {
   sellerContentClass,
   sellerHelperTextClass,
 } from '../components/seller/sellerUi';
-import SellerTelegramGlobalAlertBanner from '../components/seller/telegram/SellerTelegramGlobalAlertBanner';
+import SellerTelegramGlobalAlertBanner, {
+  SELLER_TELEGRAM_REQUESTS_ROUTE,
+} from '../components/seller/telegram/SellerTelegramGlobalAlertBanner';
 
 const MENU_CARD_TONES = {
   sell: {
@@ -28,6 +30,12 @@ const MENU_CARD_TONES = {
     boxShadow: '0 30px 60px -28px rgba(109,40,217,0.86), 0 0 32px -12px rgba(168,85,247,0.62)',
     description: 'text-violet-50/90',
     button: 'bg-white text-violet-950 shadow-[0_14px_28px_-18px_rgba(255,255,255,0.85)] group-hover:bg-violet-50',
+  },
+  requests: {
+    backgroundImage: 'linear-gradient(135deg,#7c2d12 0%,#c2410c 42%,#f97316 100%)',
+    boxShadow: '0 30px 60px -28px rgba(194,65,12,0.84), 0 0 32px -12px rgba(251,146,60,0.62)',
+    description: 'text-orange-50/90',
+    button: 'bg-white text-orange-950 shadow-[0_14px_28px_-18px_rgba(255,255,255,0.85)] group-hover:bg-orange-50',
   },
 };
 
@@ -132,6 +140,14 @@ const SellerHome = () => {
               onClick={() => navigate('/seller/earnings')}
               testId="seller-home-earnings-btn"
               tone="earnings"
+            />
+            <MenuCard
+              title="Мои заявки"
+              description="Очередь входящих заявок из подключённых каналов."
+              accent="linear-gradient(135deg,#7c2d12 0%,#f97316 100%)"
+              onClick={() => navigate(SELLER_TELEGRAM_REQUESTS_ROUTE)}
+              testId="seller-home-requests-btn"
+              tone="requests"
             />
             <MenuCard
               title="Фото|видео"

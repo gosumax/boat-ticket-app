@@ -573,6 +573,7 @@ export function createPresaleFromPreparedInput({
   latAtSale = null,
   lngAtSale = null,
   zoneAtSale = null,
+  seatHoldAlreadyApplied = false,
 } = {}) {
   const normalizedActorRole = String(actorRole || '').toLowerCase();
   if (normalizedActorRole !== 'seller' && normalizedActorRole !== 'dispatcher') {
@@ -638,20 +639,22 @@ export function createPresaleFromPreparedInput({
     );
   }
 
-  console.log(
-    `[PRESALE_CAPACITY_CHECK] slotUid=${slotUid}, resolvedSlot.seats_left=${resolvedSlot.seats_left}, seats=${normalizedSeats}`
-  );
-  if (resolvedSlot.seats_left < normalizedSeats) {
+  if (!seatHoldAlreadyApplied) {
     console.log(
-      `[PRESALE_CAPACITY_FAIL] BEFORE TRANSACTION: seats_left ${resolvedSlot.seats_left} < requested ${normalizedSeats}`
+      `[PRESALE_CAPACITY_CHECK] slotUid=${slotUid}, resolvedSlot.seats_left=${resolvedSlot.seats_left}, seats=${normalizedSeats}`
     );
-    throw createPresaleRouteError('NO_SEATS', 'Недостаточно мест', 409, {
-      httpBody: {
-        ok: false,
-        code: 'NO_SEATS',
-        message: 'Недостаточно мест',
-      },
-    });
+    if (resolvedSlot.seats_left < normalizedSeats) {
+      console.log(
+        `[PRESALE_CAPACITY_FAIL] BEFORE TRANSACTION: seats_left ${resolvedSlot.seats_left} < requested ${normalizedSeats}`
+      );
+      throw createPresaleRouteError('NO_SEATS', 'Недостаточно мест', 409, {
+        httpBody: {
+          ok: false,
+          code: 'NO_SEATS',
+          message: 'Недостаточно мест',
+        },
+      });
+    }
   }
 
   let calculatedTotalPrice = 0;
@@ -792,25 +795,28 @@ export function createPresaleFromPreparedInput({
       normalizedSellerId,
       latitudeAtSale,
       longitudeAtSale,
-      normalizedZoneAtSale
+      normalizedZoneAtSale,
+      seatReservationAlreadyApplied
     ) => {
-      let updateResult;
-      if (slotType === 'generated') {
-        updateResult = db
-          .prepare(`
-            UPDATE generated_slots
-            SET seats_left = (CASE WHEN seats_left IS NULL OR seats_left < 1 THEN capacity ELSE seats_left END) - ?
-            WHERE id = ? AND (CASE WHEN seats_left IS NULL OR seats_left < 1 THEN capacity ELSE seats_left END) >= ?
-          `)
-          .run(seatCount, slotId, seatCount);
-      } else {
-        updateResult = db
-          .prepare(`
-            UPDATE boat_slots
-            SET seats_left = (CASE WHEN seats_left IS NULL OR seats_left < 1 THEN capacity ELSE seats_left END) - ?
-            WHERE id = ? AND (CASE WHEN seats_left IS NULL OR seats_left < 1 THEN capacity ELSE seats_left END) >= ?
-          `)
-          .run(seatCount, slotId, seatCount);
+      let updateResult = { changes: 1 };
+      if (!seatReservationAlreadyApplied) {
+        if (slotType === 'generated') {
+          updateResult = db
+            .prepare(`
+              UPDATE generated_slots
+              SET seats_left = (CASE WHEN seats_left IS NULL OR seats_left < 1 THEN capacity ELSE seats_left END) - ?
+              WHERE id = ? AND (CASE WHEN seats_left IS NULL OR seats_left < 1 THEN capacity ELSE seats_left END) >= ?
+            `)
+            .run(seatCount, slotId, seatCount);
+        } else {
+          updateResult = db
+            .prepare(`
+              UPDATE boat_slots
+              SET seats_left = (CASE WHEN seats_left IS NULL OR seats_left < 1 THEN capacity ELSE seats_left END) - ?
+              WHERE id = ? AND (CASE WHEN seats_left IS NULL OR seats_left < 1 THEN capacity ELSE seats_left END) >= ?
+            `)
+            .run(seatCount, slotId, seatCount);
+        }
       }
 
       if (updateResult.changes === 0) {
@@ -1314,7 +1320,8 @@ export function createPresaleFromPreparedInput({
       effectiveSellerId,
       latAtSale,
       lngAtSale,
-      resolvedZoneAtSale
+      resolvedZoneAtSale,
+      Boolean(seatHoldAlreadyApplied)
     );
   } catch (transactionError) {
     if (transactionError?.code === SHIFT_CLOSED_CODE) {

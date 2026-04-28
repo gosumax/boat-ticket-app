@@ -3,6 +3,7 @@ export const TELEGRAM_SELLER_WORK_QUEUE_ACTIONS = Object.freeze({
   not_reached: 'not_reached',
   hold_extend: 'hold_extend',
   prepayment_confirmed: 'prepayment_confirmed',
+  cancel_request: 'cancel_request',
 });
 
 export const TELEGRAM_SELLER_WORK_QUEUE_ACTION_NAMES = Object.freeze(
@@ -15,8 +16,6 @@ export const TELEGRAM_SELLER_WORK_QUEUE_ACTIVE_REQUEST_STATUSES = Object.freeze(
   'CONTACT_IN_PROGRESS',
   'HOLD_ACTIVE',
   'WAITING_PREPAYMENT',
-  'PREPAYMENT_CONFIRMED',
-  'CONFIRMED_TO_PRESALE',
 ]);
 
 export const TELEGRAM_SELLER_WORK_QUEUE_EVENT_TYPES = Object.freeze({

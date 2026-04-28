@@ -11,6 +11,7 @@ export const TELEGRAM_MINI_APP_TRIP_AVAILABILITY_STATES = Object.freeze([
   'unavailable',
 ]);
 export const TELEGRAM_MINI_APP_LOW_AVAILABILITY_SEAT_THRESHOLD = 3;
+export const TELEGRAM_MINI_APP_TRIP_BUSINESS_TIME_ZONE = 'Europe/Moscow';
 
 const SLOT_UID_PATTERN = /^(manual|generated):\d+$/;
 
@@ -88,6 +89,34 @@ function normalizeTimeSlot(value, label, reject) {
   }
   assertTimeSlotPart(normalized, label, reject);
   return normalized;
+}
+
+function resolveBusinessDateTimeParts(nowIso, reject) {
+  const parsedDate = new Date(nowIso);
+  if (Number.isNaN(parsedDate.getTime())) {
+    reject('trip availability clock returned an unusable timestamp');
+  }
+
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TELEGRAM_MINI_APP_TRIP_BUSINESS_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  })
+    .formatToParts(parsedDate)
+    .reduce((accumulator, part) => {
+      accumulator[part.type] = part.value;
+      return accumulator;
+    }, {});
+
+  return freezeMiniAppValue({
+    current_date: `${parts.year}-${parts.month}-${parts.day}`,
+    current_time: `${parts.hour}:${parts.minute}`,
+    time_zone: TELEGRAM_MINI_APP_TRIP_BUSINESS_TIME_ZONE,
+  });
 }
 
 export function normalizeMiniAppTripTypeFilter(value, reject) {
@@ -412,17 +441,17 @@ function buildManualRowsQueryContext(db) {
   });
 }
 
-function buildGeneratedRowsQuery(filters, context) {
+function buildGeneratedRowsQuery(filters, context, businessNow) {
   const whereParts = ['1 = 1'];
-  const params = [];
+  const whereParams = [];
 
   if (filters.requested_trip_date) {
     whereParts.push('gs.trip_date = ?');
-    params.push(filters.requested_trip_date);
+    whereParams.push(filters.requested_trip_date);
   }
   if (filters.trip_type_filter) {
     whereParts.push(`${context.productTypeExpression} = ?`);
-    params.push(filters.trip_type_filter);
+    whereParams.push(filters.trip_type_filter);
   }
 
   return {
@@ -451,10 +480,10 @@ function buildGeneratedRowsQuery(filters, context) {
         ${context.boatTypeExpression} AS trip_type,
         ${context.templateItemNameSelect} AS template_item_name,
         CASE
-          WHEN gs.trip_date > DATE('now', 'localtime')
+          WHEN gs.trip_date > ?
             OR (
-              gs.trip_date = DATE('now', 'localtime')
-              AND time(gs.time) >= time('now', 'localtime')
+              gs.trip_date = ?
+              AND time(gs.time) > time(?)
             )
             THEN 1
           ELSE 0
@@ -468,21 +497,26 @@ function buildGeneratedRowsQuery(filters, context) {
       ${context.templateItemsJoin}
       WHERE ${whereParts.join(' AND ')}
     `,
-    params,
+    params: [
+      businessNow.current_date,
+      businessNow.current_date,
+      businessNow.current_time,
+      ...whereParams,
+    ],
   };
 }
 
-function buildManualRowsQuery(filters, context) {
+function buildManualRowsQuery(filters, context, businessNow) {
   const whereParts = ['1 = 1', 'bs.trip_date IS NOT NULL', 'bs.time IS NOT NULL'];
-  const params = [];
+  const whereParams = [];
 
   if (filters.requested_trip_date) {
     whereParts.push('bs.trip_date = ?');
-    params.push(filters.requested_trip_date);
+    whereParams.push(filters.requested_trip_date);
   }
   if (filters.trip_type_filter) {
     whereParts.push("LOWER(TRIM(COALESCE(b.type, ''))) = ?");
-    params.push(filters.trip_type_filter);
+    whereParams.push(filters.trip_type_filter);
   }
 
   return {
@@ -511,10 +545,10 @@ function buildManualRowsQuery(filters, context) {
         b.type AS trip_type,
         NULL AS template_item_name,
         CASE
-          WHEN bs.trip_date > DATE('now', 'localtime')
+          WHEN bs.trip_date > ?
             OR (
-              bs.trip_date = DATE('now', 'localtime')
-              AND time(bs.time) >= time('now', 'localtime')
+              bs.trip_date = ?
+              AND time(bs.time) > time(?)
             )
             THEN 1
           ELSE 0
@@ -526,7 +560,12 @@ function buildManualRowsQuery(filters, context) {
         ON b.id = bs.boat_id
       WHERE ${whereParts.join(' AND ')}
     `,
-    params,
+    params: [
+      businessNow.current_date,
+      businessNow.current_date,
+      businessNow.current_time,
+      ...whereParams,
+    ],
   };
 }
 
@@ -702,27 +741,28 @@ export function projectMiniAppTripItem(row, nowIso) {
   });
 }
 
-export function listMiniAppTripRows(db, filters, reject) {
+export function listMiniAppTripRows(db, filters, reject, nowIso) {
   const generatedContext = buildGeneratedRowsQueryContext(db);
   const manualContext = buildManualRowsQueryContext(db);
   if (!generatedContext && !manualContext) {
     reject('Trip-slot catalog source is unavailable');
   }
 
+  const businessNow = resolveBusinessDateTimeParts(nowIso, reject);
   const rows = [];
   if (generatedContext) {
-    const generatedQuery = buildGeneratedRowsQuery(filters, generatedContext);
+    const generatedQuery = buildGeneratedRowsQuery(filters, generatedContext, businessNow);
     rows.push(...db.prepare(generatedQuery.sql).all(...generatedQuery.params));
   }
   if (manualContext) {
-    const manualQuery = buildManualRowsQuery(filters, manualContext);
+    const manualQuery = buildManualRowsQuery(filters, manualContext, businessNow);
     rows.push(...db.prepare(manualQuery.sql).all(...manualQuery.params));
   }
 
   return rows.sort(compareTripRows);
 }
 
-function buildGeneratedTripRowById(db, generatedSlotId) {
+function buildGeneratedTripRowById(db, generatedSlotId, businessNow) {
   const context = buildGeneratedRowsQueryContext(db);
   if (!context) {
     return null;
@@ -755,10 +795,10 @@ function buildGeneratedTripRowById(db, generatedSlotId) {
           ${context.boatTypeExpression} AS trip_type,
           ${context.templateItemNameSelect} AS template_item_name,
           CASE
-            WHEN gs.trip_date > DATE('now', 'localtime')
+            WHEN gs.trip_date > ?
               OR (
-                gs.trip_date = DATE('now', 'localtime')
-                AND time(gs.time) >= time('now', 'localtime')
+                gs.trip_date = ?
+                AND time(gs.time) > time(?)
               )
               THEN 1
             ELSE 0
@@ -773,12 +813,12 @@ function buildGeneratedTripRowById(db, generatedSlotId) {
         WHERE gs.id = ?
       `
     )
-    .get(generatedSlotId);
+    .get(businessNow.current_date, businessNow.current_date, businessNow.current_time, generatedSlotId);
 
   return row || null;
 }
 
-function buildManualTripRowById(db, boatSlotId) {
+function buildManualTripRowById(db, boatSlotId, businessNow) {
   const context = buildManualRowsQueryContext(db);
   if (!context) {
     return null;
@@ -811,10 +851,10 @@ function buildManualTripRowById(db, boatSlotId) {
           b.type AS trip_type,
           NULL AS template_item_name,
           CASE
-            WHEN bs.trip_date > DATE('now', 'localtime')
+            WHEN bs.trip_date > ?
               OR (
-                bs.trip_date = DATE('now', 'localtime')
-                AND time(bs.time) >= time('now', 'localtime')
+                bs.trip_date = ?
+                AND time(bs.time) > time(?)
               )
               THEN 1
             ELSE 0
@@ -827,18 +867,19 @@ function buildManualTripRowById(db, boatSlotId) {
         WHERE bs.id = ?
       `
     )
-    .get(boatSlotId);
+    .get(businessNow.current_date, businessNow.current_date, businessNow.current_time, boatSlotId);
 
   return row || null;
 }
 
-export function readMiniAppTripRowByReference(db, tripSlotReference, reject) {
+export function readMiniAppTripRowByReference(db, tripSlotReference, reject, nowIso) {
   const slotUid = normalizeString(tripSlotReference.slot_uid);
   const parsedUid = parseSlotUid(slotUid, reject);
+  const businessNow = resolveBusinessDateTimeParts(nowIso, reject);
   const row =
     parsedUid.slot_source === 'generated'
-      ? buildGeneratedTripRowById(db, parsedUid.slot_id)
-      : buildManualTripRowById(db, parsedUid.slot_id);
+      ? buildGeneratedTripRowById(db, parsedUid.slot_id, businessNow)
+      : buildManualTripRowById(db, parsedUid.slot_id, businessNow);
   if (!row) {
     reject(`Invalid trip/slot reference: ${slotUid}`);
   }

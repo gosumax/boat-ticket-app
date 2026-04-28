@@ -17,6 +17,7 @@ import {
   TELEGRAM_WEATHER_USEFUL_CONTENT_READ_MODEL_VERSION,
   TELEGRAM_USEFUL_CONTENT_FEED_ITEMS,
   TELEGRAM_USEFUL_CONTENT_FEED_VERSION,
+  TELEGRAM_USEFUL_RESORT_CARD_REFERENCES,
   TELEGRAM_USEFUL_CONTENT_GROUPINGS,
 } from '../../../shared/telegram/index.js';
 import {
@@ -87,20 +88,23 @@ const WEATHER_SOURCE_TYPES = Object.freeze({
   unavailable: 'unavailable',
 });
 
+const RESORT_CARD_REFERENCE_SET = new Set(TELEGRAM_USEFUL_RESORT_CARD_REFERENCES);
+const RESORT_CARD_REFERENCE_ORDER = new Map(
+  TELEGRAM_USEFUL_RESORT_CARD_REFERENCES.map((reference, index) => [reference, index])
+);
+
 const WEATHER_RECOMMENDATION_TEXT = Object.freeze({
-  rain: 'Возможен дождь. Возьмите непромокаемую одежду и защитите документы от влаги.',
-  wind: 'У причала ветер может ощущаться сильнее. Зафиксируйте головные уборы и свободные вещи.',
-  heat: 'Может быть жарко. Возьмите дополнительную питьевую воду и защиту от солнца.',
-  cool: 'На воде может быть прохладнее. Возьмите лёгкий тёплый слой одежды.',
-  steady: 'Погода выглядит спокойной. Всё равно рекомендуем взять воду и лёгкую накидку.',
-  fallback:
-    'Детали по погоде сейчас недоступны. На всякий случай возьмите воду и лёгкую накидку.',
+  rain: 'Возможен дождь. Возьмите лёгкую непромокаемую куртку.',
+  wind: 'У берега может быть ветрено. Лучше взять лёгкую накидку.',
+  heat: 'Жарко и солнечно. Пейте больше воды и используйте защиту от солнца.',
+  cool: 'У моря прохладнее, чем в посёлке. Пригодится тонкий верхний слой.',
+  steady: 'Погода спокойная и комфортная для прогулок.',
+  fallback: 'Данные по погоде временно обновляются.',
 });
 
-const DEFAULT_USEFUL_ENTRYPOINT_TITLE = 'Полезная информация';
+const DEFAULT_USEFUL_ENTRYPOINT_TITLE = 'Полезное в Архипо-Осиповке';
 const DEFAULT_USEFUL_ENTRYPOINT_BODY =
-  'Ниже собраны материалы для подготовки к поездке, включая погодные подсказки, когда данные доступны.';
-
+  'Актуальная погода и проверенные места рядом с побережьем Чёрного моря.';
 function rejectContentManagement(message) {
   throw new Error(`${ERROR_PREFIX} ${message}`);
 }
@@ -186,14 +190,13 @@ function normalizeReminderTypeInput(input = {}) {
 
 function buildDefaultReminderStatusLine(reminderType = null) {
   if (reminderType === '30_minutes_before_trip') {
-    return 'Посадка уже скоро. Держите нужные вещи под рукой и возьмите лёгкую накидку для комфорта.';
+    return 'До посадки осталось совсем немного. Держите телефон и документы под рукой.';
   }
   if (reminderType === '1_hour_before_trip') {
-    return 'Подготовьтесь к посадке и возьмите с собой воду и лёгкую накидку.';
+    return 'Поездка скоро начнётся. Проверьте время отправления и подготовьтесь к посадке.';
   }
   return WEATHER_RECOMMENDATION_TEXT.fallback;
 }
-
 function normalizeBookingRequestReferenceInput(input = {}) {
   const rawReference =
     input.booking_request_reference ??
@@ -272,8 +275,16 @@ function normalizeWeatherSnapshot(rawSnapshot = null, sourceType = WEATHER_SOURC
       condition_code: null,
       condition_label: null,
       temperature_c: null,
+      water_temperature_c: null,
+      sunset_time_iso: null,
+      sunset_time_local: null,
       wind_speed_mps: null,
       precipitation_probability: null,
+      location_country: null,
+      location_region: null,
+      location_locality: null,
+      location_water_body: null,
+      data_provider: null,
     });
   }
 
@@ -295,6 +306,18 @@ function normalizeWeatherSnapshot(rawSnapshot = null, sourceType = WEATHER_SOURC
       rawSnapshot.temperatureC ??
       rawSnapshot.temperature
   );
+  const waterTemperature = normalizeOptionalNumber(
+    rawSnapshot.water_temperature_c ??
+      rawSnapshot.waterTemperatureC ??
+      rawSnapshot.sea_surface_temperature ??
+      rawSnapshot.seaSurfaceTemperature
+  );
+  const sunsetTimeIso = normalizeString(
+    rawSnapshot.sunset_time_iso ?? rawSnapshot.sunsetTimeIso ?? rawSnapshot.sunset_iso
+  );
+  const sunsetTimeLocal = normalizeString(
+    rawSnapshot.sunset_time_local ?? rawSnapshot.sunsetTimeLocal ?? rawSnapshot.sunset
+  );
   const windSpeed = normalizeOptionalNumber(
     rawSnapshot.wind_speed_mps ??
       rawSnapshot.windSpeedMps ??
@@ -314,13 +337,15 @@ function normalizeWeatherSnapshot(rawSnapshot = null, sourceType = WEATHER_SOURC
     Boolean(conditionCode) ||
     Boolean(conditionLabel) ||
     temperature !== null ||
+    waterTemperature !== null ||
+    Boolean(sunsetTimeIso || sunsetTimeLocal) ||
     windSpeed !== null ||
     precipitationProbability !== null;
   const hasFullCore =
     Boolean(conditionCode || conditionLabel) &&
     temperature !== null &&
-    windSpeed !== null &&
-    precipitationProbability !== null;
+    waterTemperature !== null &&
+    Boolean(sunsetTimeIso || sunsetTimeLocal);
   const weatherDataState = hasFullCore ? 'available' : hasAny ? 'partial' : 'unavailable';
   const normalizedWeatherDataState = TELEGRAM_WEATHER_DATA_STATES.includes(weatherDataState)
     ? weatherDataState
@@ -333,11 +358,20 @@ function normalizeWeatherSnapshot(rawSnapshot = null, sourceType = WEATHER_SOURC
     condition_code: conditionCode,
     condition_label: conditionLabel,
     temperature_c: temperature,
+    water_temperature_c: waterTemperature,
+    sunset_time_iso: sunsetTimeIso,
+    sunset_time_local: sunsetTimeLocal,
     wind_speed_mps: windSpeed,
     precipitation_probability: precipitationProbability,
+    location_country: normalizeString(rawSnapshot.location_country ?? rawSnapshot.country),
+    location_region: normalizeString(rawSnapshot.location_region ?? rawSnapshot.region),
+    location_locality: normalizeString(rawSnapshot.location_locality ?? rawSnapshot.locality),
+    location_water_body: normalizeString(
+      rawSnapshot.location_water_body ?? rawSnapshot.water_body ?? rawSnapshot.waterBody
+    ),
+    data_provider: normalizeString(rawSnapshot.data_provider ?? rawSnapshot.provider),
   });
 }
-
 function buildWeatherRecommendations(weatherSnapshot) {
   if (!weatherSnapshot || weatherSnapshot.weather_data_state === 'unavailable') {
     return freezeTelegramUsefulContentValue([WEATHER_RECOMMENDATION_TEXT.fallback]);
@@ -785,6 +819,41 @@ function buildCreateSignature(input) {
   });
 }
 
+function buildManagedItemComparableSignature(item) {
+  return buildCreateSignature({
+    content_reference: item.content_reference,
+    content_group: item.content_group,
+    content_type: item.content_type,
+    title_summary: item.title_summary,
+    short_text_summary: item.short_text_summary,
+    visibility_action_summary: item.visibility_action_summary || null,
+    is_enabled: Boolean(item.is_enabled),
+  });
+}
+
+function shouldApplyFaqBaselineUpgrade(existing, baselineItem) {
+  if (!existing || baselineItem.content_type !== 'faq_item') {
+    return false;
+  }
+
+  const existingVersion = Number(existing.content_version);
+  if (!Number.isInteger(existingVersion) || existingVersion !== 1) {
+    return false;
+  }
+
+  const existingSignature = buildManagedItemComparableSignature(existing);
+  const baselineSignature = buildCreateSignature({
+    content_reference: baselineItem.content_reference,
+    content_group: baselineItem.content_group,
+    content_type: baselineItem.content_type,
+    title_summary: baselineItem.title_summary,
+    short_text_summary: baselineItem.short_text_summary,
+    visibility_action_summary: baselineItem.visibility_action_summary || null,
+    is_enabled: Boolean(baselineItem.is_enabled),
+  });
+  return !areManagedItemsEquivalent(existingSignature, baselineSignature);
+}
+
 export class TelegramUsefulContentFaqProjectionService {
   constructor({
     guestProfiles,
@@ -839,6 +908,29 @@ export class TelegramUsefulContentFaqProjectionService {
           { orderBy: 'content_version DESC' }
         );
         if (existing) {
+          if (!shouldApplyFaqBaselineUpgrade(existing, item)) {
+            continue;
+          }
+
+          const nowIso = this.nowIso();
+          this.managedContentItems.updateById(existing.telegram_managed_content_item_id, {
+            is_latest_version: 0,
+            updated_at: nowIso,
+          });
+          this.managedContentItems.create({
+            content_reference: item.content_reference,
+            content_group: item.content_group,
+            content_type: item.content_type,
+            title_summary: item.title_summary,
+            short_text_summary: item.short_text_summary,
+            visibility_action_summary: item.visibility_action_summary,
+            is_enabled: item.is_enabled ? 1 : 0,
+            content_version: Number(existing.content_version) + 1,
+            is_latest_version: 1,
+            versioned_from_item_id: existing.telegram_managed_content_item_id,
+            created_at: nowIso,
+            updated_at: nowIso,
+          });
           continue;
         }
         const baselineIso = item.baseline_timestamp_iso || this.nowIso();
@@ -1035,14 +1127,11 @@ export class TelegramUsefulContentFaqProjectionService {
         ? buildDefaultReminderStatusLine(reminderType)
         : recommendationLines[0] || buildDefaultReminderStatusLine(reminderType);
 
-    const usefulHeadline =
-      weatherSnapshot.weather_data_state === 'unavailable'
-        ? fallbackTitle
-        : 'Weather-aware trip tips';
+    const usefulHeadline = fallbackTitle || DEFAULT_USEFUL_ENTRYPOINT_TITLE;
     const usefulBody =
       weatherSnapshot.weather_data_state === 'unavailable'
         ? fallbackBody
-        : recommendationLines.join(' ');
+        : 'Смотрите актуальную погоду и подборку мест для отдыха рядом с морем.';
 
     return freezeTelegramUsefulContentValue({
       reminder_status_line: reminderStatusLine,
@@ -1408,8 +1497,26 @@ export class TelegramUsefulContentFaqProjectionService {
     const usefulFeed = this.readUsefulContentFeedForTelegramGuest(input);
     const usefulItems = freezeTelegramUsefulContentValue(
       [...(usefulFeed.items || [])]
-        .sort(sortByReference)
-        .slice(0, 5)
+        .filter((item) =>
+          RESORT_CARD_REFERENCE_SET.has(normalizeString(item?.content_reference))
+        )
+        .sort((left, right) => {
+          const leftReference = normalizeString(left?.content_reference);
+          const rightReference = normalizeString(right?.content_reference);
+          const leftOrder = RESORT_CARD_REFERENCE_ORDER.get(leftReference);
+          const rightOrder = RESORT_CARD_REFERENCE_ORDER.get(rightReference);
+          if (Number.isInteger(leftOrder) && Number.isInteger(rightOrder)) {
+            return leftOrder - rightOrder;
+          }
+          if (Number.isInteger(leftOrder)) {
+            return -1;
+          }
+          if (Number.isInteger(rightOrder)) {
+            return 1;
+          }
+          return sortByReference(left, right);
+        })
+        .slice(0, TELEGRAM_USEFUL_RESORT_CARD_REFERENCES.length)
     );
     const caringSummary = this.buildWeatherCaringContentSummary({
       weatherSnapshot,
@@ -1460,3 +1567,6 @@ export class TelegramUsefulContentFaqProjectionService {
     return this.readWeatherUsefulContentModelForTelegramGuest(input);
   }
 }
+
+
+

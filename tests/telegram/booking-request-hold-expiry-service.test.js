@@ -36,9 +36,29 @@ function createTestDb() {
       is_active INTEGER NOT NULL DEFAULT 1
     );
     CREATE TABLE presales (id INTEGER PRIMARY KEY AUTOINCREMENT);
+    CREATE TABLE generated_slots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trip_date TEXT,
+      time TEXT,
+      capacity INTEGER NOT NULL,
+      seats_left INTEGER
+    );
+    CREATE TABLE boat_slots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trip_date TEXT,
+      time TEXT,
+      capacity INTEGER NOT NULL,
+      seats_left INTEGER
+    );
   `);
   db.prepare(
     `INSERT INTO users (id, username, role, is_active) VALUES (1, 'seller-a', 'seller', 1)`
+  ).run();
+  db.prepare(
+    `
+      INSERT INTO generated_slots (id, trip_date, time, capacity, seats_left)
+      VALUES (42, '2026-04-11', '12:00', 12, 12)
+    `
   ).run();
   return db;
 }
@@ -298,6 +318,10 @@ describe('telegram booking-request hold expiry service', () => {
       hold_status: 'EXPIRED',
       last_extended_at: null,
     });
+    expect(
+      db.prepare('SELECT seats_left FROM generated_slots WHERE id = 42').get()
+        ?.seats_left
+    ).toBe(12);
 
     const event = context.repositories.bookingRequestEvents.getById(3);
     expect(event).toMatchObject({
@@ -373,6 +397,43 @@ describe('telegram booking-request hold expiry service', () => {
 
     expect(second).toEqual(first);
     expect(countRows(db, 'telegram_booking_holds')).toBe(1);
+    expect(countRows(db, 'telegram_booking_request_events')).toBe(3);
+  });
+
+  it('expires stale hold even when persisted hold expiry drifted from active hold state payload', () => {
+    const activeHoldState = createActiveInitialHoldState(context);
+    const driftedPersistedExpiry = '2026-04-10 10:40:30';
+    const expectedDriftedIso = new Date(driftedPersistedExpiry).toISOString();
+    const expectedDriftedUnixSeconds = Math.floor(
+      Date.parse(driftedPersistedExpiry) / 1000
+    );
+    context.repositories.bookingHolds.updateById(1, {
+      hold_expires_at: driftedPersistedExpiry,
+    });
+
+    const result = expireHold(context, activeHoldState);
+
+    expect(result).toMatchObject({
+      hold_status: 'EXPIRED',
+      hold_expired_at_summary: {
+        iso: expectedDriftedIso,
+        unix_seconds: expectedDriftedUnixSeconds,
+      },
+      hold_active: false,
+      hold_expired: true,
+    });
+    expect(context.repositories.bookingRequests.getById(1)).toMatchObject({
+      request_status: 'HOLD_EXPIRED',
+      last_status_at: '2026-04-10T10:47:00.000Z',
+    });
+    expect(context.repositories.bookingHolds.getById(1)).toMatchObject({
+      hold_status: 'EXPIRED',
+      hold_expires_at: driftedPersistedExpiry,
+    });
+    expect(
+      db.prepare('SELECT seats_left FROM generated_slots WHERE id = 42').get()
+        ?.seats_left
+    ).toBe(12);
     expect(countRows(db, 'telegram_booking_request_events')).toBe(3);
   });
 

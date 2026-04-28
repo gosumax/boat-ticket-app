@@ -250,6 +250,37 @@ function buildContactSummary(profileView = {}, usefulFeed = null) {
   });
 }
 
+function readBookingRequestsForGuestOrNull(
+  bookingRequestLifecycleProjectionService,
+  telegramUserReference
+) {
+  if (!telegramUserReference) {
+    return null;
+  }
+
+  try {
+    return bookingRequestLifecycleProjectionService.listBookingRequestsForGuest({
+      telegram_user_reference: telegramUserReference,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function readTicketViewForGuestOrNull(guestTicketViewProjectionService, telegramUserReference) {
+  if (!telegramUserReference) {
+    return null;
+  }
+
+  try {
+    return guestTicketViewProjectionService.readGuestTicketViewByTelegramUserReference({
+      telegram_user_reference: telegramUserReference,
+    });
+  } catch {
+    return null;
+  }
+}
+
 function mapStatusByAction(actionType) {
   if (actionType === 'open_trips' || actionType === 'open_contact') {
     return 'action_available';
@@ -348,13 +379,37 @@ export class TelegramGuestCommandActionOrchestrationService {
 
   resolveActionByUser(actionType, telegramUserReference, actionState, input = {}) {
     if (actionType === 'open_ticket') {
-      return this.guestTicketViewProjectionService.readGuestTicketViewByTelegramUserReference({
-        telegram_user_reference: telegramUserReference,
+      const ticketViewSummary =
+        this.guestTicketViewProjectionService.readGuestTicketViewByTelegramUserReference({
+          telegram_user_reference: telegramUserReference,
+        });
+      const bookingRequestsSummary = readBookingRequestsForGuestOrNull(
+        this.bookingRequestLifecycleProjectionService,
+        telegramUserReference
+      );
+      if (!bookingRequestsSummary) {
+        return ticketViewSummary;
+      }
+      return freezeSortedResultValue({
+        ...ticketViewSummary,
+        booking_requests_summary: bookingRequestsSummary,
       });
     }
     if (actionType === 'open_my_tickets') {
-      return this.bookingRequestLifecycleProjectionService.listBookingRequestsForGuest({
-        telegram_user_reference: telegramUserReference,
+      const bookingRequestsSummary =
+        this.bookingRequestLifecycleProjectionService.listBookingRequestsForGuest({
+          telegram_user_reference: telegramUserReference,
+        });
+      const ticketViewSummary = readTicketViewForGuestOrNull(
+        this.guestTicketViewProjectionService,
+        telegramUserReference
+      );
+      if (!ticketViewSummary) {
+        return bookingRequestsSummary;
+      }
+      return freezeSortedResultValue({
+        ...bookingRequestsSummary,
+        ticket_view_summary: ticketViewSummary,
       });
     }
     if (actionType === 'open_trips') {
@@ -377,7 +432,7 @@ export class TelegramGuestCommandActionOrchestrationService {
       });
     }
     if (actionType === 'open_useful_content') {
-      return this.usefulContentFaqProjectionService.readUsefulContentFeedForTelegramGuest({
+      return this.usefulContentFaqProjectionService.readWeatherUsefulContentModelForTelegramGuest({
         telegram_user_reference: telegramUserReference,
       });
     }
@@ -428,13 +483,40 @@ export class TelegramGuestCommandActionOrchestrationService {
     input = {}
   ) {
     if (actionType === 'open_ticket') {
-      return this.guestTicketViewProjectionService.readGuestTicketViewByBookingRequestReference({
-        booking_request_reference: bookingRequestReference,
+      const ticketViewSummary =
+        this.guestTicketViewProjectionService.readGuestTicketViewByBookingRequestReference({
+          booking_request_reference: bookingRequestReference,
+        });
+      const resolvedTelegramUserReference =
+        telegramUserReference ||
+        buildTelegramUserReferenceFromSummary(ticketViewSummary.telegram_user_summary);
+      const bookingRequestsSummary = readBookingRequestsForGuestOrNull(
+        this.bookingRequestLifecycleProjectionService,
+        resolvedTelegramUserReference
+      );
+      if (!bookingRequestsSummary) {
+        return ticketViewSummary;
+      }
+      return freezeSortedResultValue({
+        ...ticketViewSummary,
+        booking_requests_summary: bookingRequestsSummary,
       });
     }
     if (actionType === 'open_my_tickets') {
-      return this.bookingRequestLifecycleProjectionService.listBookingRequestsForGuest({
-        telegram_user_reference: telegramUserReference,
+      const bookingRequestsSummary =
+        this.bookingRequestLifecycleProjectionService.listBookingRequestsForGuest({
+          telegram_user_reference: telegramUserReference,
+        });
+      const ticketViewSummary =
+        this.guestTicketViewProjectionService.readGuestTicketViewByBookingRequestReference({
+          booking_request_reference: bookingRequestReference,
+        });
+      if (!ticketViewSummary) {
+        return bookingRequestsSummary;
+      }
+      return freezeSortedResultValue({
+        ...bookingRequestsSummary,
+        ticket_view_summary: ticketViewSummary,
       });
     }
     if (actionType === 'open_trips') {
@@ -457,8 +539,9 @@ export class TelegramGuestCommandActionOrchestrationService {
       });
     }
     if (actionType === 'open_useful_content') {
-      return this.usefulContentFaqProjectionService.readUsefulContentFeedForTelegramGuest({
+      return this.usefulContentFaqProjectionService.readWeatherUsefulContentModelForTelegramGuest({
         telegram_user_reference: telegramUserReference,
+        booking_request_reference: bookingRequestReference,
       });
     }
     if (actionType === 'open_faq') {

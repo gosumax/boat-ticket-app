@@ -137,7 +137,7 @@ describe('telegram seller work queue service', () => {
     context.services.sellerWorkQueueService.now = clock.now;
   });
 
-  it('lists seller-owned active booking requests and linked confirmed presales only', () => {
+  it('lists only seller-owned active booking requests', () => {
     const active = seedSellerRequest(context, { sellerId: 1, suffix: '1001' });
     const otherSeller = seedSellerRequest(context, { sellerId: 2, suffix: '1002' });
     const linked = seedSellerRequest(context, { sellerId: 1, suffix: '1003' });
@@ -163,21 +163,9 @@ describe('telegram seller work queue service', () => {
     const requestIds = queue.items.map((item) => item.booking_request.booking_request_id);
 
     expect(requestIds).toContain(active.bookingRequestId);
-    expect(requestIds).toContain(linked.bookingRequestId);
     expect(requestIds).not.toContain(otherSeller.bookingRequestId);
+    expect(requestIds).not.toContain(linked.bookingRequestId);
     expect(requestIds).not.toContain(closed.bookingRequestId);
-
-    const linkedItem = queue.items.find(
-      (item) => item.booking_request.booking_request_id === linked.bookingRequestId
-    );
-    expect(linkedItem.queue_item_type).toBe('linked_confirmed_presale');
-    expect(linkedItem.confirmed_presale).toMatchObject({
-      id: presaleId,
-      seller_id: 1,
-      slot_uid: 'generated:42',
-      tickets_json: { adult: 2 },
-    });
-    expect(linkedItem.available_actions).toEqual([]);
   });
 
   it('records call_started once per idempotency key and preserves conflicts', () => {
@@ -223,10 +211,11 @@ describe('telegram seller work queue service', () => {
     ).toThrow('Idempotency conflict');
   });
 
-  it('delegates hold_extend, not_reached, and prepayment_confirmed through lifecycle events idempotently', () => {
+  it('applies hold_extend, not_reached note, cancel_request, and prepayment_confirmed idempotently', () => {
     const holdExtend = seedSellerRequest(context, { sellerId: 1, suffix: '3001' });
     const notReached = seedSellerRequest(context, { sellerId: 1, suffix: '3002' });
     const prepayment = seedSellerRequest(context, { sellerId: 1, suffix: '3003' });
+    const cancelled = seedSellerRequest(context, { sellerId: 1, suffix: '3004' });
 
     const extended = context.services.sellerWorkQueueService.recordSellerAction({
       sellerId: 1,
@@ -251,6 +240,15 @@ describe('telegram seller work queue service', () => {
       bookingRequestId: prepayment.bookingRequestId,
       action: TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.prepayment_confirmed,
       idempotencyKey: 'prepayment-3003',
+      actionPayload: {
+        accepted_prepayment_amount: 1300,
+      },
+    });
+    const cancelledResult = context.services.sellerWorkQueueService.recordSellerAction({
+      sellerId: 1,
+      bookingRequestId: cancelled.bookingRequestId,
+      action: TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.cancel_request,
+      idempotencyKey: 'cancel-3004',
     });
 
     expect(extended.outcome).toBe('applied');
@@ -265,18 +263,26 @@ describe('telegram seller work queue service', () => {
       (event) => event.event_type === 'HOLD_EXTENDED'
     )).toHaveLength(1);
 
-    expect(closed.queue_item.booking_request.request_status).toBe('SELLER_NOT_REACHED');
-    expect(closed.queue_item.booking_hold.hold_status).toBe('RELEASED');
-    expect(closed.event.event_type).toBe('SELLER_NOT_REACHED');
-    expect(closed.event.event_payload.seller_work_queue_action).toBe(
+    expect(closed.queue_item.booking_request.request_status).toBe('HOLD_ACTIVE');
+    expect(closed.queue_item.booking_hold.hold_status).toBe('ACTIVE');
+    expect(closed.event.event_type).toBe('SELLER_NOT_REACHED_NOTE');
+    expect(closed.event.event_payload.seller_work_queue_action_raw).toBe(
       TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.not_reached
     );
 
     expect(confirmed.queue_item.booking_request.request_status).toBe('PREPAYMENT_CONFIRMED');
     expect(confirmed.queue_item.booking_hold.hold_status).toBe('CONVERTED');
     expect(confirmed.event.event_type).toBe('PREPAYMENT_CONFIRMED');
+    expect(confirmed.event.event_payload.accepted_prepayment_amount).toBe(1300);
     expect(confirmed.event.event_payload.seller_work_queue_action).toBe(
       TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.prepayment_confirmed
+    );
+
+    expect(cancelledResult.queue_item.booking_request.request_status).toBe('GUEST_CANCELLED');
+    expect(cancelledResult.queue_item.booking_hold.hold_status).toBe('CANCELLED');
+    expect(cancelledResult.event.event_type).toBe('GUEST_CANCELLED');
+    expect(cancelledResult.event.event_payload.seller_work_queue_action).toBe(
+      TELEGRAM_SELLER_WORK_QUEUE_ACTIONS.cancel_request
     );
   });
 

@@ -26,6 +26,10 @@ const BLOCKED_ERROR_CODES = new Set([
   'SELLER_NOT_FOUND',
   'SHIFT_CLOSED',
 ]);
+const LIVE_HOLD_EVENT_RESULT_PAYLOAD_KEYS = Object.freeze({
+  HOLD_STARTED: 'hold_activation_result',
+  HOLD_EXTENDED: 'hold_extension_result',
+});
 
 function buildAdapterResult({
   outcome,
@@ -64,10 +68,12 @@ function getBlockedOutcomeCode(error) {
 export class TelegramProductionPresaleHandoffAdapterService {
   constructor({
     bookingRequests,
+    bookingRequestEvents = null,
     executePresaleCreateInDomain = createPresaleFromPreparedInput,
     now = () => new Date(),
   }) {
     this.bookingRequests = bookingRequests;
+    this.bookingRequestEvents = bookingRequestEvents;
     this.executePresaleCreateInDomain = executePresaleCreateInDomain;
     this.now = now;
   }
@@ -76,7 +82,7 @@ export class TelegramProductionPresaleHandoffAdapterService {
     return Object.freeze({
       serviceName: 'production-presale-handoff-adapter-service',
       status: 'bridge_ready',
-      dependencyKeys: ['bookingRequests'],
+      dependencyKeys: ['bookingRequests', 'bookingRequestEvents'],
     });
   }
 
@@ -93,6 +99,45 @@ export class TelegramProductionPresaleHandoffAdapterService {
     }
 
     return bookingRequest;
+  }
+
+  resolveReusableLiveSeatHoldSummary(bookingRequestId) {
+    if (!this.bookingRequestEvents?.listBy) {
+      return null;
+    }
+
+    const events = this.bookingRequestEvents.listBy(
+      { booking_request_id: bookingRequestId },
+      { orderBy: 'booking_request_event_id ASC', limit: 500 }
+    );
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      const resultPayloadKey =
+        LIVE_HOLD_EVENT_RESULT_PAYLOAD_KEYS[event?.event_type] || null;
+      if (!resultPayloadKey) {
+        continue;
+      }
+
+      const payload = event?.event_payload?.[resultPayloadKey] || null;
+      const liveSeatHoldSummary = payload?.live_seat_hold_summary || null;
+      if (
+        !liveSeatHoldSummary ||
+        typeof liveSeatHoldSummary !== 'object' ||
+        liveSeatHoldSummary.seat_hold_applied !== true
+      ) {
+        continue;
+      }
+
+      const heldSeats = Number(liveSeatHoldSummary.held_seats);
+      return {
+        seat_hold_applied: true,
+        slot_uid: liveSeatHoldSummary.slot_uid || null,
+        held_seats:
+          Number.isInteger(heldSeats) && heldSeats > 0 ? heldSeats : null,
+      };
+    }
+
+    return null;
   }
 
   execute({
@@ -147,6 +192,10 @@ export class TelegramProductionPresaleHandoffAdapterService {
 
     const presaleRequest = bridgeInput?.presale_create_request || {};
     const telegramContext = bridgeInput?.telegram_handoff_context || {};
+    const reusableLiveSeatHoldSummary =
+      this.resolveReusableLiveSeatHoldSummary(bookingRequestId);
+    const seatHoldAlreadyApplied =
+      reusableLiveSeatHoldSummary?.seat_hold_applied === true;
     const sellerId =
       Number(telegramContext.seller_id ?? presaleRequest.sellerId ?? 0) || null;
 
@@ -169,6 +218,7 @@ export class TelegramProductionPresaleHandoffAdapterService {
         latAtSale: null,
         lngAtSale: null,
         zoneAtSale: null,
+        seatHoldAlreadyApplied,
       });
 
       this.bookingRequests.updateById(bookingRequestId, {
@@ -185,6 +235,8 @@ export class TelegramProductionPresaleHandoffAdapterService {
         payload: {
           booking_request_id: bookingRequestId,
           effective_seller_id: createResult.effectiveSellerId || null,
+          seat_hold_reused: seatHoldAlreadyApplied,
+          reusable_live_seat_hold_summary: reusableLiveSeatHoldSummary || null,
           presale: createResult.presale,
           slot: createResult.slot,
         },

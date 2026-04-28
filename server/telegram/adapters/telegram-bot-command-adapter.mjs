@@ -3,6 +3,10 @@ import {
   freezeTelegramHandoffValue,
   TELEGRAM_GUEST_COMMAND_ACTION_TYPES,
 } from '../../../shared/telegram/index.js';
+import {
+  buildBuyerTicketCodeFromCanonicalPresaleId,
+  parseBuyerTicketCodeToCanonicalPresaleId,
+} from '../../ticketing/buyer-ticket-reference.mjs';
 
 export const TELEGRAM_BOT_COMMAND_ADAPTER_NAME = 'telegram_bot_command_adapter';
 export const TELEGRAM_BOT_COMMAND_ADAPTER_RESULT_VERSION =
@@ -12,6 +16,9 @@ const SUPPORTED_ACTION_TYPES = new Set(TELEGRAM_GUEST_COMMAND_ACTION_TYPES);
 const COMMAND_TO_ACTION_TYPE = Object.freeze(
   Object.fromEntries(TELEGRAM_GUEST_COMMAND_ACTION_TYPES.map((actionType) => [`/${actionType}`, actionType]))
 );
+const START_PAYLOAD_PRESALE_PATTERN = /^([A-Za-z0-9_-]+)__p([1-9]\d*)$/;
+const BUYER_TICKET_CODE_EXTRACT_PATTERN =
+  /([АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЭЮЯ]{1,8})\s*[-]?\s*([1-9]\d{0,1})/giu;
 
 function normalizeString(value) {
   const normalized = String(value ?? '').trim();
@@ -95,6 +102,138 @@ function parseCommandText(rawText) {
     payload: normalizeString(match[3]),
     raw_text: text,
   });
+}
+
+function parseStartPayloadHandoffContext(rawPayload) {
+  const normalizedPayload = normalizeString(rawPayload);
+  if (!normalizedPayload) {
+    return null;
+  }
+
+  const match = normalizedPayload.match(START_PAYLOAD_PRESALE_PATTERN);
+  if (!match) {
+    return null;
+  }
+
+  const sourceToken = normalizeString(match[1]);
+  const canonicalPresaleId = Number(match[2]);
+  if (!sourceToken || !Number.isInteger(canonicalPresaleId) || canonicalPresaleId <= 0) {
+    return null;
+  }
+
+  return freezeSortedResultValue({
+    source_token: sourceToken,
+    canonical_presale_id: canonicalPresaleId,
+    start_payload: normalizedPayload,
+  });
+}
+
+function appendQueryParamToUrl(rawUrl, key, value) {
+  const normalizedUrl = normalizeString(rawUrl);
+  const normalizedKey = normalizeString(key);
+  const normalizedValue = normalizeString(value);
+  if (!normalizedUrl || !normalizedKey || !normalizedValue) {
+    return normalizedUrl;
+  }
+
+  try {
+    const parsed = new URL(normalizedUrl);
+    parsed.searchParams.set(normalizedKey, normalizedValue);
+    return parsed.toString();
+  } catch {
+    const [basePart, hashPart] = normalizedUrl.split('#', 2);
+    const separator = basePart.includes('?') ? '&' : '?';
+    const encodedParam = `${encodeURIComponent(normalizedKey)}=${encodeURIComponent(
+      normalizedValue
+    )}`;
+    const withQuery = `${basePart}${separator}${encodedParam}`;
+    return hashPart ? `${withQuery}#${hashPart}` : withQuery;
+  }
+}
+
+function buildMiniAppLaunchSummaryWithTicketContext(
+  miniAppLaunchSummary = null,
+  {
+    canonicalPresaleId = null,
+    buyerTicketCode = null,
+    sourceToken = null,
+  } = {}
+) {
+  const hasLaunchSummary =
+    miniAppLaunchSummary &&
+    typeof miniAppLaunchSummary === 'object' &&
+    !Array.isArray(miniAppLaunchSummary);
+  if (!hasLaunchSummary) {
+    return miniAppLaunchSummary;
+  }
+
+  const normalizedCanonicalPresaleId = Number(canonicalPresaleId);
+  const normalizedBuyerTicketCode = normalizeString(buyerTicketCode);
+  const normalizedSourceToken = normalizeString(sourceToken);
+  const hasCanonicalPresaleId =
+    Number.isInteger(normalizedCanonicalPresaleId) && normalizedCanonicalPresaleId > 0;
+  if (!hasCanonicalPresaleId && !normalizedBuyerTicketCode && !normalizedSourceToken) {
+    return miniAppLaunchSummary;
+  }
+
+  let launchUrl = normalizeString(miniAppLaunchSummary.launch_url);
+  if (!launchUrl) {
+    return miniAppLaunchSummary;
+  }
+
+  if (hasCanonicalPresaleId) {
+    launchUrl = appendQueryParamToUrl(
+      launchUrl,
+      'canonical_presale_id',
+      String(normalizedCanonicalPresaleId)
+    );
+  }
+  if (normalizedBuyerTicketCode) {
+    launchUrl = appendQueryParamToUrl(
+      launchUrl,
+      'buyer_ticket_code',
+      normalizedBuyerTicketCode
+    );
+  }
+  if (normalizedSourceToken) {
+    launchUrl = appendQueryParamToUrl(
+      launchUrl,
+      'source_token',
+      normalizedSourceToken
+    );
+  }
+
+  return freezeSortedResultValue({
+    ...miniAppLaunchSummary,
+    launch_url: launchUrl,
+    launch_context: {
+      canonical_presale_id: hasCanonicalPresaleId ? normalizedCanonicalPresaleId : null,
+      buyer_ticket_code: normalizedBuyerTicketCode || null,
+      source_token: normalizedSourceToken || null,
+    },
+  });
+}
+
+function extractBuyerTicketCodeFromText(rawText) {
+  const normalizedText = normalizeString(rawText);
+  if (!normalizedText) {
+    return null;
+  }
+
+  const extractor = new RegExp(BUYER_TICKET_CODE_EXTRACT_PATTERN);
+  let match = extractor.exec(normalizedText.toUpperCase());
+  while (match) {
+    const buyerTicketCode = `${match[1]}${match[2]}`;
+    try {
+      parseBuyerTicketCodeToCanonicalPresaleId(buyerTicketCode);
+      return buyerTicketCode;
+    } catch {
+      // keep scanning until we find a valid compact buyer ticket code pattern
+    }
+    match = extractor.exec(normalizedText.toUpperCase());
+  }
+
+  return null;
 }
 
 function parseActionPayloadBookingReference(payload) {
@@ -228,10 +367,17 @@ export class TelegramBotCommandAdapter {
     });
   }
 
-  attachOutboundResponseSummary(rawUpdate, result) {
+  attachOutboundResponseSummary(
+    rawUpdate,
+    result,
+    miniAppLaunchSummaryOverride = null
+  ) {
     if (!this.webhookOutboundResponseOrchestrationService) {
       return result;
     }
+
+    const miniAppLaunchSummary =
+      miniAppLaunchSummaryOverride || this.telegramMiniAppLaunchSummary;
 
     try {
       const outboundResponseSummary =
@@ -239,7 +385,7 @@ export class TelegramBotCommandAdapter {
           adapter_type: 'command',
           raw_update: rawUpdate,
           adapter_result_summary: result,
-          mini_app_launch_summary: this.telegramMiniAppLaunchSummary,
+          mini_app_launch_summary: miniAppLaunchSummary,
         });
       if (!outboundResponseSummary) {
         return result;
@@ -279,8 +425,38 @@ export class TelegramBotCommandAdapter {
 
   handleCommandUpdate(rawUpdate) {
     const nowIso = resolveNowIso(this.now);
-    const parsedCommand = parseCommandText(rawUpdate?.message?.text);
+    const rawMessageText = rawUpdate?.message?.text;
+    const parsedCommand = parseCommandText(rawMessageText);
     if (!parsedCommand) {
+      const manualBuyerTicketCode = extractBuyerTicketCodeFromText(rawMessageText);
+      if (manualBuyerTicketCode) {
+        const canonicalPresaleId =
+          parseBuyerTicketCodeToCanonicalPresaleId(manualBuyerTicketCode);
+        const manualLookupSummary = freezeSortedResultValue({
+          lookup_status: 'ticket_found',
+          buyer_ticket_code: manualBuyerTicketCode,
+          canonical_presale_id: canonicalPresaleId,
+        });
+        const launchSummary =
+          buildMiniAppLaunchSummaryWithTicketContext(
+            this.telegramMiniAppLaunchSummary,
+            {
+              canonicalPresaleId,
+              buyerTicketCode: manualBuyerTicketCode,
+            }
+          );
+        const baseResult = buildResult({
+          mappingStatus: 'mapped_ticket_code_message',
+          operationType: 'ticket_lookup_by_buyer_code',
+          operationStatus: 'processed',
+          mappedCommandSummary: null,
+          telegramUserReference: buildTelegramUserReferenceFromMessage(rawUpdate?.message),
+          operationResultSummary: manualLookupSummary,
+          nowIso,
+        });
+        return this.attachOutboundResponseSummary(rawUpdate, baseResult, launchSummary);
+      }
+
       return buildResult({
         mappingStatus: 'ignored_non_command',
         operationType: null,
@@ -294,8 +470,34 @@ export class TelegramBotCommandAdapter {
 
     try {
       if (parsedCommand.command === '/start') {
+        const startHandoffContext = parseStartPayloadHandoffContext(parsedCommand.payload);
+        const startHandoffBuyerTicketCode = startHandoffContext
+          ? buildBuyerTicketCodeFromCanonicalPresaleId(startHandoffContext.canonical_presale_id)
+          : null;
         const runtimeResult =
           this.runtimeEntrypointOrchestrationService.processInboundStartUpdate(rawUpdate);
+        const runtimeOperationResultSummary = startHandoffContext
+          ? freezeSortedResultValue({
+              ...runtimeResult,
+              start_handoff_summary: {
+                lookup_status: 'ticket_found',
+                source_token: startHandoffContext.source_token,
+                canonical_presale_id: startHandoffContext.canonical_presale_id,
+                buyer_ticket_code: startHandoffBuyerTicketCode,
+              },
+            })
+          : runtimeResult;
+        const startLaunchSummary = startHandoffContext
+            ? buildMiniAppLaunchSummaryWithTicketContext(
+                this.telegramMiniAppLaunchSummary,
+                {
+                  canonicalPresaleId: startHandoffContext.canonical_presale_id,
+                  buyerTicketCode: startHandoffBuyerTicketCode,
+                  sourceToken: startHandoffContext.source_token,
+                }
+              )
+          : this.telegramMiniAppLaunchSummary;
+
         const baseResult = buildResult({
           mappingStatus: 'mapped_start_command',
           mappedCommandSummary,
@@ -310,10 +512,10 @@ export class TelegramBotCommandAdapter {
               : null,
           relatedBookingRequestReference:
             runtimeResult.related_booking_request_reference || null,
-          operationResultSummary: runtimeResult,
+          operationResultSummary: runtimeOperationResultSummary,
           nowIso,
         });
-        return this.attachOutboundResponseSummary(rawUpdate, baseResult);
+        return this.attachOutboundResponseSummary(rawUpdate, baseResult, startLaunchSummary);
       }
 
       if (parsedCommand.command === '/template_message') {

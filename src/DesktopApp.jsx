@@ -6,25 +6,25 @@ import ProtectedRoute from './components/ProtectedRoute';
 
 // Import views
 import LoginPage from './views/LoginPage';
-import SellerView from './views/SellerView';
-import DispatcherView from './views/DispatcherView';
-import AdminView from './views/AdminView';
 import UnauthorizedPage from './views/UnauthorizedPage';
+import SellerView from './views/SellerView';
 import SellerHome from './views/SellerHome';
 import SellerEarnings from './views/SellerEarnings';
 import SellerMedia from './views/SellerMedia';
 import SellerTelegramRequests from './views/SellerTelegramRequests';
-import DispatcherShiftClose from './views/DispatcherShiftClose';
-import TelegramMiniApp from './telegram/TelegramMiniApp';
 import {
   hasTelegramMiniAppLaunchHint,
   resolveTelegramMiniAppLaunchTarget,
 } from './telegram/mini-app-identity.js';
-import AdminTelegramContentManagementView from './telegram/AdminTelegramContentManagementView';
-import AdminTelegramSourceManagementView from './telegram/AdminTelegramSourceManagementView';
-import AdminTelegramAnalyticsView from './telegram/AdminTelegramAnalyticsView';
 import { SellerTelegramRequestsProvider } from './components/seller/telegram/SellerTelegramRequestsContext';
 
+const DispatcherView = lazy(() => import('./views/DispatcherView'));
+const DispatcherShiftClose = lazy(() => import('./views/DispatcherShiftClose'));
+const AdminView = lazy(() => import('./views/AdminView'));
+const TelegramMiniApp = lazy(() => import('./telegram/TelegramMiniApp'));
+const AdminTelegramContentManagementView = lazy(() => import('./telegram/AdminTelegramContentManagementView'));
+const AdminTelegramSourceManagementView = lazy(() => import('./telegram/AdminTelegramSourceManagementView'));
+const AdminTelegramAnalyticsView = lazy(() => import('./telegram/AdminTelegramAnalyticsView'));
 // Owner UI (lazy-loaded to keep buyer Mini App bootstrap lightweight on WebKit)
 const OwnerView = lazy(() => import('./views/OwnerView'));
 const OwnerMoneyView = lazy(() => import('./views/OwnerMoneyView'));
@@ -56,7 +56,7 @@ function DesktopApp() {
         {/* Public */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/unauthorized" element={<UnauthorizedPage />} />
-        <Route path="/telegram/mini-app/*" element={<TelegramMiniApp />} />
+        <Route path="/telegram/mini-app/*" element={<Suspense fallback={null}><TelegramMiniApp /></Suspense>} />
 
         {/* Entry */}
         <Route path="/" element={<RoleHomeRedirect />} />
@@ -119,7 +119,9 @@ function DesktopApp() {
           path="/dispatcher/*"
           element={
             <ProtectedRoute requiredRole="dispatcher">
-              <DispatcherView />
+              <Suspense fallback={null}>
+                <DispatcherView />
+              </Suspense>
             </ProtectedRoute>
           }
         />
@@ -127,7 +129,9 @@ function DesktopApp() {
           path="/dispatcher/shift-close"
           element={
             <ProtectedRoute requiredRole="dispatcher">
-              <DispatcherShiftClose />
+              <Suspense fallback={null}>
+                <DispatcherShiftClose />
+              </Suspense>
             </ProtectedRoute>
           }
         />
@@ -137,7 +141,9 @@ function DesktopApp() {
           path="/admin/telegram-sources"
           element={
             <ProtectedRoute requiredRole={['admin', 'owner', 'super-admin', 'super_admin']}>
-              <AdminTelegramSourceManagementView />
+              <Suspense fallback={null}>
+                <AdminTelegramSourceManagementView />
+              </Suspense>
             </ProtectedRoute>
           }
         />
@@ -145,7 +151,9 @@ function DesktopApp() {
           path="/admin/telegram-analytics"
           element={
             <ProtectedRoute requiredRole={['admin', 'owner', 'super-admin', 'super_admin']}>
-              <AdminTelegramAnalyticsView />
+              <Suspense fallback={null}>
+                <AdminTelegramAnalyticsView />
+              </Suspense>
             </ProtectedRoute>
           }
         />
@@ -153,7 +161,9 @@ function DesktopApp() {
           path="/admin/telegram-content"
           element={
             <ProtectedRoute requiredRole={['admin', 'owner', 'super-admin', 'super_admin']}>
-              <AdminTelegramContentManagementView />
+              <Suspense fallback={null}>
+                <AdminTelegramContentManagementView />
+              </Suspense>
             </ProtectedRoute>
           }
         />
@@ -161,7 +171,9 @@ function DesktopApp() {
           path="/admin/*"
           element={
             <ProtectedRoute requiredRole="admin">
-              <AdminView />
+              <Suspense fallback={null}>
+                <AdminView />
+              </Suspense>
             </ProtectedRoute>
           }
         />

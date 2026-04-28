@@ -87,6 +87,31 @@ function typeLabel(type) {
   return 'Рейс';
 }
 
+function normalizeTripsPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.slots)) return payload.slots;
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+}
+
+function findTripForLookupMatch(trips, match) {
+  if (!Array.isArray(trips) || trips.length === 0 || !match) return null;
+
+  const slotUid = String(match?.slot_uid || '');
+  if (slotUid) {
+    const bySlotUid = trips.find((trip) => String(trip?.slot_uid || '') === slotUid);
+    if (bySlotUid) return bySlotUid;
+  }
+
+  const boatSlotId = Number(match?.boat_slot_id);
+  if (Number.isInteger(boatSlotId) && boatSlotId > 0) {
+    const byBoatSlotId = trips.find((trip) => Number(trip?.id) === boatSlotId);
+    if (byBoatSlotId) return byBoatSlotId;
+  }
+
+  return null;
+}
+
 const TicketSellingView = ({
   dateFrom,
   dateTo,
@@ -97,6 +122,9 @@ const TicketSellingView = ({
   refreshAllSlots,
   shiftClosed,
   isActive = true,
+  ticketLookupRequest = null,
+  onTicketLookupResult,
+  onLookupActionComplete,
 }) => {
   const [trips, setTrips] = useState(() => {
     try {
@@ -109,26 +137,25 @@ const TicketSellingView = ({
   });
   const [loading, setLoading] = useState(false);
   const [selectedTrip, setSelectedTrip] = useState(null);
+  const [ticketLookupContext, setTicketLookupContext] = useState(null);
   const didInitRef = useRef(false);
   const inFlightRef = useRef(false);
   const pendingReloadRef = useRef(false);
   const sigRef = useRef('');
+  const lastHandledLookupIdRef = useRef(null);
 
   const loadTrips = useCallback(async (opts = {}) => {
     const silent = !!opts.silent;
     const force = !!opts.force;
     if (inFlightRef.current) {
       pendingReloadRef.current = true;
-      return;
+      return null;
     }
     inFlightRef.current = true;
     if (!silent) setLoading(true);
     try {
       const data = await apiClient.getTrips();
-      let next = [];
-      if (Array.isArray(data)) next = data;
-      else if (data?.slots && Array.isArray(data.slots)) next = data.slots;
-      else if (data?.data && Array.isArray(data.data)) next = data.data;
+      const next = normalizeTripsPayload(data);
 
       const sig = JSON.stringify(next.map((t) => ({
         id: t?.id,
@@ -152,8 +179,10 @@ const TicketSellingView = ({
           sessionStorage.setItem('dispatcher_trips_cache', JSON.stringify(next));
         } catch {}
       }
+      return next;
     } catch (e) {
       console.error(e);
+      return null;
     } finally {
       if (!silent) setLoading(false);
       inFlightRef.current = false;
@@ -237,6 +266,94 @@ const TicketSellingView = ({
     });
   }, [trips.length, filteredTrips.length, onTripCountsChange]);
 
+  useEffect(() => {
+    const requestId = ticketLookupRequest?.id;
+    const lookupQuery = String(ticketLookupRequest?.query || '').trim();
+    if (!requestId || !lookupQuery) return;
+    if (lastHandledLookupIdRef.current === requestId) return;
+    lastHandledLookupIdRef.current = requestId;
+
+    let cancelled = false;
+    const reportResult = (payload) => {
+      if (!cancelled) {
+        onTicketLookupResult?.({
+          id: requestId,
+          query: lookupQuery,
+          ...payload,
+        });
+      }
+    };
+
+    const run = async () => {
+      try {
+        const response = await apiClient.lookupDispatcherTicket(lookupQuery);
+        const match = response?.match || null;
+        if (!match) {
+          throw new Error('\u0411\u0438\u043b\u0435\u0442 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d');
+        }
+
+        let matchedTrip = findTripForLookupMatch(trips, match);
+        if (!matchedTrip) {
+          const freshPayload = await apiClient.getTrips();
+          const freshTrips = normalizeTripsPayload(freshPayload);
+          if (Array.isArray(freshTrips) && freshTrips.length > 0) {
+            const sig = JSON.stringify(freshTrips.map((t) => ({
+              id: t?.id,
+              slot_uid: t?.slot_uid,
+              trip_date: t?.trip_date,
+              time: t?.time,
+              status: t?.status,
+              is_active: t?.is_active,
+              capacity: t?.capacity,
+              seats_left: t?.seats_left ?? t?.seatsLeft ?? t?.free_seats ?? t?.freeSeats,
+              occupied: t?.occupied ?? t?.sold ?? t?.taken_seats ?? t?.takenSeats,
+              paid_total: t?.paid_total ?? t?.paidTotal,
+              has_debt: t?.has_debt ?? t?.hasDebt,
+              debt_amount: t?.debt_amount ?? t?.debtAmount,
+              updated_at: t?.updated_at ?? t?.updatedAt,
+            })));
+            sigRef.current = sig;
+            setTrips(freshTrips);
+            try {
+              sessionStorage.setItem('dispatcher_trips_cache', JSON.stringify(freshTrips));
+            } catch {}
+            matchedTrip = findTripForLookupMatch(freshTrips, match);
+          }
+        }
+
+        if (!matchedTrip) {
+          throw new Error('\u0420\u0435\u0439\u0441 \u0434\u043b\u044f \u0431\u0438\u043b\u0435\u0442\u0430 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d');
+        }
+
+        if (!cancelled) {
+          const presaleId = Number(match?.presale_id);
+          const ticketId = Number(match?.ticket_id);
+          setSelectedTrip(matchedTrip);
+          setTicketLookupContext({
+            presaleId: Number.isInteger(presaleId) && presaleId > 0 ? presaleId : null,
+            ticketId: Number.isInteger(ticketId) && ticketId > 0 ? ticketId : null,
+            ticketCode: String(match?.public_ticket_code || match?.buyer_ticket_code || match?.ticket_code || '').trim() || null,
+            lookupQuery,
+            key: `${requestId}:${presaleId || ''}:${ticketId || ''}`,
+          });
+        }
+
+        reportResult({ ok: true, match });
+      } catch (error) {
+        reportResult({
+          ok: false,
+          error: error?.message || '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u0440\u044b\u0442\u044c \u0431\u0438\u043b\u0435\u0442',
+        });
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [ticketLookupRequest, trips, onTicketLookupResult]);
+
   if (selectedTrip) {
     return (
       <div className="dp-overlay z-50 overflow-y-auto">
@@ -244,10 +361,23 @@ const TicketSellingView = ({
           <div className="dp-sheet">
             <PassengerList
               trip={selectedTrip}
-              onBack={() => setSelectedTrip(null)}
+              onBack={() => {
+                setSelectedTrip(null);
+                setTicketLookupContext(null);
+              }}
+              onLookupActionComplete={(payload) => {
+                setSelectedTrip(null);
+                setTicketLookupContext(null);
+                onLookupActionComplete?.(payload);
+              }}
               refreshTrips={loadTrips}
               refreshAllSlots={refreshAllSlots}
               shiftClosed={shiftClosed}
+              focusedPresaleId={ticketLookupContext?.presaleId}
+              focusedTicketId={ticketLookupContext?.ticketId}
+              focusedTicketCode={ticketLookupContext?.ticketCode}
+              focusedLookupQuery={ticketLookupContext?.lookupQuery}
+              focusLookupKey={ticketLookupContext?.key}
             />
           </div>
         </div>
@@ -304,7 +434,10 @@ const TicketSellingView = ({
               key={trip.slot_uid || trip.id}
               data-testid={`trip-card-${trip.slot_uid || trip.id}`}
               className={`dp-card dp-card--interactive dp-trip-card ${cardGlow} ${soldOut ? 'opacity-70' : ''} ${shiftClosed ? 'cursor-default' : 'cursor-pointer'} ${almostFull ? 'border-amber-300/20' : ''}`}
-              onClick={shiftClosed ? undefined : () => setSelectedTrip(trip)}
+              onClick={shiftClosed ? undefined : () => {
+                setSelectedTrip(trip);
+                setTicketLookupContext(null);
+              }}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">

@@ -16,24 +16,59 @@ function roundToKopecks(amount) {
   return Math.round(Number(amount || 0) * 100) / 100;
 }
 
+const schemaCacheByDb = new WeakMap();
+
+function getSchemaCache(db) {
+  let cache = schemaCacheByDb.get(db);
+  if (!cache) {
+    cache = {
+      tables: new Map(),
+      columns: new Map(),
+    };
+    schemaCacheByDb.set(db, cache);
+  }
+  return cache;
+}
+
 function safeTableExists(db, tableName) {
+  const cache = getSchemaCache(db);
+  if (cache.tables.has(tableName)) {
+    return cache.tables.get(tableName);
+  }
+
   try {
     const row = db
       .prepare("SELECT 1 AS ok FROM sqlite_master WHERE name = ? AND type IN ('table','view') LIMIT 1")
       .get(tableName);
-    return !!row;
+    const exists = !!row;
+    cache.tables.set(tableName, exists);
+    return exists;
   } catch {
+    cache.tables.set(tableName, false);
     return false;
   }
 }
 
 function safeGetColumns(db, tableName) {
+  const cache = getSchemaCache(db);
+  if (cache.columns.has(tableName)) {
+    return cache.columns.get(tableName);
+  }
+
   try {
-    if (!safeTableExists(db, tableName)) return new Set();
+    if (!safeTableExists(db, tableName)) {
+      const empty = new Set();
+      cache.columns.set(tableName, empty);
+      return empty;
+    }
     const rows = db.prepare(`PRAGMA table_info('${tableName}')`).all();
-    return new Set((rows || []).map((r) => r.name));
+    const columns = new Set((rows || []).map((r) => r.name));
+    cache.columns.set(tableName, columns);
+    return columns;
   } catch {
-    return new Set();
+    const empty = new Set();
+    cache.columns.set(tableName, empty);
+    return empty;
   }
 }
 

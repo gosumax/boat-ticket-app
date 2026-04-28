@@ -34,9 +34,64 @@ export function createTestDb() {
       is_active INTEGER NOT NULL DEFAULT 1
     );
     CREATE TABLE presales (id INTEGER PRIMARY KEY AUTOINCREMENT);
+    CREATE TABLE boats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT,
+      type TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      price_adult REAL NOT NULL DEFAULT 0,
+      price_teen REAL NULL,
+      price_child REAL NOT NULL DEFAULT 0
+    );
+    CREATE TABLE generated_slots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      schedule_template_id INTEGER NULL,
+      boat_id INTEGER,
+      trip_date TEXT,
+      time TEXT,
+      capacity INTEGER NOT NULL,
+      seats_left INTEGER,
+      duration_minutes INTEGER NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      price_adult INTEGER NULL,
+      price_child INTEGER NULL,
+      price_teen INTEGER NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE boat_slots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      boat_id INTEGER,
+      trip_date TEXT,
+      time TEXT,
+      price INTEGER NULL,
+      capacity INTEGER NOT NULL,
+      seats_left INTEGER,
+      duration_minutes INTEGER NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      price_adult INTEGER NULL,
+      price_child INTEGER NULL,
+      price_teen INTEGER NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
   `);
   db.prepare(
     `INSERT INTO users (id, username, role, is_active) VALUES (1, 'seller-a', 'seller', 1)`
+  ).run();
+  db.prepare(
+    `
+      INSERT INTO boats (id, name, type, is_active, price_adult, price_teen, price_child)
+      VALUES (1, 'Sea Breeze', 'speed', 1, 1800, 1600, 1200)
+    `
+  ).run();
+  db.prepare(
+    `
+      INSERT INTO generated_slots (id, boat_id, trip_date, time, capacity, seats_left, is_active)
+      VALUES
+        (41, 1, '2036-04-11', '10:00', 12, 12, 1),
+        (42, 1, '2026-04-11', '12:00', 12, 12, 1)
+    `
   ).run();
   return db;
 }

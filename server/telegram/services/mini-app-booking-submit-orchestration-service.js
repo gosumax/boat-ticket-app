@@ -654,6 +654,54 @@ export class TelegramMiniAppBookingSubmitOrchestrationService {
     return `telegram_mini_app_booking_submit:${buildStableHash(signatureBase)}`;
   }
 
+  hasActiveBookingRequestForTelegramUser(telegramUserId) {
+    if (!telegramUserId) {
+      return false;
+    }
+    const guestProfile = this.guestProfiles.findOneBy(
+      { telegram_user_id: telegramUserId },
+      { orderBy: 'guest_profile_id ASC' }
+    );
+    if (!guestProfile) {
+      return false;
+    }
+
+    if (typeof this.bookingRequestCreationService?.hasActiveRequestForGuest === 'function') {
+      return this.bookingRequestCreationService.hasActiveRequestForGuest(
+        guestProfile.guest_profile_id
+      );
+    }
+
+    return false;
+  }
+
+  buildCreationInput(normalizedInput, routingDecision, submitIdempotencyKey) {
+    return {
+      telegram_guest: normalizedInput.telegram_user_summary,
+      current_telegram_routing_decision: routingDecision,
+      requested_trip_slot_reference: normalizedInput.selected_trip_slot_reference,
+      requested_seats: normalizedInput.requested_seats_count,
+      requested_ticket_mix: normalizedInput.requested_ticket_mix,
+      requested_prepayment_amount: normalizedInput.requested_prepayment_amount,
+      contact_phone: normalizedInput.contact_phone_e164,
+      idempotency_key: submitIdempotencyKey,
+    };
+  }
+
+  readCurrentTripSeatsLeft(selectedTripSlotReference) {
+    try {
+      const tripCard = this.miniAppTripCardQueryService.readMiniAppTripCardByTripSlotReference(
+        {
+          requested_trip_slot_reference: selectedTripSlotReference,
+        }
+      );
+      const seatsLeft = Number(tripCard?.seats_availability_summary?.seats_left);
+      return Number.isFinite(seatsLeft) ? seatsLeft : null;
+    } catch {
+      return null;
+    }
+  }
+
   submitMiniAppBookingRequest(input = {}) {
     const nowIso = this.nowIso();
     let normalizedInput = null;
@@ -662,11 +710,6 @@ export class TelegramMiniAppBookingSubmitOrchestrationService {
 
     try {
       normalizedInput = this.normalizeSubmitInput(input);
-      const tripCard = this.readTripCardOrThrow(
-        normalizedInput.selected_trip_slot_reference
-      );
-      this.assertTripTicketMixOrThrow(tripCard, normalizedInput.requested_ticket_mix);
-      this.assertTripCapacityOrThrow(tripCard, normalizedInput.requested_seats_count);
       routingDecision = this.readCurrentRoutingDecisionOrThrow(
         normalizedInput.telegram_user_summary.telegram_user_id
       );
@@ -674,17 +717,48 @@ export class TelegramMiniAppBookingSubmitOrchestrationService {
         normalizedInput,
         routingDecision
       );
+      const hasActiveRequest = this.hasActiveBookingRequestForTelegramUser(
+        normalizedInput.telegram_user_summary.telegram_user_id
+      );
+      const creationInput = this.buildCreationInput(
+        normalizedInput,
+        routingDecision,
+        submitIdempotencyKey
+      );
+      let creationResult = null;
 
-      const creationResult = this.bookingRequestCreationService.createBookingRequest({
-        telegram_guest: normalizedInput.telegram_user_summary,
-        current_telegram_routing_decision: routingDecision,
-        requested_trip_slot_reference: normalizedInput.selected_trip_slot_reference,
-        requested_seats: normalizedInput.requested_seats_count,
-        requested_ticket_mix: normalizedInput.requested_ticket_mix,
-        requested_prepayment_amount: normalizedInput.requested_prepayment_amount,
-        contact_phone: normalizedInput.contact_phone_e164,
-        idempotency_key: submitIdempotencyKey,
-      });
+      if (hasActiveRequest) {
+        try {
+          creationResult =
+            this.bookingRequestCreationService.createBookingRequest(creationInput);
+        } catch (error) {
+          const message = normalizeString(error?.message) || '';
+          if (message.includes('Guest already has an active booking request')) {
+            const seatsLeft = this.readCurrentTripSeatsLeft(
+              normalizedInput.selected_trip_slot_reference
+            );
+            if (
+              Number.isFinite(seatsLeft) &&
+              seatsLeft > 0 &&
+              normalizedInput.requested_seats_count > seatsLeft
+            ) {
+              throwSubmitBlocked(
+                'not_enough_seats',
+                `Requested seats exceed available seats: ${normalizedInput.requested_seats_count} > ${seatsLeft}`
+              );
+            }
+          }
+          throw error;
+        }
+      } else {
+        const tripCard = this.readTripCardOrThrow(
+          normalizedInput.selected_trip_slot_reference
+        );
+        this.assertTripTicketMixOrThrow(tripCard, normalizedInput.requested_ticket_mix);
+        this.assertTripCapacityOrThrow(tripCard, normalizedInput.requested_seats_count);
+        creationResult =
+          this.bookingRequestCreationService.createBookingRequest(creationInput);
+      }
 
       const holdActivationResult =
         this.bookingRequestHoldActivationService.activateHold({

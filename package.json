@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev:server": "node server/index.js",
+    "dev:server": "node --env-file=.env server/index.js",
     "dev:client": "vite",
     "dev": "concurrently \"npm run dev:client\" \"npm run dev:server\"",
     "check-syntax": "node check-syntax.js",

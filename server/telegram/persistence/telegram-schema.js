@@ -168,6 +168,15 @@ export function ensureTelegramSchema(db) {
       event_payload TEXT NOT NULL DEFAULT '{}'
     );
 
+    CREATE TABLE IF NOT EXISTS telegram_guest_canonical_ticket_links (
+      guest_canonical_ticket_link_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guest_profile_id INTEGER NOT NULL REFERENCES telegram_guest_profiles(guest_profile_id),
+      canonical_presale_id INTEGER NOT NULL REFERENCES presales(id),
+      first_viewed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_viewed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(guest_profile_id, canonical_presale_id)
+    );
+
     CREATE TABLE IF NOT EXISTS telegram_content_blocks (
       telegram_content_block_id INTEGER PRIMARY KEY AUTOINCREMENT,
       content_key TEXT NOT NULL,
@@ -309,6 +318,10 @@ export function ensureTelegramSchema(db) {
       ON telegram_booking_requests(guest_profile_id, request_status, created_at);
     CREATE INDEX IF NOT EXISTS idx_tg_booking_requests_presale
       ON telegram_booking_requests(confirmed_presale_id);
+    CREATE INDEX IF NOT EXISTS idx_tg_guest_canonical_ticket_links_guest_last_viewed
+      ON telegram_guest_canonical_ticket_links(guest_profile_id, last_viewed_at);
+    CREATE INDEX IF NOT EXISTS idx_tg_guest_canonical_ticket_links_presale
+      ON telegram_guest_canonical_ticket_links(canonical_presale_id);
     CREATE INDEX IF NOT EXISTS idx_tg_booking_holds_status_expiry
       ON telegram_booking_holds(hold_status, hold_expires_at);
     CREATE INDEX IF NOT EXISTS idx_tg_booking_events_request_time

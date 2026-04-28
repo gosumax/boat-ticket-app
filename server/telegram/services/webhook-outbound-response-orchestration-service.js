@@ -1,7 +1,6 @@
 import {
   buildTelegramLatestTimestampSummary,
   freezeTelegramHandoffValue,
-  TELEGRAM_GUEST_COMMAND_ACTION_TYPES,
   TELEGRAM_NOTIFICATION_DELIVERY_ADAPTER_CONTRACT_VERSION,
   TELEGRAM_NOTIFICATION_DELIVERY_EXECUTION_STATUSES,
   TELEGRAM_SERVICE_MESSAGE_TYPES,
@@ -12,36 +11,17 @@ export const TELEGRAM_WEBHOOK_OUTBOUND_RESPONSE_RESULT_VERSION =
   'telegram_webhook_outbound_response_result.v1';
 
 const SERVICE_NAME = 'telegram_webhook_outbound_response_orchestration_service';
-const SUPPORTED_ACTION_TYPES = new Set(TELEGRAM_GUEST_COMMAND_ACTION_TYPES);
 const MINI_APP_LAUNCH_ACTION_TYPE = 'open_mini_app';
 const BUTTON_ACTION_LABELS = Object.freeze({
-  open_mini_app: 'Open Mini App',
-  open_ticket: 'Ticket',
-  open_my_tickets: 'My Requests',
-  open_trips: 'Trips',
-  open_useful_content: 'Useful',
+  open_mini_app: 'Открыть приложение',
+  open_ticket: 'Мой билет / заявки',
+  open_my_tickets: 'Мой билет / заявки',
+  open_trips: 'Рейсы в приложении',
+  open_useful_content: 'Полезное',
   open_faq: 'FAQ',
-  open_contact: 'Contact',
-  cancel_before_prepayment: 'Cancel',
+  open_contact: 'Связь',
+  cancel_before_prepayment: 'Отменить заявку',
 });
-const START_ACTION_TO_GUEST_ACTION = Object.freeze({
-  view_ticket: 'open_ticket',
-  view_current_request: 'open_my_tickets',
-  view_trips: 'open_trips',
-  create_booking_request: 'open_trips',
-  useful_content: 'open_useful_content',
-  faq: 'open_faq',
-  contact: 'open_contact',
-});
-const DEFAULT_ACTION_ORDER = Object.freeze([
-  'open_trips',
-  'open_my_tickets',
-  'open_ticket',
-  'open_useful_content',
-  'open_faq',
-  'open_contact',
-  'cancel_before_prepayment',
-]);
 const FALLBACK_NOTIFICATION_TYPE = TELEGRAM_SERVICE_MESSAGE_TYPES.booking_created;
 
 function normalizeString(value) {
@@ -77,66 +57,6 @@ function normalizeBookingRequestId(reference) {
   return bookingRequestId;
 }
 
-function normalizeVisibilitySummary(visibilitySummary = null) {
-  const hasVisibilityObject =
-    visibilitySummary && typeof visibilitySummary === 'object' && !Array.isArray(visibilitySummary);
-  return freezeSortedValue({
-    can_view_trips: hasVisibilityObject
-      ? Boolean(visibilitySummary?.can_view_trips)
-      : true,
-    can_view_ticket: hasVisibilityObject
-      ? Boolean(visibilitySummary?.can_view_ticket)
-      : false,
-    can_contact: hasVisibilityObject ? Boolean(visibilitySummary?.can_contact) : true,
-    can_cancel_before_prepayment: hasVisibilityObject
-      ? Boolean(visibilitySummary?.can_cancel_before_prepayment)
-      : false,
-    can_open_useful_content: hasVisibilityObject
-      ? Boolean(visibilitySummary?.can_open_useful_content)
-      : true,
-    can_open_faq: hasVisibilityObject
-      ? Boolean(visibilitySummary?.can_open_faq)
-      : true,
-  });
-}
-
-function dedupeActionTypes(actionTypes = []) {
-  const deduped = [];
-  const seen = new Set();
-  for (const actionType of actionTypes) {
-    if (!SUPPORTED_ACTION_TYPES.has(actionType) || seen.has(actionType)) {
-      continue;
-    }
-    seen.add(actionType);
-    deduped.push(actionType);
-  }
-  return deduped;
-}
-
-function applyVisibilityFilters(actionTypes, visibilitySummary) {
-  return actionTypes.filter((actionType) => {
-    if (actionType === 'open_ticket') {
-      return visibilitySummary.can_view_ticket;
-    }
-    if (actionType === 'open_trips') {
-      return visibilitySummary.can_view_trips;
-    }
-    if (actionType === 'open_contact') {
-      return visibilitySummary.can_contact;
-    }
-    if (actionType === 'cancel_before_prepayment') {
-      return visibilitySummary.can_cancel_before_prepayment;
-    }
-    if (actionType === 'open_useful_content') {
-      return visibilitySummary.can_open_useful_content;
-    }
-    if (actionType === 'open_faq') {
-      return visibilitySummary.can_open_faq;
-    }
-    return true;
-  });
-}
-
 function buildCallbackPayload(actionType, bookingRequestReference = null) {
   const bookingRequestId = normalizeBookingRequestId(bookingRequestReference);
   if (bookingRequestId) {
@@ -161,29 +81,22 @@ function buildButtonPayload(
   });
 }
 
-function normalizeMiniAppLaunchSummary(miniAppLaunchSummary = null) {
-  const hasObject =
+function resolveMiniAppLaunchUrl(miniAppLaunchSummary = null) {
+  const hasSummary =
     miniAppLaunchSummary &&
     typeof miniAppLaunchSummary === 'object' &&
     !Array.isArray(miniAppLaunchSummary);
-  if (!hasObject) {
+  if (!hasSummary || miniAppLaunchSummary.launch_ready !== true) {
     return null;
   }
+  return normalizeString(miniAppLaunchSummary.launch_url);
+}
 
-  const launchReady = Boolean(
-    miniAppLaunchSummary.launch_ready ?? miniAppLaunchSummary.launchReady
-  );
-  const launchUrl = normalizeString(
-    miniAppLaunchSummary.launch_url ?? miniAppLaunchSummary.launchUrl
-  );
-  if (!launchReady || !launchUrl) {
-    return null;
-  }
-
-  return freezeSortedValue({
-    launch_ready: true,
-    launch_url: launchUrl,
-  });
+function buildPrimaryMiniAppButton({
+  miniAppLaunchSummary = null,
+  bookingRequestReference = null,
+} = {}) {
+  return [];
 }
 
 function appendQueryParamToUrl(rawUrl, key, value) {
@@ -209,27 +122,6 @@ function appendQueryParamToUrl(rawUrl, key, value) {
   }
 }
 
-function prependMiniAppLaunchButton(buttonPayloads = [], miniAppLaunchSummary = null) {
-  const launchSummary = normalizeMiniAppLaunchSummary(miniAppLaunchSummary);
-  if (!launchSummary) {
-    return buttonPayloads;
-  }
-  if (
-    buttonPayloads.some(
-      (button) => normalizeString(button?.action_type) === MINI_APP_LAUNCH_ACTION_TYPE
-    )
-  ) {
-    return buttonPayloads;
-  }
-
-  return [
-    buildButtonPayload(MINI_APP_LAUNCH_ACTION_TYPE, null, {
-      webAppUrl: launchSummary.launch_url,
-    }),
-    ...buttonPayloads,
-  ];
-}
-
 function resolveButtonPayloadsForTarget(buttonPayloads = [], targetSummary = null) {
   const telegramUserId = normalizeString(targetSummary?.telegram_user_id);
   if (!telegramUserId) {
@@ -253,7 +145,7 @@ function resolveButtonPayloadsForTarget(buttonPayloads = [], targetSummary = nul
 }
 
 function buildInlineKeyboardButton(button) {
-  const text = normalizeString(button?.button_text) || 'Open';
+  const text = normalizeString(button?.button_text) || 'Открыть';
   const webAppUrl = normalizeString(button?.web_app_url);
   if (webAppUrl) {
     return {
@@ -331,65 +223,419 @@ function normalizeActionStatus(actionStatus) {
   return normalizeString(actionStatus) || 'action_unknown';
 }
 
-function summarizeActionBuckets(stateBuckets = {}) {
-  const groups = Object.entries(stateBuckets)
-    .map(([groupName, items]) => ({
-      group_name: groupName,
-      count: Array.isArray(items) ? items.length : 0,
+const DEFAULT_OPEN_APP_STATUS_LINE = 'Нажмите «Открыть приложение».';
+
+const TICKET_STATE_LABELS = Object.freeze({
+  linked_ticket_ready: 'Билет готов',
+  linked_ticket_completed: 'Поездка завершена',
+  linked_ticket_cancelled_or_unavailable: 'Билет недоступен',
+  no_ticket_yet: 'Оформляется',
+});
+
+const REQUEST_LIFECYCLE_LABELS = Object.freeze({
+  new: 'Заявка принята',
+  hold_active: 'Ожидаем предоплату',
+  hold_extended: 'Ожидаем предоплату',
+  prepayment_confirmed: 'Предоплата подтверждена',
+  hold_expired: 'Бронь истекла',
+  cancelled_before_prepayment: 'Заявка отменена',
+});
+
+const REQUEST_BOOKING_STATUS_LABELS = Object.freeze({
+  NEW: 'Заявка принята',
+  ATTRIBUTED: 'Заявка в работе',
+  CONTACT_IN_PROGRESS: 'Заявка в работе',
+  HOLD_ACTIVE: 'Ожидаем предоплату',
+  WAITING_PREPAYMENT: 'Ожидаем предоплату',
+  PREPAYMENT_CONFIRMED: 'Предоплата подтверждена',
+  CONFIRMED_TO_PRESALE: 'Билет оформляется',
+  GUEST_CANCELLED: 'Заявка отменена',
+  HOLD_EXPIRED: 'Бронь истекла',
+  SELLER_NOT_REACHED: 'Связь с продавцом уточняется',
+  CLOSED_UNCONVERTED: 'Заявка закрыта',
+});
+
+function hasCyrillicText(value) {
+  return /[А-Яа-яЁё]/.test(String(value ?? ''));
+}
+
+function formatGuestDate(value) {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return null;
+  }
+  const parts = normalized.split('-');
+  if (parts.length !== 3) {
+    return normalized;
+  }
+  const [year, month, day] = parts;
+  if (year.length !== 4 || month.length !== 2 || day.length !== 2) {
+    return normalized;
+  }
+  return `${day}.${month}.${year}`;
+}
+
+function formatGuestTime(value) {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return null;
+  }
+  const match = normalized.match(/^(\d{2}):(\d{2})/);
+  if (match) {
+    return `${match[1]}:${match[2]}`;
+  }
+  return normalized;
+}
+
+function formatGuestDateTime(dateValue, timeValue) {
+  const dateLabel = formatGuestDate(dateValue);
+  const timeLabel = formatGuestTime(timeValue);
+  if (dateLabel && timeLabel) {
+    return `${dateLabel} ${timeLabel}`;
+  }
+  return dateLabel || timeLabel || 'уточняется';
+}
+
+function formatTemperature(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 'н/д';
+  }
+  const rounded = Math.round(numeric * 10) / 10;
+  return `${rounded}°C`;
+}
+
+function formatSunset(weatherSummary = null) {
+  const local = formatGuestTime(weatherSummary?.sunset_time_local);
+  if (local) {
+    return local;
+  }
+  const iso = normalizeString(weatherSummary?.sunset_time_iso);
+  if (!iso) {
+    return 'н/д';
+  }
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) {
+    return formatGuestTime(iso) || 'н/д';
+  }
+  return parsed.toISOString().slice(11, 16);
+}
+
+function extractTicketSummary(resolvedData = null) {
+  if (!resolvedData || typeof resolvedData !== 'object' || Array.isArray(resolvedData)) {
+    return null;
+  }
+  if (
+    resolvedData.ticket_view_summary &&
+    typeof resolvedData.ticket_view_summary === 'object' &&
+    !Array.isArray(resolvedData.ticket_view_summary)
+  ) {
+    return resolvedData.ticket_view_summary;
+  }
+  if (
+    resolvedData.ticket_status_summary ||
+    resolvedData.buyer_ticket_reference_summary ||
+    resolvedData.ticket_availability_state
+  ) {
+    return resolvedData;
+  }
+  return null;
+}
+
+function extractBookingRequestsSummary(resolvedData = null) {
+  if (!resolvedData || typeof resolvedData !== 'object' || Array.isArray(resolvedData)) {
+    return null;
+  }
+  if (
+    resolvedData.booking_requests_summary &&
+    typeof resolvedData.booking_requests_summary === 'object' &&
+    Array.isArray(resolvedData.booking_requests_summary.items)
+  ) {
+    return resolvedData.booking_requests_summary;
+  }
+  if (
+    Array.isArray(resolvedData.items) &&
+    resolvedData.items.some((item) => item?.booking_request_reference)
+  ) {
+    return resolvedData;
+  }
+  return null;
+}
+
+function isActiveTicketSummary(ticketSummary = null) {
+  const ticketState = normalizeString(
+    ticketSummary?.ticket_status_summary?.deterministic_ticket_state
+  );
+  const availability = normalizeString(ticketSummary?.ticket_availability_state);
+  return ticketState === 'linked_ticket_ready' || availability === 'available';
+}
+
+function resolveTicketStatusLabel(ticketSummary = null) {
+  const ticketState = normalizeString(
+    ticketSummary?.ticket_status_summary?.deterministic_ticket_state
+  );
+  if (ticketState && TICKET_STATE_LABELS[ticketState]) {
+    return TICKET_STATE_LABELS[ticketState];
+  }
+  return 'Статус обновляется';
+}
+
+function buildTicketBlock(ticketSummary = null) {
+  if (!ticketSummary || !isActiveTicketSummary(ticketSummary)) {
+    return null;
+  }
+  const dateTimeLabel = formatGuestDateTime(
+    ticketSummary?.date_time_summary?.requested_trip_date,
+    ticketSummary?.date_time_summary?.requested_time_slot
+  );
+  const ticketCode = normalizeString(
+    ticketSummary?.buyer_ticket_reference_summary?.buyer_ticket_code
+  );
+  return [
+    'Билет',
+    `- Дата и время: ${dateTimeLabel}`,
+    `- Статус: ${resolveTicketStatusLabel(ticketSummary)}`,
+    `- Номер билета: ${ticketCode ? `№ ${ticketCode}` : 'выдаётся'}`,
+  ].join('\n');
+}
+
+function resolveRequestStatusLabel(requestItem = null) {
+  const lifecycleState = normalizeString(requestItem?.lifecycle_state);
+  if (lifecycleState && REQUEST_LIFECYCLE_LABELS[lifecycleState]) {
+    return REQUEST_LIFECYCLE_LABELS[lifecycleState];
+  }
+  const bookingStatus = normalizeString(requestItem?.booking_request_status)?.toUpperCase();
+  if (bookingStatus && REQUEST_BOOKING_STATUS_LABELS[bookingStatus]) {
+    return REQUEST_BOOKING_STATUS_LABELS[bookingStatus];
+  }
+  return 'Статус обновляется';
+}
+
+function resolveRequestProgressLine(requestItem = null) {
+  const lifecycleState = normalizeString(requestItem?.lifecycle_state);
+  if (lifecycleState === 'hold_active' || lifecycleState === 'hold_extended') {
+    return 'Ждём предоплату, после подтверждения оформим билет.';
+  }
+  if (lifecycleState === 'prepayment_confirmed') {
+    return 'Оформляем билет.';
+  }
+  if (lifecycleState === 'new') {
+    return 'Уточняем детали заявки.';
+  }
+  return null;
+}
+
+function pickActiveRequestItem(bookingRequestsSummary = null, ticketSummary = null) {
+  const items = Array.isArray(bookingRequestsSummary?.items)
+    ? bookingRequestsSummary.items
+    : [];
+  if (items.length === 0) {
+    return null;
+  }
+  const ticketBookingRequestId = Number(
+    ticketSummary?.booking_request_reference?.booking_request_id
+  );
+  const activeItems = items.filter((item) => Boolean(item?.request_active));
+  if (activeItems.length === 0) {
+    return null;
+  }
+  const withoutTicketItem = Number.isInteger(ticketBookingRequestId)
+    ? activeItems.filter(
+        (item) => Number(item?.booking_request_reference?.booking_request_id) !== ticketBookingRequestId
+      )
+    : activeItems;
+  return withoutTicketItem[0] || activeItems[0] || null;
+}
+
+function buildRequestBlock(requestItem = null) {
+  if (!requestItem) {
+    return null;
+  }
+  const dateTimeLabel = formatGuestDateTime(
+    requestItem?.requested_trip_slot_reference?.requested_trip_date,
+    requestItem?.requested_trip_slot_reference?.requested_time_slot
+  );
+  const progressLine = resolveRequestProgressLine(requestItem);
+  const lines = [
+    'Заявка',
+    `- Дата и время: ${dateTimeLabel}`,
+    `- Статус: ${resolveRequestStatusLabel(requestItem)}`,
+  ];
+  if (progressLine) {
+    lines.push(`- Сейчас: ${progressLine}`);
+  }
+  return lines.join('\n');
+}
+
+function buildTicketAndRequestTextSummary(resolvedData = null) {
+  const ticketSummary = extractTicketSummary(resolvedData);
+  const bookingRequestsSummary = extractBookingRequestsSummary(resolvedData);
+  const ticketBlock = buildTicketBlock(ticketSummary);
+  const requestBlock = buildRequestBlock(
+    pickActiveRequestItem(bookingRequestsSummary, ticketSummary)
+  );
+  const blocks = [ticketBlock, requestBlock].filter(Boolean);
+  if (blocks.length > 0) {
+    return {
+      body: blocks.join('\n\n'),
+      content_source: 'resolved_action_content',
+    };
+  }
+
+  return {
+    body: 'Сейчас нет активных билетов и заявок.',
+    content_source:
+      ticketSummary || bookingRequestsSummary
+        ? 'resolved_action_content'
+        : 'default_fallback_content',
+  };
+}
+
+function buildUsefulTextSummary(resolvedData = null) {
+  const weatherSummary =
+    resolvedData?.weather_summary &&
+    typeof resolvedData.weather_summary === 'object' &&
+    !Array.isArray(resolvedData.weather_summary)
+      ? resolvedData.weather_summary
+      : null;
+  const condition =
+    normalizeString(weatherSummary?.condition_label) ||
+    normalizeString(weatherSummary?.condition_code) ||
+    'нет данных';
+  const body = [
+    `Погода: ${condition}`,
+    `Воздух: ${formatTemperature(weatherSummary?.temperature_c)}`,
+    `Вода: ${formatTemperature(weatherSummary?.water_temperature_c)}`,
+    `Закат: ${formatSunset(weatherSummary)}`,
+  ].join('\n');
+  const hasWeatherPayload = Boolean(weatherSummary);
+  return {
+    body,
+    content_source: hasWeatherPayload
+      ? 'resolved_action_content'
+      : 'default_fallback_content',
+  };
+}
+
+function buildFaqTextSummary(resolvedData = null) {
+  const items = Array.isArray(resolvedData?.items) ? resolvedData.items : [];
+  const list = items
+    .map((item) => ({
+      title: normalizeString(item?.title_short_text_summary?.title),
+      shortText: normalizeString(item?.title_short_text_summary?.short_text),
     }))
-    .sort((left, right) => left.group_name.localeCompare(right.group_name));
+    .filter(
+      (item) =>
+        Boolean(item.title || item.shortText) &&
+        (hasCyrillicText(item.title) || hasCyrillicText(item.shortText))
+    )
+    .slice(0, 3)
+    .map(
+      (item, index) =>
+        `${index + 1}. ${item.title || 'Вопрос'}${item.shortText ? ` — ${item.shortText}` : ''}`
+    );
+  if (list.length > 0) {
+    return {
+      body: list.join('\n'),
+      content_source: 'resolved_action_content',
+    };
+  }
 
-  return groups.map((item) => `${item.group_name}:${item.count}`).join(', ');
+  return {
+    body: [
+      '1. Как купить билет?',
+      '2. Когда приходить на посадку?',
+      '3. Что делать, если опаздываю?',
+    ].join('\n'),
+    content_source: 'default_fallback_content',
+  };
 }
 
-function extractTopTitles(items = [], fieldName, limit = 2) {
-  return items
-    .slice(0, limit)
-    .map((item) => normalizeString(item?.title_short_text_summary?.[fieldName]))
-    .filter(Boolean);
-}
-
-function extractTopShortTexts(items = [], limit = 2) {
-  return items
-    .slice(0, limit)
+function buildContactTextSummary(resolvedData = null) {
+  const preferredPhone = normalizeString(resolvedData?.preferred_contact_phone_e164);
+  const supportItems = Array.isArray(resolvedData?.support_content_feed_summary?.items)
+    ? resolvedData.support_content_feed_summary.items
+    : [];
+  const supportLine = supportItems
     .map((item) => normalizeString(item?.title_short_text_summary?.short_text))
-    .filter(Boolean);
+    .find((line) => hasCyrillicText(line));
+  const routeLine =
+    supportLine ||
+    'По вопросам маршрута и времени посадки звоните диспетчеру заранее.';
+  const body = [
+    `Телефон диспетчера: ${preferredPhone || 'уточните в приложении'}.`,
+    routeLine,
+  ].join('\n');
+  return {
+    body,
+    content_source:
+      preferredPhone || supportLine
+        ? 'resolved_action_content'
+        : 'default_fallback_content',
+  };
 }
 
-function buildStartTextFields(startMode, operationStatus) {
-  if (startMode === 'linked_ticket') {
+function buildStartTextFields(_startMode, _operationStatus) {
+  return freezeSortedValue({
+    headline: 'МОРЕ: билеты на катер',
+    body:
+      'Если у вас уже есть билет, введите номер билета сообщением в этот чат. Например: А12. Если номера под рукой нет, нажмите «Открыть приложение».',
+    status_line: 'Нажмите «Открыть приложение».',
+    content_source: 'start_mode_content',
+  });
+}
+
+function buildStartTextFieldsWithHandoff(startMode, operationStatus, startHandoffSummary = null) {
+  const handoffLookupStatus = normalizeString(startHandoffSummary?.lookup_status);
+  const handoffBuyerTicketCode = normalizeString(startHandoffSummary?.buyer_ticket_code);
+  const handoffCanonicalPresaleId = Number(startHandoffSummary?.canonical_presale_id);
+  const hasHandoffTicket =
+    handoffLookupStatus === 'ticket_found' ||
+    (Number.isInteger(handoffCanonicalPresaleId) && handoffCanonicalPresaleId > 0);
+
+  if (hasHandoffTicket) {
     return freezeSortedValue({
-      headline: 'Your ticket is ready',
-      body: 'Open your ticket details or review upcoming trip information.',
-      status_line: 'Choose an action below.',
+      headline: 'Билет найден',
+      body: handoffBuyerTicketCode
+        ? `Номер билета: № ${handoffBuyerTicketCode}.`
+        : 'Билет уже привязан.',
+      status_line: 'Нажмите «Открыть приложение».',
+      content_source: 'start_handoff_ticket_content',
+    });
+  }
+
+  if (startMode === 'new_guest') {
+    return freezeSortedValue({
+      headline: 'Добро пожаловать',
+      body:
+        'Введите номер билета сообщением в этот чат. Например: А12. Если номера под рукой нет, нажмите «Открыть приложение».',
+      status_line: DEFAULT_OPEN_APP_STATUS_LINE,
       content_source: 'start_mode_content',
     });
   }
-  if (startMode === 'active_request') {
+
+  return buildStartTextFields(startMode, operationStatus);
+}
+
+function buildTicketCodeLookupTextFields(lookupSummary = {}) {
+  const lookupStatus = normalizeString(lookupSummary?.lookup_status);
+  const buyerTicketCode = normalizeString(lookupSummary?.buyer_ticket_code);
+  if (lookupStatus === 'ticket_found') {
     return freezeSortedValue({
-      headline: 'You have an active request',
-      body: 'Track your request status, view help content, or contact support.',
-      status_line: 'Choose an action below.',
-      content_source: 'start_mode_content',
-    });
-  }
-  if (startMode === 'completed_guest_without_active_request') {
-    return freezeSortedValue({
-      headline: 'Welcome back',
-      body: 'No active request is open right now. You can explore trips or help content.',
-      status_line: 'Choose an action below.',
-      content_source: 'start_mode_content',
+      headline: 'Билет найден',
+      body: buyerTicketCode
+        ? `Номер билета: № ${buyerTicketCode}.`
+        : 'Билет найден.',
+      status_line: 'Нажмите «Открыть приложение».',
+      content_source: 'ticket_lookup_content',
     });
   }
 
   return freezeSortedValue({
-    headline: 'Welcome to boat tickets',
-    body: 'You can explore trips, check support information, or open FAQ.',
-    status_line:
-      operationStatus === 'processed_with_fallback'
-        ? 'Default start content is active.'
-        : 'Choose an action below.',
-    content_source: 'start_mode_content',
+    headline: 'Не удалось найти билет',
+    body: 'Проверьте номер и отправьте его ещё раз.',
+    status_line: DEFAULT_OPEN_APP_STATUS_LINE,
+    content_source: 'default_fallback_content',
   });
 }
 
@@ -399,131 +645,52 @@ function buildGuestActionTextFields(mappedActionType, actionResult = {}) {
 
   if (actionStatus === 'action_not_available') {
     return freezeSortedValue({
-      headline: 'Action is not available',
-      body: 'This action cannot be completed right now. Please choose another one.',
-      status_line: 'Try one of the available actions below.',
+      headline: 'Действие временно недоступно',
+      body: 'Сейчас это действие недоступно в чате. Продолжите в приложении.',
+      status_line: DEFAULT_OPEN_APP_STATUS_LINE,
       content_source: 'default_fallback_content',
     });
   }
 
   if (actionStatus === 'action_rejected_invalid_input') {
     return freezeSortedValue({
-      headline: 'Unable to process this action',
-      body: 'The request payload could not be processed. Use another action from the menu.',
-      status_line: 'Default fallback content is active.',
+      headline: 'Не удалось обработать запрос',
+      body: 'Попробуйте ещё раз или откройте приложение.',
+      status_line: DEFAULT_OPEN_APP_STATUS_LINE,
       content_source: 'default_fallback_content',
     });
   }
 
-  if (mappedActionType === 'open_ticket') {
+  if (mappedActionType === 'open_ticket' || mappedActionType === 'open_my_tickets') {
+    const ticketRequestTextSummary = buildTicketAndRequestTextSummary(resolvedData);
     return freezeSortedValue({
-      headline: 'Ticket status',
-      body: `State: ${
-        normalizeString(
-          resolvedData?.ticket_status_summary?.deterministic_ticket_state
-        ) || 'unknown'
-      }.`,
-      status_line:
-        normalizeString(
-          resolvedData?.date_time_summary?.requested_trip_date
-        ) && normalizeString(resolvedData?.date_time_summary?.requested_time_slot)
-          ? `Trip: ${resolvedData.date_time_summary.requested_trip_date} ${resolvedData.date_time_summary.requested_time_slot}.`
-          : 'Ticket details are available in the current view.',
-      content_source: 'resolved_action_content',
-    });
-  }
-
-  if (mappedActionType === 'open_my_tickets') {
-    const itemCount = Number(resolvedData?.item_count);
-    return freezeSortedValue({
-      headline: 'My requests',
-      body:
-        Number.isInteger(itemCount) && itemCount >= 0
-          ? `Found ${itemCount} request(s).`
-          : 'Your request list is not available yet.',
-      status_line:
-        Number.isInteger(itemCount) && itemCount >= 0
-          ? 'Open another action for more details.'
-          : 'Default fallback content is active.',
-      content_source:
-        Number.isInteger(itemCount) && itemCount >= 0
-          ? 'resolved_action_content'
-          : 'default_fallback_content',
+      headline: 'Мой билет / заявки',
+      body: ticketRequestTextSummary.body,
+      status_line: DEFAULT_OPEN_APP_STATUS_LINE,
+      content_source: ticketRequestTextSummary.content_source,
     });
   }
 
   if (mappedActionType === 'open_trips') {
     return freezeSortedValue({
-      headline: 'Trips overview',
-      body: `Timeline items: ${Number(resolvedData?.trip_timeline_size || 0)}.`,
-      status_line: `Buckets: ${summarizeActionBuckets(resolvedData?.state_buckets || {})}.`,
+      headline: 'Откройте приложение',
+      body: 'Выбор рейса и оформление билета доступны в приложении.',
       content_source: 'resolved_action_content',
+      status_line: DEFAULT_OPEN_APP_STATUS_LINE,
     });
   }
 
-  if (mappedActionType === 'open_useful_content') {
-    const titles = extractTopTitles(resolvedData?.items || [], 'title', 2);
+  if (
+    mappedActionType === 'open_useful_content' ||
+    mappedActionType === 'open_faq' ||
+    mappedActionType === 'open_contact'
+  ) {
     return freezeSortedValue({
-      headline: 'Useful content',
-      body: `Items available: ${Number(resolvedData?.item_count || 0)}.`,
-      status_line:
-        titles.length > 0
-          ? `Top: ${titles.join(' | ')}.`
-          : 'Default fallback content is active.',
-      content_source:
-        titles.length > 0 ? 'resolved_action_content' : 'default_fallback_content',
-    });
-  }
-
-  if (mappedActionType === 'open_faq') {
-    const titles = extractTopTitles(resolvedData?.items || [], 'title', 2);
-    const shortTexts = extractTopShortTexts(resolvedData?.items || [], 2);
-    const hasResolvedFaqContent = titles.length > 0 || shortTexts.length > 0;
-    return freezeSortedValue({
-      headline: 'Frequently asked questions',
+      headline: 'Откройте приложение',
       body:
-        shortTexts.length > 0
-          ? `Quick answer: ${shortTexts[0]}`
-          : `Questions available: ${Number(resolvedData?.item_count || 0)}.`,
-      status_line:
-        titles.length > 0
-          ? `Top questions: ${titles.join(' | ')}.`
-          : 'Default fallback content is active.',
-      content_source:
-        hasResolvedFaqContent
-          ? 'resolved_action_content'
-          : 'default_fallback_content',
-    });
-  }
-
-  if (mappedActionType === 'open_contact') {
-    const preferredPhone = normalizeString(resolvedData?.preferred_contact_phone_e164);
-    const supportItems = resolvedData?.support_content_feed_summary?.items || [];
-    const supportTitles = extractTopTitles(supportItems, 'title', 2);
-    const supportShortTexts = extractTopShortTexts(supportItems, 1);
-    const hasResolvedContactContent =
-      Boolean(preferredPhone) ||
-      supportTitles.length > 0 ||
-      supportShortTexts.length > 0;
-    return freezeSortedValue({
-      headline: 'Contact support',
-      body:
-        preferredPhone && supportShortTexts.length > 0
-          ? `Preferred contact: ${preferredPhone}. ${supportShortTexts[0]}`
-          : preferredPhone
-            ? `Preferred contact: ${preferredPhone}.`
-            : supportShortTexts.length > 0
-              ? supportShortTexts[0]
-              : 'Support contact is available from the current request context.',
-      status_line:
-        supportTitles.length > 0
-          ? `Support notes: ${supportTitles.join(' | ')}.`
-          : preferredPhone
-            ? 'Use this contact for request updates.'
-            : 'Default fallback content is active.',
-      content_source: hasResolvedContactContent
-        ? 'resolved_action_content'
-        : 'default_fallback_content',
+        'Полезные материалы, ответы на вопросы и контактная информация доступны в приложении.',
+      status_line: DEFAULT_OPEN_APP_STATUS_LINE,
+      content_source: 'resolved_action_content',
     });
   }
 
@@ -531,13 +698,13 @@ function buildGuestActionTextFields(mappedActionType, actionResult = {}) {
     return freezeSortedValue({
       headline:
         actionStatus === 'action_completed'
-          ? 'Request cancelled'
-          : 'Cancellation is not available',
+          ? 'Заявка отменена'
+          : 'Отмена недоступна',
       body:
         actionStatus === 'action_completed'
-          ? 'Cancellation before prepayment has been recorded.'
-          : 'The current request cannot be cancelled before prepayment.',
-      status_line: 'Choose another action below.',
+          ? 'Отмена заявки до предоплаты сохранена.'
+          : 'Эту заявку сейчас нельзя отменить в боте.',
+      status_line: DEFAULT_OPEN_APP_STATUS_LINE,
       content_source:
         actionStatus === 'action_completed'
           ? 'resolved_action_content'
@@ -546,9 +713,9 @@ function buildGuestActionTextFields(mappedActionType, actionResult = {}) {
   }
 
   return freezeSortedValue({
-    headline: 'Action processed',
-    body: 'The action has been processed.',
-    status_line: 'Choose another action below.',
+    headline: 'Готово',
+    body: 'Запрос обработан.',
+    status_line: DEFAULT_OPEN_APP_STATUS_LINE,
     content_source: 'default_fallback_content',
   });
 }
@@ -563,50 +730,24 @@ function pickBookingReferenceFromStart(runtimeResult = {}) {
   );
 }
 
-function buildStartActionButtons(runtimeResult = {}) {
-  const inboundResult = runtimeResult.operation_result_summary || {};
-  const startState = inboundResult.bot_start_state_summary || {};
-  const guestActionState = inboundResult.guest_action_state_summary || {};
-  const visibilitySummary = normalizeVisibilitySummary(guestActionState);
-  const startActions = dedupeActionTypes(
-    (startState.recommended_next_actions || [])
-      .map((startAction) => START_ACTION_TO_GUEST_ACTION[startAction] || null)
-      .filter(Boolean)
-  );
+function buildStartActionButtons(runtimeResult = {}, miniAppLaunchSummary = null) {
   const bookingRequestReference = pickBookingReferenceFromStart(runtimeResult);
-  const fallbackActions = ['open_trips', 'open_useful_content', 'open_faq', 'open_contact'];
-  const candidateActions = startActions.length > 0 ? startActions : fallbackActions;
-  const visibleActions = applyVisibilityFilters(candidateActions, visibilitySummary);
-  const actionTypes = dedupeActionTypes(
-    visibleActions.length > 0 ? visibleActions : fallbackActions
-  );
-
-  if (visibilitySummary.can_cancel_before_prepayment) {
-    actionTypes.push('cancel_before_prepayment');
-  }
-
-  return dedupeActionTypes(actionTypes).map((actionType) =>
-    buildButtonPayload(actionType, bookingRequestReference)
-  );
+  return buildPrimaryMiniAppButton({
+    miniAppLaunchSummary,
+    bookingRequestReference,
+  });
 }
 
-function buildGuestActionButtons(mappedActionType, actionResult = {}, relatedBookingReference = null) {
-  const visibilitySummary = normalizeVisibilitySummary(
-    actionResult.visibility_availability_summary
-  );
-  const candidateActions = dedupeActionTypes([
-    mappedActionType,
-    ...DEFAULT_ACTION_ORDER,
-  ]);
-  const visibleActions = applyVisibilityFilters(candidateActions, visibilitySummary);
-  const fallbackActions = ['open_trips', 'open_useful_content', 'open_faq', 'open_contact'];
-  const finalActions = dedupeActionTypes(
-    visibleActions.length > 0 ? visibleActions : fallbackActions
-  );
-
-  return finalActions.map((actionType) =>
-    buildButtonPayload(actionType, relatedBookingReference)
-  );
+function buildGuestActionButtons(
+  _mappedActionType,
+  _actionResult = {},
+  relatedBookingReference = null,
+  miniAppLaunchSummary = null
+) {
+  return buildPrimaryMiniAppButton({
+    miniAppLaunchSummary,
+    bookingRequestReference: relatedBookingReference,
+  });
 }
 
 function pickDeliveryOutcome(rawResult) {
@@ -690,6 +831,7 @@ export class TelegramWebhookOutboundResponseOrchestrationService {
     targetSummary,
     buttonPayloads,
     textFields,
+    miniAppLaunchSummary = null,
     mappedActionType = null,
     operationType = null,
     operationStatus = null,
@@ -705,6 +847,16 @@ export class TelegramWebhookOutboundResponseOrchestrationService {
     ].join('|');
     const replyMarkup =
       buttonPayloads.length > 0 ? buildInlineKeyboard(buttonPayloads) : null;
+    const menuButtonLaunchUrl = resolveMiniAppLaunchUrl(miniAppLaunchSummary);
+    const telegramMenuButton = menuButtonLaunchUrl
+      ? {
+          type: 'web_app',
+          text: BUTTON_ACTION_LABELS[MINI_APP_LAUNCH_ACTION_TYPE],
+          web_app: {
+            url: menuButtonLaunchUrl,
+          },
+        }
+      : null;
 
     return freezeSortedValue({
       adapter_contract_version: TELEGRAM_NOTIFICATION_DELIVERY_ADAPTER_CONTRACT_VERSION,
@@ -746,6 +898,7 @@ export class TelegramWebhookOutboundResponseOrchestrationService {
         },
       },
       telegram_reply_markup: replyMarkup,
+      telegram_menu_button: telegramMenuButton,
       resolved_payload_summary_reference: {
         reference_type: 'telegram_webhook_outbound_response',
         resolution_version: TELEGRAM_WEBHOOK_OUTBOUND_RESPONSE_RESULT_VERSION,
@@ -803,18 +956,16 @@ export class TelegramWebhookOutboundResponseOrchestrationService {
     }
   }
 
-  buildStartResponseMapping(adapterResult, { miniAppLaunchSummary = null } = {}) {
+  buildStartResponseMapping(adapterResult, miniAppLaunchSummary = null) {
     const runtimeResult = adapterResult.operation_result_summary || {};
     const inboundResult = runtimeResult.operation_result_summary || {};
     const startState = inboundResult.bot_start_state_summary || {};
-    const textFields = buildStartTextFields(
+    const textFields = buildStartTextFieldsWithHandoff(
       normalizeString(startState.start_mode),
-      normalizeString(adapterResult.operation_status)
+      normalizeString(adapterResult.operation_status),
+      runtimeResult.start_handoff_summary || null
     );
-    const buttonPayloads = prependMiniAppLaunchButton(
-      buildStartActionButtons(runtimeResult),
-      miniAppLaunchSummary
-    );
+    const buttonPayloads = buildStartActionButtons(runtimeResult, miniAppLaunchSummary);
 
     return freezeSortedValue({
       outbound_mapping_status: 'mapped_start_response',
@@ -824,7 +975,23 @@ export class TelegramWebhookOutboundResponseOrchestrationService {
     });
   }
 
-  buildGuestActionResponseMapping(adapterResult, { miniAppLaunchSummary = null } = {}) {
+  buildTicketCodeLookupResponseMapping(adapterResult, miniAppLaunchSummary = null) {
+    const lookupSummary = adapterResult.operation_result_summary || {};
+    const textFields = buildTicketCodeLookupTextFields(lookupSummary);
+    const buttonPayloads = buildPrimaryMiniAppButton({
+      miniAppLaunchSummary,
+      bookingRequestReference: null,
+    });
+
+    return freezeSortedValue({
+      outbound_mapping_status: 'mapped_ticket_code_lookup_response',
+      mapped_action_type: null,
+      text_fields: textFields,
+      button_payloads: buttonPayloads,
+    });
+  }
+
+  buildGuestActionResponseMapping(adapterResult, miniAppLaunchSummary = null) {
     const actionResult = adapterResult.operation_result_summary || {};
     const mappedActionType = normalizeString(adapterResult.mapped_action_type);
     const relatedBookingReference =
@@ -832,12 +999,10 @@ export class TelegramWebhookOutboundResponseOrchestrationService {
       actionResult.related_booking_request_reference ||
       null;
     const textFields = buildGuestActionTextFields(mappedActionType, actionResult);
-    const buttonPayloads = prependMiniAppLaunchButton(
-      buildGuestActionButtons(
-        mappedActionType,
-        actionResult,
-        relatedBookingReference
-      ),
+    const buttonPayloads = buildGuestActionButtons(
+      mappedActionType,
+      actionResult,
+      relatedBookingReference,
       miniAppLaunchSummary
     );
 
@@ -888,9 +1053,6 @@ export class TelegramWebhookOutboundResponseOrchestrationService {
     mini_app_launch_summary: miniAppLaunchSummaryInput = null,
   } = {}) {
     const nowIso = this.nowIso();
-    const miniAppLaunchSummary = normalizeMiniAppLaunchSummary(
-      miniAppLaunchSummaryInput
-    );
     const targetSummary = extractResponseTarget(rawUpdate);
     if (!adapterResult || typeof adapterResult !== 'object') {
       return this.buildSkippedResult({
@@ -905,16 +1067,23 @@ export class TelegramWebhookOutboundResponseOrchestrationService {
     const mappingStatus = normalizeString(adapterResult.mapping_status);
     let responseMapping = null;
     if (mappingStatus === 'mapped_start_command') {
-      responseMapping = this.buildStartResponseMapping(adapterResult, {
-        miniAppLaunchSummary,
-      });
+      responseMapping = this.buildStartResponseMapping(
+        adapterResult,
+        miniAppLaunchSummaryInput
+      );
     } else if (
       mappingStatus === 'mapped_guest_action_command' ||
       mappingStatus === 'mapped_guest_action_callback'
     ) {
-      responseMapping = this.buildGuestActionResponseMapping(adapterResult, {
-        miniAppLaunchSummary,
-      });
+      responseMapping = this.buildGuestActionResponseMapping(
+        adapterResult,
+        miniAppLaunchSummaryInput
+      );
+    } else if (mappingStatus === 'mapped_ticket_code_message') {
+      responseMapping = this.buildTicketCodeLookupResponseMapping(
+        adapterResult,
+        miniAppLaunchSummaryInput
+      );
     } else {
       return this.buildSkippedResult({
         adapterType,
@@ -960,6 +1129,7 @@ export class TelegramWebhookOutboundResponseOrchestrationService {
       mappedActionType: responseMapping.mapped_action_type,
       operationType: normalizeString(adapterResult.operation_type),
       operationStatus: normalizeString(adapterResult.operation_status),
+      miniAppLaunchSummary: miniAppLaunchSummaryInput,
     });
     const deliveryHandoffSummary = this.executeDeliveryHandoff(deliveryInput);
 

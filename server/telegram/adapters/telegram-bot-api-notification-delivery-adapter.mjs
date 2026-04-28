@@ -298,6 +298,43 @@ function pickFutureReplyMarkup(input = {}) {
   return normalizeReplyMarkup(rawReplyMarkup);
 }
 
+function normalizeMenuButton(rawButton) {
+  if (!rawButton || typeof rawButton !== 'object' || Array.isArray(rawButton)) {
+    return null;
+  }
+
+  const type = normalizeString(rawButton.type);
+  const text = normalizeString(rawButton.text);
+  const webAppUrl = normalizeString(
+    rawButton.web_app?.url ??
+      rawButton.webApp?.url ??
+      rawButton.web_app_url ??
+      rawButton.webAppUrl
+  );
+  if (type !== 'web_app' || !text || !webAppUrl) {
+    return null;
+  }
+
+  return freezeSortedAdapterValue({
+    type: 'web_app',
+    text,
+    web_app: {
+      url: webAppUrl,
+    },
+  });
+}
+
+function pickFutureMenuButton(input = {}) {
+  const rawMenuButton =
+    input.telegram_menu_button ??
+    input.telegramMenuButton ??
+    input.resolved_payload_summary_reference?.telegram_menu_button ??
+    input.resolved_payload_summary_reference?.telegramMenuButton ??
+    null;
+
+  return normalizeMenuButton(rawMenuButton);
+}
+
 function pickFutureResolvedTextFields(input = {}) {
   const fields =
     input.text_payload?.fields ||
@@ -546,6 +583,13 @@ function createSendMessageRequest({ chatId, text, replyMarkup = null }) {
   return request;
 }
 
+function createSetChatMenuButtonRequest({ chatId, menuButton }) {
+  return {
+    chat_id: chatId,
+    menu_button: menuButton,
+  };
+}
+
 function sendTelegramBotApiRequestSync({
   apiBaseUrl,
   botToken,
@@ -657,6 +701,15 @@ export function createTelegramBotApiSyncTransport({
         timeoutMs,
       });
     },
+    setChatMenuButton({ botToken, request }) {
+      return sendTelegramBotApiRequestSync({
+        apiBaseUrl: normalizedApiBaseUrl,
+        botToken,
+        method: 'setChatMenuButton',
+        request,
+        timeoutMs,
+      });
+    },
   });
 }
 
@@ -702,6 +755,7 @@ export class TelegramBotApiNotificationDeliveryAdapter {
     const text = buildServiceMessageText(normalizedInput);
     const target = pickTelegramChatTarget(normalizedInput.deliveryTargetSummary);
     const replyMarkup = pickFutureReplyMarkup(normalizedInput.rawInput);
+    const menuButton = pickFutureMenuButton(normalizedInput.rawInput);
     const deliveryMetadataSummary = buildDeliveryMetadataSummary({
       normalizedInput,
       target,
@@ -746,6 +800,31 @@ export class TelegramBotApiNotificationDeliveryAdapter {
     const telegramResult = normalizeTelegramTransportResult(rawTransportResult);
     const telegramApiSummary = buildTelegramApiSummary(telegramResult);
     if (telegramResult.ok) {
+      if (menuButton) {
+        const menuButtonRequest = createSetChatMenuButtonRequest({
+          chatId: target.chatId,
+          menuButton,
+        });
+        try {
+          if (typeof this.transport.setChatMenuButton === 'function') {
+            this.transport.setChatMenuButton({
+              botToken: this.botToken,
+              request: menuButtonRequest,
+            });
+          } else {
+            sendTelegramBotApiRequestSync({
+              apiBaseUrl: this.apiBaseUrl,
+              botToken: this.botToken,
+              method: 'setChatMenuButton',
+              request: menuButtonRequest,
+              timeoutMs: this.requestTimeoutMs,
+            });
+          }
+        } catch {
+          // Keep sendMessage success result even if menu-button update is transiently unavailable.
+        }
+      }
+
       const externalDeliveryReference = buildExternalDeliveryReference({
         telegramResult: telegramResult.result,
         target,

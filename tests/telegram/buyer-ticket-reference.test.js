@@ -6,6 +6,7 @@ import {
   buildBuyerTicketReferenceSummary,
   buildDispatcherBoardingQrPayload,
   buildDispatcherBoardingQrSummary,
+  parseBuyerTicketCodeToCanonicalPresaleId,
   parseDispatcherBoardingQrPayload,
 } from '../../server/ticketing/buyer-ticket-reference.mjs';
 
@@ -38,6 +39,15 @@ describe('buyer ticket reference helpers', () => {
     }
 
     expect(codes.size).toBe(500);
+  });
+
+  it('decodes buyer ticket code back to canonical presale id', () => {
+    expect(parseBuyerTicketCodeToCanonicalPresaleId('А1')).toBe(1);
+    expect(parseBuyerTicketCodeToCanonicalPresaleId('Б46')).toBe(145);
+    expect(parseBuyerTicketCodeToCanonicalPresaleId(' № Б-46 ')).toBe(145);
+    expect(() => parseBuyerTicketCodeToCanonicalPresaleId('INVALID')).toThrow(
+      'unsupported format'
+    );
   });
 
   it('builds boarding qr payloads from canonical dispatcher identifiers', () => {

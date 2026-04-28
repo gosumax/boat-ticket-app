@@ -1,8 +1,4 @@
-const RUSSIAN_DEADLINE_DATE_FORMATTER = new Intl.DateTimeFormat('ru-RU', {
-  day: 'numeric',
-  month: 'long',
-  timeZone: 'UTC',
-});
+import { formatMiniAppBusinessHoldDeadlineLabel } from './hold-deadline-format.js';
 
 function normalizeString(value) {
   const normalized = String(value ?? '').trim();
@@ -22,22 +18,6 @@ function readReferenceId(reference, key) {
   }
   const value = reference[key];
   return Number.isInteger(value) ? value : null;
-}
-
-function formatHoldDeadlineLabel(isoValue) {
-  const normalizedIso = normalizeString(isoValue);
-  if (!normalizedIso) {
-    return null;
-  }
-
-  const parsedDate = new Date(normalizedIso);
-  if (Number.isNaN(parsedDate.getTime())) {
-    return normalizedIso;
-  }
-
-  const dateLabel = RUSSIAN_DEADLINE_DATE_FORMATTER.format(parsedDate);
-  const timeLabel = parsedDate.toISOString().slice(11, 16);
-  return `${dateLabel}, ${timeLabel}`;
 }
 
 function mapSubmitReasonCode(reasonCode) {
@@ -113,7 +93,7 @@ export function buildMiniAppHoldResultViewModel(submitResult) {
   );
   const holdId = readReferenceId(submitResult?.hold_reference, 'booking_hold_id');
   const holdExpiresAtIso = readIso(submitResult?.hold_expires_at_summary);
-  const holdDeadlineLabel = formatHoldDeadlineLabel(holdExpiresAtIso);
+  const holdDeadlineLabel = formatMiniAppBusinessHoldDeadlineLabel(holdExpiresAtIso);
   const sellerContact = readSellerContactSummary(submitResult?.seller_contact_summary);
 
   if (submitStatus === 'submitted_with_hold') {
@@ -158,6 +138,26 @@ export function buildMiniAppHoldResultViewModel(submitResult) {
   }
 
   if (submitStatus === 'submit_blocked') {
+    if (submitReasonCode === 'duplicate_active_request') {
+      return {
+        tone: 'success',
+        headline: 'Заявка уже создана',
+        statusLabel: 'Откройте «Мои заявки»',
+        primaryText:
+          mapSubmitReasonCode(submitReasonCode) ||
+          submitMessage ||
+          'У вас уже есть активная заявка. Откройте её в разделе «Мои заявки».',
+        secondaryText: null,
+        summaryItems: [],
+        referenceText: null,
+        holdExpiresAtIso: null,
+        holdDeadlineLabel: null,
+        sellerContact: null,
+        instructionSteps: Object.freeze([]),
+        isSuccess: true,
+      };
+    }
+
     return {
       tone: 'warning',
       headline: 'Заявка не создана',

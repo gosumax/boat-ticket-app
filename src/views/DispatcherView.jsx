@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   CalendarDays,
@@ -15,6 +15,10 @@ import {
 } from 'lucide-react';
 import SlotManagement from '../components/dispatcher/SlotManagement';
 import TicketSellingView from '../components/dispatcher/TicketSellingView';
+import {
+  isScannerLikeCapture,
+  resolveDispatcherLookupQuery,
+} from '../components/dispatcher/dispatcherScannerUtils';
 import { dpButton, dpIconWrap } from '../components/dispatcher/dispatcherTheme';
 import DateFieldPicker from '../components/ui/DateFieldPicker';
 import DispatcherShiftClose from './DispatcherShiftClose';
@@ -42,6 +46,18 @@ const TAB_ITEMS = [
   { key: 'shiftClose', label: 'Закрытие смены', icon: WalletCards },
 ];
 
+function isEditableElement(target) {
+  if (!target || typeof target !== 'object') return false;
+  const maybeElement = /** @type {{ tagName?: string, isContentEditable?: boolean }} */ (target);
+  const tag = String(maybeElement.tagName || '').toLowerCase();
+  return (
+    maybeElement.isContentEditable === true ||
+    tag === 'input' ||
+    tag === 'textarea' ||
+    tag === 'select'
+  );
+}
+
 const DispatcherView = () => {
   const navigate = useNavigate();
   const { logout: authLogout, currentUser, loading: authLoading } = useAuth();
@@ -62,6 +78,19 @@ const DispatcherView = () => {
   const [statusFilter, setStatusFilter] = useState('active');
   const [searchTerm, setSearchTerm] = useState('');
   const [tripCounts, setTripCounts] = useState({ total: 0, shown: 0 });
+  const [quickTicketLookup, setQuickTicketLookup] = useState('');
+  const [ticketLookupRequest, setTicketLookupRequest] = useState(null);
+  const [ticketLookupError, setTicketLookupError] = useState('');
+  const [ticketLookupBusy, setTicketLookupBusy] = useState(false);
+  const quickLookupInputRef = useRef(null);
+  const pendingLookupRequestIdRef = useRef(null);
+  const scannerStateRef = useRef({
+    buffer: '',
+    startedAt: 0,
+    lastAt: 0,
+    intervals: [],
+    source: 'keyboard',
+  });
 
   const [shiftClosed, setShiftClosed] = useState(() => {
     const saved = localStorage.getItem('dispatcher_shiftClosed');
@@ -106,6 +135,167 @@ const DispatcherView = () => {
     setSearchTerm('');
   };
 
+  const resetScannerBuffer = useCallback(() => {
+    scannerStateRef.current = {
+      buffer: '',
+      startedAt: 0,
+      lastAt: 0,
+      intervals: [],
+      source: 'keyboard',
+    };
+  }, []);
+
+  const submitTicketLookup = useCallback((rawValue, source = 'manual') => {
+    const normalizedQuery = String(rawValue || '').trim();
+    if (!normalizedQuery) {
+      setTicketLookupError('\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u0434 \u0431\u0438\u043b\u0435\u0442\u0430');
+      return false;
+    }
+
+    const requestId = Date.now() + Math.floor(Math.random() * 1000);
+    pendingLookupRequestIdRef.current = requestId;
+    setTicketLookupBusy(true);
+    setTicketLookupError('');
+    setActiveTab('selling');
+    setTicketLookupRequest({
+      id: requestId,
+      query: normalizedQuery,
+      source,
+    });
+    return true;
+  }, []);
+
+  const handleTicketLookupResult = useCallback((result) => {
+    const resultId = Number(result?.id);
+    if (!Number.isInteger(resultId) || pendingLookupRequestIdRef.current !== resultId) {
+      return;
+    }
+    pendingLookupRequestIdRef.current = null;
+    setTicketLookupBusy(false);
+    if (!result?.ok) {
+      setTicketLookupError(result?.error || '\u0411\u0438\u043b\u0435\u0442 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d');
+      return;
+    }
+    setTicketLookupError('');
+  }, []);
+
+  const handleLookupActionComplete = useCallback(() => {
+    pendingLookupRequestIdRef.current = null;
+    setActiveTab('selling');
+    setTicketLookupBusy(false);
+    setTicketLookupError('');
+    setQuickTicketLookup('');
+    setTimeout(() => {
+      quickLookupInputRef.current?.focus();
+      quickLookupInputRef.current?.select();
+    }, 0);
+  }, []);
+
+  useEffect(() => {
+    const handleGlobalKeydown = (event) => {
+      const state = scannerStateRef.current;
+      const now = Date.now();
+      const key = event.key;
+      const editable = isEditableElement(event.target);
+      const quickInputFocused =
+        quickLookupInputRef.current != null &&
+        event.target === quickLookupInputRef.current;
+
+      if (quickInputFocused) {
+        resetScannerBuffer();
+        return;
+      }
+
+      if (editable) {
+        resetScannerBuffer();
+        return;
+      }
+
+      if (key === 'Enter') {
+        const cleanedBuffer = String(state.buffer || '').trim();
+        const scannerLike = isScannerLikeCapture({
+          buffer: cleanedBuffer,
+          startedAt: state.startedAt,
+          now,
+          intervals: state.intervals,
+          source: state.source,
+        });
+
+        if (scannerLike) {
+          const resolvedLookup = resolveDispatcherLookupQuery(cleanedBuffer) || cleanedBuffer;
+          setQuickTicketLookup(resolvedLookup);
+          const started = submitTicketLookup(resolvedLookup, 'scanner');
+          if (started) {
+            event.preventDefault();
+          }
+        }
+
+        resetScannerBuffer();
+        return;
+      }
+
+      if (key === 'Escape') {
+        resetScannerBuffer();
+        return;
+      }
+
+      if (event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+      }
+
+      if (key.length !== 1) {
+        if (!editable) {
+          resetScannerBuffer();
+        }
+        return;
+      }
+
+      if (!state.startedAt || now - state.lastAt > 280) {
+        state.buffer = '';
+        state.startedAt = now;
+        state.intervals = [];
+        state.source = 'keyboard';
+      }
+
+      if (state.lastAt > 0) {
+        state.intervals.push(now - state.lastAt);
+      }
+
+      state.lastAt = now;
+      state.buffer += key;
+    };
+
+    const handleGlobalPaste = (event) => {
+      const quickInputFocused =
+        quickLookupInputRef.current != null &&
+        event.target === quickLookupInputRef.current;
+      if (quickInputFocused || isEditableElement(event.target)) {
+        return;
+      }
+
+      const pastedText = String(event.clipboardData?.getData('text') || '').trim();
+      if (!pastedText) {
+        return;
+      }
+
+      const now = Date.now();
+      scannerStateRef.current = {
+        buffer: pastedText,
+        startedAt: now,
+        lastAt: now,
+        intervals: [],
+        source: 'paste',
+      };
+    };
+
+    window.addEventListener('keydown', handleGlobalKeydown, true);
+    window.addEventListener('paste', handleGlobalPaste, true);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeydown, true);
+      window.removeEventListener('paste', handleGlobalPaste, true);
+    };
+  }, [resetScannerBuffer, submitTicketLookup]);
+
   return (
     <div className="dispatcher-premium min-h-screen text-neutral-100">
       <div className="dp-shell">
@@ -118,6 +308,32 @@ const DispatcherView = () => {
               <div className="dp-brand__title dp-brand__title--compact">Диспетчер</div>
             </div>
 
+            <form
+              className="relative min-w-[220px] flex-1 max-w-[560px]"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const resolvedLookup = resolveDispatcherLookupQuery(quickTicketLookup) || quickTicketLookup;
+                submitTicketLookup(resolvedLookup, 'topbar');
+              }}
+            >
+              <Search
+                size={16}
+                strokeWidth={2}
+                className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-neutral-500"
+              />
+              <input
+                ref={quickLookupInputRef}
+                type="text"
+                value={quickTicketLookup}
+                onChange={(event) => {
+                  setQuickTicketLookup(event.target.value);
+                  if (ticketLookupError) setTicketLookupError('');
+                }}
+                placeholder={'\u041d\u0430\u0439\u0442\u0438 \u0431\u0438\u043b\u0435\u0442'}
+                className={ticketLookupBusy ? 'w-full py-2 pl-11 pr-4 text-sm border-sky-300/50' : 'w-full py-2 pl-11 pr-4 text-sm'}
+                data-testid="dispatcher-ticket-quick-lookup"
+              />
+            </form>
             <div className="dp-toolbar__actions dp-toolbar__actions--compact">
               <button
                 type="button"
@@ -129,6 +345,12 @@ const DispatcherView = () => {
               </button>
             </div>
           </div>
+
+          {ticketLookupError && (
+            <div className="px-1 text-xs text-rose-300" data-testid="dispatcher-ticket-lookup-error">
+              {ticketLookupError}
+            </div>
+          )}
 
           <div className="dp-topbar__nav">
             <div className="dp-tabbar dp-tabbar--compact">
@@ -318,6 +540,9 @@ const DispatcherView = () => {
               onTripCountsChange={setTripCounts}
               shiftClosed={shiftClosed}
               isActive={activeTab === 'selling'}
+              ticketLookupRequest={ticketLookupRequest}
+              onTicketLookupResult={handleTicketLookupResult}
+              onLookupActionComplete={handleLookupActionComplete}
             />
           )}
 

@@ -5,7 +5,10 @@ import jwt from 'jsonwebtoken';
 
 import { getTestDb, resetTestDb } from '../_helpers/dbReset.js';
 import { makeApp } from '../_helpers/makeApp.js';
-import { getIsoWeekIdForBusinessDay } from '../../server/utils/iso-week.mjs';
+import {
+  getIsoWeekIdForBusinessDay,
+  getIsoWeekRangeLocal,
+} from '../../server/utils/iso-week.mjs';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'boat_ticket_secret_key';
 
@@ -371,6 +374,11 @@ function findByBoat(rows, boatId) {
   return (rows || []).find((row) => Number(row.boat_id) === Number(boatId));
 }
 
+function isBusinessDayWithinRange(day, range) {
+  const value = String(day || '');
+  return Boolean(value && range?.dateFrom && range?.dateTo && value >= range.dateFrom && value <= range.dateTo);
+}
+
 beforeAll(async () => {
   resetTestDb();
   app = await makeApp();
@@ -603,7 +611,12 @@ describe('OWNER DIRTY SALES CROSS-CHECK', () => {
 
     const weekly = await getOwnerWeekly(weekId);
     const season = await getOwnerSeason(seasonId);
-    expect(Number(findByUser(weekly.sellers, SELLER_A_ID)?.points_week_total || 0)).toBeCloseTo(10, 6);
+    const weekRange = getIsoWeekRangeLocal(weekId);
+    const expectedSellerAWeeklyPoints =
+      5
+      + (isBusinessDayWithinRange(tomorrow, weekRange) ? 3.75 : 0)
+      + (isBusinessDayWithinRange(dayAfter, weekRange) ? 1.25 : 0);
+    expect(Number(findByUser(weekly.sellers, SELLER_A_ID)?.points_week_total || 0)).toBeCloseTo(expectedSellerAWeeklyPoints, 6);
     expect(Number(findByUser(season.sellers, SELLER_A_ID)?.points_total || 0)).toBeCloseTo(8.75, 6);
 
     const compareDayRow = (compareDays.rows || []).find((row) => String(row.day) === paymentDay);

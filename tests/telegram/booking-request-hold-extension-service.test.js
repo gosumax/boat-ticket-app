@@ -36,9 +36,29 @@ function createTestDb() {
       is_active INTEGER NOT NULL DEFAULT 1
     );
     CREATE TABLE presales (id INTEGER PRIMARY KEY AUTOINCREMENT);
+    CREATE TABLE generated_slots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trip_date TEXT,
+      time TEXT,
+      capacity INTEGER NOT NULL,
+      seats_left INTEGER
+    );
+    CREATE TABLE boat_slots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trip_date TEXT,
+      time TEXT,
+      capacity INTEGER NOT NULL,
+      seats_left INTEGER
+    );
   `);
   db.prepare(
     `INSERT INTO users (id, username, role, is_active) VALUES (1, 'seller-a', 'seller', 1)`
+  ).run();
+  db.prepare(
+    `
+      INSERT INTO generated_slots (id, trip_date, time, capacity, seats_left)
+      VALUES (42, '2026-04-11', '12:00', 12, 12)
+    `
   ).run();
   return db;
 }

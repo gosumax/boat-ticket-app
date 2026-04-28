@@ -201,14 +201,151 @@ function getTicketStatus(ticket) {
   return String(ticket?.status || 'ACTIVE');
 }
 
+const PUBLIC_TICKET_CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const PUBLIC_TICKET_NUMERIC_SPACE = 99;
+
+function buildPublicTicketCodeFromPresaleId(presaleId) {
+  const normalized = Number(presaleId);
+  if (!Number.isInteger(normalized) || normalized <= 0) return '';
+
+  const zeroBased = normalized - 1;
+  const prefixOrdinal = Math.floor(zeroBased / PUBLIC_TICKET_NUMERIC_SPACE);
+  const numericPart = (zeroBased % PUBLIC_TICKET_NUMERIC_SPACE) + 1;
+  const alphabetSize = PUBLIC_TICKET_CODE_ALPHABET.length;
+  let remainder = prefixOrdinal + 1;
+  const chars = [];
+
+  while (remainder > 0) {
+    remainder -= 1;
+    chars.push(PUBLIC_TICKET_CODE_ALPHABET[remainder % alphabetSize]);
+    remainder = Math.floor(remainder / alphabetSize);
+  }
+
+  return `${chars.reverse().join('')}${numericPart}`;
+}
+
+function pickPublicTicketCode(...values) {
+  for (const value of values) {
+    const normalized = String(value || '').trim();
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+function getTicketDisplayNumber(ticket, presale = null, fallback = null) {
+  const direct = pickPublicTicketCode(
+    ticket?.display_ticket_code,
+    ticket?.public_ticket_code,
+    ticket?.buyer_ticket_code,
+    ticket?.buyerTicketCode,
+    presale?.display_ticket_code,
+    presale?.public_ticket_code,
+    presale?.buyer_ticket_code,
+    presale?.buyerTicketCode,
+  );
+  if (direct) return direct;
+
+  const generated = buildPublicTicketCodeFromPresaleId(presale?.id ?? ticket?.presale_id);
+  if (generated) return generated;
+
+  if (fallback != null) {
+    const normalizedFallback = String(fallback).trim();
+    if (normalizedFallback) return normalizedFallback;
+  }
+
+  const id = Number(ticket?.id);
+  if (Number.isInteger(id) && id > 0) return `#${id}`;
+  return '';
+}
+
+function normalizeLookupTicketToken(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/^№/, '')
+    .replace(/-/g, '');
+}
+
+function resolveLookupTicketCandidate({
+  presale = null,
+  presaleTickets = [],
+  preferredTicketId = null,
+  preferredTicketCode = '',
+  lookupQuery = '',
+} = {}) {
+  const list = Array.isArray(presaleTickets) ? presaleTickets : [];
+  if (list.length === 0) return null;
+
+  const normalizedPreferredTicketId = Number(preferredTicketId);
+  if (Number.isInteger(normalizedPreferredTicketId) && normalizedPreferredTicketId > 0) {
+    const byId = list.find((item) => Number(item?.id) === normalizedPreferredTicketId) || null;
+    if (byId) {
+      return { ticketId: normalizedPreferredTicketId, ticket: byId };
+    }
+  }
+
+  const codeCandidates = [
+    normalizeLookupTicketToken(preferredTicketCode),
+    normalizeLookupTicketToken(lookupQuery),
+  ].filter(Boolean);
+
+  if (codeCandidates.length > 0) {
+    const byCode = list.find((ticket) => {
+      const displayCode = normalizeLookupTicketToken(getTicketDisplayNumber(ticket, presale, ''));
+      return displayCode && codeCandidates.includes(displayCode);
+    }) || null;
+    if (byCode) {
+      const ticketId = Number(byCode?.id);
+      if (Number.isInteger(ticketId) && ticketId > 0) {
+        return { ticketId, ticket: byCode };
+      }
+    }
+  }
+
+  const activeTickets = list.filter((ticket) => getTicketStatus(ticket) === 'ACTIVE');
+  if (activeTickets.length === 1) {
+    const ticket = activeTickets[0];
+    const ticketId = Number(ticket?.id);
+    if (Number.isInteger(ticketId) && ticketId > 0) {
+      return { ticketId, ticket };
+    }
+  }
+
+  if (list.length === 1) {
+    const ticket = list[0];
+    const ticketId = Number(ticket?.id);
+    if (Number.isInteger(ticketId) && ticketId > 0) {
+      return { ticketId, ticket };
+    }
+  }
+
+  return null;
+}
+
 const ALLOWED_PRESALE_STATUSES_FOR_TICKET_OPS = ['ACTIVE', 'PAID'];
 
-const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) => {
+const PassengerList = ({
+  trip,
+  onBack,
+  onClose,
+  refreshAllSlots,
+  shiftClosed,
+  focusedPresaleId = null,
+  focusedTicketId = null,
+  focusedTicketCode = null,
+  focusedLookupQuery = null,
+  focusLookupKey = null,
+}) => {
   const { refreshOwnerData, refreshPendingByDays } = useOwnerData();
   const [presales, setPresales] = useState([]);
   const [tickets, setTickets] = useState({});
   const [loading, setLoading] = useState(false);
   const [expandedPresales, setExpandedPresales] = useState({});
+  const [highlightPresaleId, setHighlightPresaleId] = useState(null);
+  const [highlightTicketId, setHighlightTicketId] = useState(null);
+  const [pendingLookupFocus, setPendingLookupFocus] = useState(null);
+  const [lookupQuickActionFocus, setLookupQuickActionFocus] = useState(null);
   const activeTab = 'active'; // fixed: show only active presales inside рейс
   const [error, setError] = useState(null);
 
@@ -237,6 +374,8 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
 
   const reloadInFlightRef = useRef(false);
   const lastReloadAtRef = useRef(0);
+  const lastFocusLookupKeyRef = useRef(null);
+  const lookupHighlightTimeoutRef = useRef(null);
 
 
   // Transfer modal
@@ -301,17 +440,47 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
       setPresales(presalesArr);
 
       const ticketsMap = {};
-      for (const p of presalesArr) {
-        try {
-          const t = await apiClient.getPresaleTickets(p.id);
-          const tRaw = Array.isArray(t) ? t : (t?.tickets || []);
+      let slotTicketsRaw = null;
+      try {
+        const slotTicketsResponse = await apiClient.getSlotTickets(slotUid);
+        slotTicketsRaw = Array.isArray(slotTicketsResponse)
+          ? slotTicketsResponse
+          : (slotTicketsResponse?.tickets || []);
+      } catch {
+        slotTicketsRaw = null;
+      }
+
+      if (Array.isArray(slotTicketsRaw)) {
+        const ticketsByPresaleId = new Map();
+        for (const ticket of slotTicketsRaw) {
+          const presaleId = Number(ticket?.presale_id);
+          if (!Number.isInteger(presaleId) || presaleId <= 0) continue;
+          const existing = ticketsByPresaleId.get(presaleId) || [];
+          existing.push(ticket);
+          ticketsByPresaleId.set(presaleId, existing);
+        }
+
+        for (const p of presalesArr) {
+          const tRaw = ticketsByPresaleId.get(Number(p.id)) || [];
           ticketsMap[p.id] = {
             tickets: enrichTicketsForPresale(p, tRaw),
-            has_missing_tickets: !!t?.has_missing_tickets,
-            expected_seats: t?.expected_seats ?? p?.number_of_seats ?? (Array.isArray(tRaw) ? tRaw.length : 0),
+            has_missing_tickets: false,
+            expected_seats: p?.number_of_seats ?? tRaw.length,
           };
-        } catch (e) {
-          ticketsMap[p.id] = { tickets: [], has_missing_tickets: true, expected_seats: p?.number_of_seats ?? 0 };
+        }
+      } else {
+        for (const p of presalesArr) {
+          try {
+            const t = await apiClient.getPresaleTickets(p.id);
+            const tRaw = Array.isArray(t) ? t : (t?.tickets || []);
+            ticketsMap[p.id] = {
+              tickets: enrichTicketsForPresale(p, tRaw),
+              has_missing_tickets: !!t?.has_missing_tickets,
+              expected_seats: t?.expected_seats ?? p?.number_of_seats ?? (Array.isArray(tRaw) ? tRaw.length : 0),
+            };
+          } catch (e) {
+            ticketsMap[p.id] = { tickets: [], has_missing_tickets: true, expected_seats: p?.number_of_seats ?? 0 };
+          }
         }
       }
       setTickets(ticketsMap);
@@ -329,9 +498,184 @@ const PassengerList = ({ trip, onBack, onClose, refreshAllSlots, shiftClosed }) 
 
   useEffect(() => {
     lastReloadAtRef.current = 0;
-        reloadPresalesAndTickets();
-        refreshSeatsLeft();
+    reloadPresalesAndTickets();
   }, [reloadPresalesAndTickets]);
+
+  const clearLookupHighlightTimeout = useCallback(() => {
+    if (lookupHighlightTimeoutRef.current) {
+      clearTimeout(lookupHighlightTimeoutRef.current);
+      lookupHighlightTimeoutRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => {
+    clearLookupHighlightTimeout();
+  }, [clearLookupHighlightTimeout]);
+
+  useEffect(() => {
+    if (!focusLookupKey || lastFocusLookupKeyRef.current === focusLookupKey) {
+      return;
+    }
+
+    let targetPresaleId = Number(focusedPresaleId);
+    if (!Number.isInteger(targetPresaleId) || targetPresaleId <= 0) {
+      targetPresaleId = null;
+    }
+
+    let targetTicketId = Number(focusedTicketId);
+    if (!Number.isInteger(targetTicketId) || targetTicketId <= 0) {
+      targetTicketId = null;
+    }
+
+    if (!targetPresaleId && targetTicketId) {
+      for (const [presaleId, entry] of Object.entries(tickets || {})) {
+        const list = Array.isArray(entry) ? entry : (entry?.tickets || []);
+        if (Array.isArray(list) && list.some((ticket) => Number(ticket?.id) === targetTicketId)) {
+          const numericPresaleId = Number(presaleId);
+          if (Number.isInteger(numericPresaleId) && numericPresaleId > 0) {
+            targetPresaleId = numericPresaleId;
+            break;
+          }
+        }
+      }
+    }
+
+    const focusedPresaleTickets = targetPresaleId ? getPresaleTicketsArray(targetPresaleId, tickets) : [];
+    const resolvedLookupTicket = resolveLookupTicketCandidate({
+      presale: presales.find((item) => Number(item?.id) === Number(targetPresaleId)) || null,
+      presaleTickets: focusedPresaleTickets,
+      preferredTicketId: targetTicketId,
+      preferredTicketCode: focusedTicketCode,
+      lookupQuery: focusedLookupQuery,
+    });
+    if (resolvedLookupTicket?.ticketId) {
+      targetTicketId = resolvedLookupTicket.ticketId;
+    }
+
+    if (!targetPresaleId) return;
+
+    lastFocusLookupKeyRef.current = focusLookupKey;
+    setExpandedPresales((prev) => ({ ...prev, [targetPresaleId]: true }));
+    setLookupQuickActionFocus({
+      key: focusLookupKey,
+      presaleId: targetPresaleId,
+      ticketId: targetTicketId,
+      ticketCode: focusedTicketCode || null,
+      lookupQuery: focusedLookupQuery || null,
+    });
+    setPendingLookupFocus({
+      key: focusLookupKey,
+      presaleId: targetPresaleId,
+      ticketId: targetTicketId,
+      ticketCode: focusedTicketCode || null,
+      lookupQuery: focusedLookupQuery || null,
+    });
+  }, [focusLookupKey, focusedPresaleId, focusedTicketId, focusedTicketCode, focusedLookupQuery, tickets, presales]);
+
+  useEffect(() => {
+    if (!pendingLookupFocus) return;
+
+    let cancelled = false;
+    let attempts = 0;
+
+    const applyLookupFocus = () => {
+      if (cancelled) return;
+
+      const targetPresaleId = Number(pendingLookupFocus?.presaleId);
+      const targetTicketId = Number(pendingLookupFocus?.ticketId);
+      const ticketSelector =
+        Number.isInteger(targetTicketId) && targetTicketId > 0
+          ? `[data-ticket-id="${targetTicketId}"]`
+          : '';
+      const presaleSelector =
+        Number.isInteger(targetPresaleId) && targetPresaleId > 0
+          ? `[data-presale-id="${targetPresaleId}"]`
+          : '';
+
+      const ticketNode = ticketSelector && typeof document !== 'undefined'
+        ? document.querySelector(ticketSelector)
+        : null;
+      const presaleNode = presaleSelector && typeof document !== 'undefined'
+        ? document.querySelector(presaleSelector)
+        : null;
+
+      const focusNode = (node, mode) => {
+        if (!node || typeof node.scrollIntoView !== 'function') return false;
+        node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        if (mode === 'ticket' && Number.isInteger(targetTicketId) && targetTicketId > 0) {
+          setHighlightTicketId(targetTicketId);
+          setHighlightPresaleId(null);
+        } else if (Number.isInteger(targetPresaleId) && targetPresaleId > 0) {
+          setHighlightPresaleId(targetPresaleId);
+          setHighlightTicketId(null);
+        }
+        clearLookupHighlightTimeout();
+        lookupHighlightTimeoutRef.current = setTimeout(() => {
+          setHighlightTicketId(null);
+          setHighlightPresaleId(null);
+        }, 3200);
+        setPendingLookupFocus(null);
+        return true;
+      };
+
+      if (focusNode(ticketNode, 'ticket')) return;
+      if (focusNode(presaleNode, 'presale')) return;
+
+      attempts += 1;
+      if (attempts < 36) {
+        setTimeout(applyLookupFocus, 120);
+        return;
+      }
+      setPendingLookupFocus(null);
+    };
+
+    applyLookupFocus();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingLookupFocus, clearLookupHighlightTimeout]);
+
+  const resolveLookupQuickFocusContext = useCallback(() => {
+    if (!lookupQuickActionFocus) return null;
+
+    const presaleId = Number(lookupQuickActionFocus?.presaleId);
+    if (!Number.isInteger(presaleId) || presaleId <= 0) return null;
+
+    const presale = presales.find((item) => Number(item?.id) === presaleId) || null;
+    if (!presale) return null;
+
+    const entry = tickets?.[presaleId];
+    const presaleTickets = Array.isArray(entry) ? entry : (entry?.tickets || []);
+    const resolvedTicket = resolveLookupTicketCandidate({
+      presale,
+      presaleTickets,
+      preferredTicketId: lookupQuickActionFocus?.ticketId,
+      preferredTicketCode: lookupQuickActionFocus?.ticketCode || focusedTicketCode,
+      lookupQuery: lookupQuickActionFocus?.lookupQuery || focusedLookupQuery,
+    });
+    const ticket = resolvedTicket?.ticket || null;
+    const ticketId = Number(resolvedTicket?.ticketId);
+    const hasTicketId = Number.isInteger(ticketId) && ticketId > 0;
+
+    const totalPrice = safeToInt(presale?.total_price, 0);
+    const prepay = safeToInt(presale?.prepayment_amount, 0);
+    const remaining = Math.max(0, totalPrice - prepay);
+    const presaleStatus = String(presale?.status || 'ACTIVE');
+
+    return {
+      key: lookupQuickActionFocus?.key || null,
+      presaleId,
+      presale,
+      ticketId: hasTicketId ? ticketId : null,
+      ticket,
+      ticketCode: lookupQuickActionFocus?.ticketCode || focusedTicketCode || null,
+      lookupQuery: lookupQuickActionFocus?.lookupQuery || focusedLookupQuery || null,
+      totalPrice,
+      prepay,
+      remaining,
+      presaleStatus,
+    };
+  }, [lookupQuickActionFocus, focusedTicketCode, focusedLookupQuery, presales, tickets]);
 
   const togglePresaleExpanded = (presaleId) => {
     setExpandedPresales(prev => ({ ...prev, [presaleId]: !prev[presaleId] }));
@@ -625,7 +969,8 @@ const loadTransferOptions = async (ctx) => {
     return null;
   };
 
-  const handleTicketOperation = async (ticketId, action, decision = null) => {
+  const handleTicketOperation = async (ticketId, action, decision = null, options = {}) => {
+    const closeConfirmModal = options?.closeConfirmModal !== false;
     setConfirmLoading(true);
     setConfirmError(null);
 
@@ -640,7 +985,7 @@ const loadTransferOptions = async (ctx) => {
         if (presale && !ALLOWED_PRESALE_STATUSES_FOR_TICKET_OPS.includes(presale.status)) {
           setConfirmError('Билет недоступен для действия');
           setConfirmLoading(false);
-          return;
+          return false;
         }
         presaleForTicket = presale;
         presaleIdForTicket = Number(psId);
@@ -651,7 +996,7 @@ const loadTransferOptions = async (ctx) => {
     if (presaleForTicket && !ALLOWED_PRESALE_STATUSES_FOR_TICKET_OPS.includes(presaleForTicket.status)) {
       setConfirmError('Билет недоступен для действия');
       setConfirmLoading(false);
-      return;
+      return false;
     }
 
     try {
@@ -709,7 +1054,9 @@ const loadTransferOptions = async (ctx) => {
         }
       }
 
-      setConfirmBoardingOpen(false);
+      if (closeConfirmModal) {
+        setConfirmBoardingOpen(false);
+      }
       setPendingTicketOperation(null);
       setConfirmLoading(false);
 
@@ -753,10 +1100,12 @@ const loadTransferOptions = async (ctx) => {
           refreshPendingByDays(['today', 'tomorrow'], 'ticket-operation');
         }
       } catch (e) {}
+      return true;
     } catch (error) {
       console.error('Error performing ticket operation:', error);
       setConfirmError(error?.message || 'Ошибка операции');
       setConfirmLoading(false);
+      return false;
     }
   };
 
@@ -781,6 +1130,8 @@ const loadTransferOptions = async (ctx) => {
     setConfirmBoardingOpen(true);
     setConfirmError(null);
   };
+
+  const lookupQuickActionContext = resolveLookupQuickFocusContext();
 
   const handleConfirmBoarding = async (decision) => {
     if (pendingTicketOperation) {
@@ -946,12 +1297,30 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
 
     const isActive = status === 'ACTIVE' && remaining > 0;
     const payPct = totalPrice > 0 ? Math.min(100, Math.round((prepay / totalPrice) * 100)) : 0;
+    const focusedLookupPresale =
+      Number(lookupQuickActionContext?.presaleId) === Number(presale.id) &&
+      Number(lookupQuickActionContext?.ticketId) > 0;
+    const focusedTicketBadge = focusedLookupPresale
+      ? getTicketDisplayNumber(
+        lookupQuickActionContext?.ticket,
+        lookupQuickActionContext?.presale,
+        lookupQuickActionContext?.ticketId,
+      )
+      : '';
 
     const payLabel = remaining > 0 ? 'Ожидает оплаты' : 'Оплачено';
     const payPill = remaining > 0 ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200';
 
     return (
-      <div className="bg-neutral-950/40 rounded-2xl  border border-neutral-800 p-4" data-testid={`presale-card-${presale.id}`}>
+      <div
+        className={`bg-neutral-950/40 rounded-2xl border p-4 transition-shadow ${
+          Number(highlightPresaleId) === Number(presale.id)
+            ? 'border-sky-300/70 shadow-[0_0_0_2px_rgba(125,211,252,0.26)]'
+            : 'border-neutral-800'
+        }`}
+        data-testid={`presale-card-${presale.id}`}
+        data-presale-id={presale.id}
+      >
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-xl bg-neutral-800/50 flex items-center justify-center text-neutral-200">
             <span className="text-lg">👤</span>
@@ -963,6 +1332,16 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                 <div className="font-bold text-[18px] leading-snug truncate">
                   {presale.customer_name || 'Клиент'}
                 </div>
+                {focusedLookupPresale && focusedTicketBadge && (
+                  <div className="mt-1">
+                    <span
+                      className="inline-flex items-center rounded-full border border-sky-200/50 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-100"
+                      data-testid={`presale-focused-ticket-badge-${presale.id}`}
+                    >
+                      Билет № {focusedTicketBadge}
+                    </span>
+                  </div>
+                )}
                 <div className="mt-0.5 text-sm text-neutral-300 truncate">
                   {formatPhone(presale.customer_phone)}
                 </div>
@@ -1080,8 +1459,11 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
     const status = String(presale.status || 'ACTIVE');
     const allowTicketOps = ALLOWED_PRESALE_STATUSES_FOR_TICKET_OPS.includes(status);
     const activeCount = Array.isArray(list) ? list.filter(t => getTicketStatus(t) === 'ACTIVE').length : 0;
+    const lookupFocusedOnPresale =
+      Number(lookupQuickActionContext?.presaleId) === Number(presale.id) &&
+      Number(lookupQuickActionContext?.ticketId) > 0;
     // UI правило: если в билете 1 человек — не показываем список пассажиров (и блок кнопок на уровне пассажира)
-    if (activeCount <= 1) return null;
+    if (activeCount <= 1 && !lookupFocusedOnPresale) return null;
 
     const totalPrice = safeToInt(presale.total_price, 0);
     const prepay = safeToInt(presale.prepayment_amount, 0);
@@ -1112,8 +1494,13 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
           return (
             <div
               key={ticket?.id ?? idx}
-              className={`bg-neutral-950/40 rounded-2xl  border border-neutral-800 p-3 ${!isActive ? 'opacity-60' : ''}`}
+              className={`bg-neutral-950/40 rounded-2xl border p-3 ${!isActive ? 'opacity-60' : ''} ${
+                Number(highlightTicketId) === Number(ticket?.id)
+                  ? 'border-sky-300/70 shadow-[0_0_0_2px_rgba(125,211,252,0.26)]'
+                  : 'border-neutral-800'
+              }`}
               data-testid={`ticket-row-${ticket?.id}`}
+              data-ticket-id={ticket?.id ?? ''}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -1121,7 +1508,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
                     {buildPassengerLabel(ticket)}
                   </div>
                   <div className="mt-1 text-sm text-neutral-300 flex flex-wrap gap-x-3 gap-y-1">
-                    <span>№ {ticket?.ticket_number || ticket?.number || (ticket?.id ?? idx)}</span>
+                    <span>№ {getTicketDisplayNumber(ticket, presale, ticket?.ticket_number || ticket?.number || (ticket?.id ?? idx))}</span>
                     <span className="text-neutral-700">•</span>
                     <span>{tStatus}</span>
                     <span className="text-neutral-700">•</span>
@@ -1220,6 +1607,7 @@ const updatedPresale = await apiClient.acceptPayment(idToUse, payload);
               Продать билет
             </button>
           </div>
+
         </div>
       </div>
 

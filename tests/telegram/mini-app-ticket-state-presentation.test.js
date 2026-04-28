@@ -5,13 +5,31 @@ import {
 } from '../../src/telegram/ticket-state-presentation.js';
 
 describe('telegram mini app buyer ticket-state presentation', () => {
+  function formatExpectedLocalHoldDeadline(iso) {
+    const date = new Date(iso);
+    const dateLabel = new Intl.DateTimeFormat('ru-RU', {
+      day: 'numeric',
+      month: 'long',
+      timeZone: 'Europe/Moscow',
+    }).format(date);
+    const timeLabel = new Intl.DateTimeFormat('ru-RU', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+      timeZone: 'Europe/Moscow',
+    }).format(date);
+    return `${dateLabel}, ${timeLabel}`;
+  }
+
   it('keeps pending requests free from technical numeric hashes', () => {
+    const holdExpiresAtIso = '2036-04-10T10:46:00.000Z';
     const presentation = resolveMiniAppBuyerTicketPresentation({
       status: 'no_ticket_yet',
       availability: 'not_available_yet',
       bookingRequestId: 17,
       lifecycleState: 'hold_active',
       holdActive: true,
+      holdExpiresAtIso,
       requestedPrepaymentAmount: 6500,
     });
 
@@ -20,7 +38,9 @@ describe('telegram mini app buyer ticket-state presentation', () => {
     expect(presentation.detailTitle).not.toContain('#');
     expect(presentation.statusTone).toBe('warning');
     expect(presentation.statusLabel).toBe('Ждём предоплату');
-    expect(presentation.holdStatusLabel).toBe('Идёт таймер');
+    expect(presentation.holdStatusLabel).toBe(
+      `До ${formatExpectedLocalHoldDeadline(holdExpiresAtIso)}`
+    );
     expect(presentation.prepaymentStatusLabel).toBe('Нужно передать предоплату');
     expect(presentation.ticketTone).toBe('accent');
   });

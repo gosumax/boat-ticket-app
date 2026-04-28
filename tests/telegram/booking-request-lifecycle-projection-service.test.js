@@ -238,6 +238,121 @@ describe('telegram booking-request lifecycle projection service', () => {
     expect(latest.lifecycle_state).toBe('new');
   });
 
+  it('skips non-projectable linked requests when listing lifecycle items for a guest', () => {
+    const { context, clocks, db } = createLifecycleTestContext();
+    const decision = createSellerRouteDecision(context);
+    const first = context.services.bookingRequestCreationService.createBookingRequest(
+      createBookingInput(decision, {
+        idempotency_key: 'telegram-booking-create-linked-first',
+      })
+    );
+    const firstActive = activateHold(context, first);
+    context.services.bookingRequestPrepaymentConfirmationService.confirmPrepayment({
+      booking_request_reference: firstActive.booking_request_reference,
+      idempotency_key: 'telegram-prepayment-confirm-linked-first',
+    });
+    const linkedPresaleId = Number(
+      db.prepare('INSERT INTO presales DEFAULT VALUES').run().lastInsertRowid
+    );
+    context.repositories.bookingRequests.updateById(
+      firstActive.booking_request_reference.booking_request_id,
+      {
+        request_status: 'CONFIRMED_TO_PRESALE',
+        confirmed_presale_id: linkedPresaleId,
+      }
+    );
+
+    clocks.creation.set('2026-04-10T10:50:00.000Z');
+    const second = context.services.bookingRequestCreationService.createBookingRequest(
+      createBookingInput(decision, {
+        idempotency_key: 'telegram-booking-create-linked-second',
+      })
+    );
+
+    const list =
+      context.services.bookingRequestLifecycleProjectionService.listBookingRequestsForGuest(
+        {
+          telegram_user_id: '777000111',
+        }
+      );
+
+    expect(list.item_count).toBe(1);
+    expect(list.items).toMatchObject([
+      {
+        booking_request_reference: {
+          booking_request_id: second.booking_request_reference.booking_request_id,
+        },
+        lifecycle_state: 'new',
+      },
+    ]);
+  });
+
+  it('keeps lifecycle projections readable for legacy HOLD_EXPIRED rows without a HOLD_EXPIRED event', () => {
+    const { context, db } = createLifecycleTestContext();
+    const decision = createSellerRouteDecision(context);
+    const creation = context.services.bookingRequestCreationService.createBookingRequest(
+      createBookingInput(decision, {
+        idempotency_key: 'telegram-booking-create-legacy-gap-first',
+      })
+    );
+    const active = activateHold(context, creation);
+    const expired = expireHold(context, active);
+    const expiredBookingRequestId =
+      expired.booking_request_reference.booking_request_id;
+
+    db.prepare(
+      `
+        DELETE FROM telegram_booking_request_events
+        WHERE booking_request_id = ? AND event_type = 'HOLD_EXPIRED'
+      `
+    ).run(expiredBookingRequestId);
+
+    const secondCreation = context.services.bookingRequestCreationService.createBookingRequest(
+      createBookingInput(decision, {
+        idempotency_key: 'telegram-booking-create-legacy-gap-second',
+      })
+    );
+    const secondActive = activateHold(context, secondCreation);
+    context.services.bookingRequestPrepaymentConfirmationService.confirmPrepayment({
+      booking_request_reference: secondActive.booking_request_reference,
+      idempotency_key: 'telegram-prepayment-confirm-legacy-gap',
+    });
+
+    const list =
+      context.services.bookingRequestLifecycleProjectionService.listBookingRequestsForGuest(
+        {
+          telegram_user_id: '777000111',
+        }
+      );
+
+    expect(list.item_count).toBe(2);
+    const expiredItem = list.items.find(
+      (item) =>
+        item.booking_request_reference.booking_request_id === expiredBookingRequestId
+    );
+    expect(expiredItem).toMatchObject({
+      booking_request_status: 'HOLD_EXPIRED',
+      lifecycle_state: 'hold_expired',
+      hold_active: false,
+      request_active: false,
+      expired: true,
+    });
+    expect(Date.parse(expiredItem.latest_lifecycle_timestamp_summary.iso)).not.toBeNaN();
+
+    const confirmedItem = list.items.find(
+      (item) =>
+        item.booking_request_reference.booking_request_id ===
+        secondActive.booking_request_reference.booking_request_id
+    );
+    expect(confirmedItem).toMatchObject({
+      booking_request_status: 'PREPAYMENT_CONFIRMED',
+      lifecycle_state: 'prepayment_confirmed',
+      hold_active: false,
+      request_active: false,
+      request_confirmed: true,
+    });
+  });
+
   it('rejects non-projectable booking-request lifecycle items deterministically', () => {
     const { context } = createLifecycleTestContext();
     const creationResult = createBookingRequest(context);

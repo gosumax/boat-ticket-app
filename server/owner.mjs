@@ -24,14 +24,22 @@ const router = express.Router();
 const SEASON_FUND_TYPES_SQL = `'WITHHOLD_SEASON','SEASON_PREPAY_DELETE'`;
 const SALES_REVENUE_TYPES_SQL = `'SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED'`;
 const SALES_AND_REFUND_TYPES_SQL = `${SALES_REVENUE_TYPES_SQL},'SALE_CANCEL_REVERSE'`;
+const ownerTableInfoCache = new Map();
 
 // =====================
 // Schema-safe helpers
 // =====================
 function pragmaTableInfo(table) {
+  if (ownerTableInfoCache.has(table)) {
+    return ownerTableInfoCache.get(table);
+  }
+
   try {
-    return db.prepare(`PRAGMA table_info(${table})`).all();
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all();
+    ownerTableInfoCache.set(table, rows);
+    return rows;
   } catch {
+    ownerTableInfoCache.set(table, []);
     return [];
   }
 }
@@ -790,14 +798,14 @@ function getCashCardCaseExprs() {
 
   if (hasCashAmt && hasCardAmt) {
     // MIXED payments: prefer money_ledger split when present,
-    // otherwise fall back to presales.payment_cash_amount/payment_card_amount.
+    // otherwise fall back to presales split by presale_id (without requiring JOIN alias p).
     return {
       cash: `CASE
         WHEN ml.method = 'CASH' THEN ml.amount
         WHEN ml.method = 'MIXED' THEN CASE
           WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
             THEN COALESCE(ml.cash_amount, 0)
-          ELSE COALESCE(p.payment_cash_amount, ml.amount)
+          ELSE COALESCE((SELECT payment_cash_amount FROM presales WHERE id = ml.presale_id), ml.amount)
         END
         ELSE 0 END`,
       card: `CASE
@@ -805,7 +813,7 @@ function getCashCardCaseExprs() {
         WHEN ml.method = 'MIXED' THEN CASE
           WHEN ABS(COALESCE(ml.cash_amount, 0)) > 0 OR ABS(COALESCE(ml.card_amount, 0)) > 0
             THEN COALESCE(ml.card_amount, 0)
-          ELSE COALESCE(p.payment_card_amount, 0)
+          ELSE COALESCE((SELECT payment_card_amount FROM presales WHERE id = ml.presale_id), 0)
         END
         ELSE 0 END`,
     };
@@ -823,6 +831,40 @@ function getCashCardCaseExprs() {
       WHEN ml.method = 'CARD' THEN ml.amount 
       WHEN ml.method = 'MIXED' THEN COALESCE(p.payment_card_amount, 0) 
       WHEN ml.method = 'CASH' THEN 0
+      ELSE 0 END`,
+  };
+}
+
+function getRefundCashCardCaseExprs(ledgerAlias = 'ml') {
+  const a = String(ledgerAlias || 'ml');
+  const hasCashAmt = hasColumn('money_ledger', 'cash_amount');
+  const hasCardAmt = hasColumn('money_ledger', 'card_amount');
+
+  if (hasCashAmt && hasCardAmt) {
+    return {
+      cash: `CASE
+        WHEN ABS(COALESCE(${a}.cash_amount, 0)) > 0 OR ABS(COALESCE(${a}.card_amount, 0)) > 0
+          THEN ABS(COALESCE(${a}.cash_amount, 0))
+        WHEN ${a}.method = 'CASH' THEN ABS(${a}.amount)
+        WHEN ${a}.method = 'MIXED' THEN ABS(COALESCE((SELECT payment_cash_amount FROM presales WHERE id = ${a}.presale_id), 0))
+        ELSE 0 END`,
+      card: `CASE
+        WHEN ABS(COALESCE(${a}.cash_amount, 0)) > 0 OR ABS(COALESCE(${a}.card_amount, 0)) > 0
+          THEN ABS(COALESCE(${a}.card_amount, 0))
+        WHEN ${a}.method = 'CARD' THEN ABS(${a}.amount)
+        WHEN ${a}.method = 'MIXED' THEN ABS(COALESCE((SELECT payment_card_amount FROM presales WHERE id = ${a}.presale_id), 0))
+        ELSE 0 END`,
+    };
+  }
+
+  return {
+    cash: `CASE
+      WHEN ${a}.method = 'CASH' THEN ABS(${a}.amount)
+      WHEN ${a}.method = 'MIXED' THEN ABS(COALESCE((SELECT payment_cash_amount FROM presales WHERE id = ${a}.presale_id), 0))
+      ELSE 0 END`,
+    card: `CASE
+      WHEN ${a}.method = 'CARD' THEN ABS(${a}.amount)
+      WHEN ${a}.method = 'MIXED' THEN ABS(COALESCE((SELECT payment_card_amount FROM presales WHERE id = ${a}.presale_id), 0))
       ELSE 0 END`,
   };
 }
@@ -1477,18 +1519,19 @@ router.get('/money/summary', (req, res) => {
     const mlHasCardAmt = hasColumn('money_ledger', 'card_amount');
 
     if (mlHasCashAmt && mlHasCardAmt) {
-      // money_ledger has split columns - direct query
+      // money_ledger has split columns; keep legacy fallback for rows without split values.
+      const refundSplitExpr = getRefundCashCardCaseExprs('ml');
       const refundRow = db
         .prepare(
           `SELECT
-             COALESCE(SUM(ABS(amount)), 0) AS refund_total,
-             COALESCE(SUM(ABS(cash_amount)), 0) AS refund_cash,
-             COALESCE(SUM(ABS(card_amount)), 0) AS refund_card
-           FROM money_ledger
-           WHERE status = 'POSTED'
-             AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-             AND type = 'SALE_CANCEL_REVERSE'
-             AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+             COALESCE(SUM(ABS(ml.amount)), 0) AS refund_total,
+             COALESCE(SUM(${refundSplitExpr.cash}), 0) AS refund_cash,
+             COALESCE(SUM(${refundSplitExpr.card}), 0) AS refund_card
+           FROM money_ledger ml
+           WHERE ml.status = 'POSTED'
+             AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+             AND ml.type = 'SALE_CANCEL_REVERSE'
+             AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
         )
         .get();
       refundTotal = Number(refundRow?.refund_total || 0);
@@ -2079,19 +2122,20 @@ router.get('/money/compare-days', (req, res) => {
       const hasCardAmt = hasColumn('money_ledger', 'card_amount');
 
       if (hasCashAmt && hasCardAmt) {
-        // money_ledger has split columns
+        // money_ledger has split columns; keep legacy fallback for rows without split values.
+        const refundSplitExpr = getRefundCashCardCaseExprs('ml');
         const refundSplitRows = db
           .prepare(
             `SELECT
-               DATE(business_day) AS day,
-               COALESCE(SUM(ABS(cash_amount)), 0) AS refund_cash,
-               COALESCE(SUM(ABS(card_amount)), 0) AS refund_card
-             FROM money_ledger
-             WHERE status = 'POSTED'
-               AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-               AND type = 'SALE_CANCEL_REVERSE'
-               AND DATE(business_day) BETWEEN ${r.from} AND ${r.to}
-             GROUP BY DATE(business_day)`
+               DATE(ml.business_day) AS day,
+               COALESCE(SUM(${refundSplitExpr.cash}), 0) AS refund_cash,
+               COALESCE(SUM(${refundSplitExpr.card}), 0) AS refund_card
+             FROM money_ledger ml
+             WHERE ml.status = 'POSTED'
+               AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+               AND ml.type = 'SALE_CANCEL_REVERSE'
+               AND DATE(ml.business_day) BETWEEN ${r.from} AND ${r.to}
+             GROUP BY DATE(ml.business_day)`
           )
           .all();
         for (const row of refundSplitRows) {
@@ -2244,18 +2288,19 @@ router.get('/money/compare-periods', (req, res) => {
 
       let refund = 0, refundCash = 0, refundCard = 0;
       if (hasCashAmt && hasCardAmt) {
-        // money_ledger has split columns
+        // money_ledger has split columns; keep legacy fallback for rows without split values.
+        const refundSplitExpr = getRefundCashCardCaseExprs('ml');
         const refundsRow = db
           .prepare(
             `SELECT
-               COALESCE(SUM(ABS(amount)), 0) AS refund_total,
-               COALESCE(SUM(ABS(cash_amount)), 0) AS refund_cash,
-               COALESCE(SUM(ABS(card_amount)), 0) AS refund_card
-             FROM money_ledger
-             WHERE status = 'POSTED'
-               AND kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
-               AND type = 'SALE_CANCEL_REVERSE'
-               AND DATE(business_day) BETWEEN ${fromExpr} AND ${toExpr}`
+               COALESCE(SUM(ABS(ml.amount)), 0) AS refund_total,
+               COALESCE(SUM(${refundSplitExpr.cash}), 0) AS refund_cash,
+               COALESCE(SUM(${refundSplitExpr.card}), 0) AS refund_card
+             FROM money_ledger ml
+             WHERE ml.status = 'POSTED'
+               AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
+               AND ml.type = 'SALE_CANCEL_REVERSE'
+               AND DATE(ml.business_day) BETWEEN ${fromExpr} AND ${toExpr}`
           )
           .get();
         refund = Number(refundsRow?.refund_total || 0);
@@ -2919,7 +2964,7 @@ router.get('/money/compare-boats', (req, res) => {
         LEFT JOIN boat_slots bs ON bs.id = p.boat_slot_id
         LEFT JOIN boats b ON b.id = bs.boat_id
         WHERE ml.status = 'POSTED'
-          AND ml.kind = 'SELLER_SHIFT'
+          AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
           AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
           AND DATE(ml.business_day) BETWEEN '${fromExpr}' AND '${toExpr}'
         GROUP BY b.id
@@ -3046,7 +3091,7 @@ router.get('/money/compare-sellers', (req, res) => {
         FROM money_ledger ml
         LEFT JOIN users u ON u.id = ml.seller_id
         WHERE ml.status = 'POSTED'
-          AND ml.kind = 'SELLER_SHIFT'
+          AND ml.kind IN ('SELLER_SHIFT','DISPATCHER_SHIFT')
           AND ml.type IN ('SALE_PREPAYMENT_CASH','SALE_PREPAYMENT_CARD','SALE_PREPAYMENT_MIXED','SALE_ACCEPTED_CASH','SALE_ACCEPTED_CARD','SALE_ACCEPTED_MIXED','SALE_CANCEL_REVERSE')
           AND DATE(ml.business_day) BETWEEN '${fromExpr}' AND '${toExpr}'
         GROUP BY u.id

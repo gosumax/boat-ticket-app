@@ -707,6 +707,14 @@ export class TelegramSellerAttributionSessionStartService {
   }
 
   resolveSellerSource(normalizedSourceBinding, startsAt) {
+    const registryResolved = this.resolveSellerSourceFromRegistry(
+      normalizedSourceBinding,
+      startsAt
+    );
+    if (registryResolved) {
+      return registryResolved;
+    }
+
     const sourceQRCode = this.sourceQRCodes.findOneBy(
       { qr_token: normalizedSourceBinding.normalized_source_token },
       { orderBy: 'source_qr_code_id ASC' }
@@ -744,14 +752,6 @@ export class TelegramSellerAttributionSessionStartService {
       }
 
       return { sourceQRCode, trafficSource, sellerId };
-    }
-
-    const registryResolved = this.resolveSellerSourceFromRegistry(
-      normalizedSourceBinding,
-      startsAt
-    );
-    if (registryResolved) {
-      return registryResolved;
     }
 
     rejectAttributionStart(

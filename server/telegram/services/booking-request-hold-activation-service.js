@@ -1,5 +1,6 @@
 import { freezeTelegramHandoffValue } from '../../../shared/telegram/index.js';
 import { TELEGRAM_BOOKING_REQUEST_CREATION_RESULT_VERSION } from './booking-request-creation-service.js';
+import { reserveLiveSeatHold } from './live-seat-hold-service.js';
 
 export const TELEGRAM_BOOKING_REQUEST_HOLD_ACTIVATION_RESULT_VERSION =
   'telegram_booking_request_hold_activation_result.v1';
@@ -245,11 +246,12 @@ function buildHoldReference(bookingHold) {
   });
 }
 
-function buildNoOpGuards() {
+function buildNoOpGuards({ seatHoldCreated = false } = {}) {
   return freezeSortedActivationValue({
     booking_hold_created: true,
     hold_extension_created: false,
     hold_expire_cleanup_run: false,
+    seat_hold_created: seatHoldCreated,
     prepayment_confirmed: false,
     presale_created: false,
     production_webhook_route_invoked: false,
@@ -265,6 +267,7 @@ function buildActivationResult({
   normalizedInput,
   holdStartedAt,
   holdExpiresAt,
+  liveSeatHoldSummary,
 }) {
   const creationResult = normalizedInput.creation_result;
 
@@ -278,6 +281,7 @@ function buildActivationResult({
     requested_seats: creationResult.requested_seats,
     hold_started_at_summary: normalizeTimestampSummary(holdStartedAt),
     hold_expires_at_summary: normalizeTimestampSummary(holdExpiresAt),
+    live_seat_hold_summary: liveSeatHoldSummary || null,
     hold_active: bookingHold.hold_status === 'ACTIVE',
     dedupe_key: normalizedInput.dedupe_key,
     idempotency_key: normalizedInput.idempotency_key,
@@ -297,11 +301,14 @@ function buildEventPayload({ normalizedInput, result }) {
     requested_seats: result.requested_seats,
     hold_started_at_summary: result.hold_started_at_summary,
     hold_expires_at_summary: result.hold_expires_at_summary,
+    live_seat_hold_summary: result.live_seat_hold_summary || null,
     hold_active: result.hold_active,
     dedupe_key: result.dedupe_key,
     idempotency_key: result.idempotency_key,
     activation_signature: normalizedInput.activation_signature,
-    no_op_guards: buildNoOpGuards(),
+    no_op_guards: buildNoOpGuards({
+      seatHoldCreated: result.live_seat_hold_summary?.seat_hold_applied === true,
+    }),
     hold_activation_result: result,
   });
 }
@@ -489,6 +496,14 @@ export class TelegramBookingRequestHoldActivationService {
       this.assertNoExistingActiveHold(normalizedInput.booking_request_id);
 
       const holdStartedAt = this.nowIso();
+      const liveSeatHoldSummary = reserveLiveSeatHold({
+        db: this.db,
+        requestedTripSlotReference:
+          normalizedInput.creation_result.requested_trip_slot_reference,
+        requestedSeats: normalizedInput.creation_result.requested_seats,
+        errorPrefix: ERROR_PREFIX,
+        reservedAt: holdStartedAt,
+      });
       const holdExpiresAt = addMinutes(holdStartedAt, HOLD_INITIAL_MINUTES);
       const bookingHold = this.bookingHolds.create({
         booking_request_id: bookingRequest.booking_request_id,
@@ -510,6 +525,7 @@ export class TelegramBookingRequestHoldActivationService {
         normalizedInput,
         holdStartedAt,
         holdExpiresAt,
+        liveSeatHoldSummary,
       });
 
       this.bookingRequestEvents.create({

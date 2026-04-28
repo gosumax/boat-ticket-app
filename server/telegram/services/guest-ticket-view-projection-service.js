@@ -353,11 +353,13 @@ export class TelegramGuestTicketViewProjectionService {
     return guestProfile;
   }
 
-  resolveHistoryForBookingRequestOrThrow(bookingRequestId) {
+  resolveHistoryForBookingRequestOrThrow(bookingRequestId, profileViewOverride = null) {
     try {
-      const profileView = this.guestProfileService.readGuestProfileView({
-        booking_request_id: bookingRequestId,
-      });
+      const profileView =
+        profileViewOverride ||
+        this.guestProfileService.readGuestProfileView({
+          booking_request_id: bookingRequestId,
+        });
       const historyItem = (profileView.booking_request_history || []).find(
         (item) => item?.booking_request?.booking_request_id === bookingRequestId
       );
@@ -640,6 +642,10 @@ export class TelegramGuestTicketViewProjectionService {
     latestTimelineItem,
   }) {
     if (!Number(bookingRequest.confirmed_presale_id)) {
+      if (bookingRequest.request_status === 'CLOSED_UNCONVERTED') {
+        return normalizeTicketState('linked_ticket_cancelled_or_unavailable');
+      }
+
       return normalizeTicketState('no_ticket_yet');
     }
 
@@ -856,13 +862,14 @@ export class TelegramGuestTicketViewProjectionService {
     return summary ? freezeTelegramGuestTicketViewValue(summary) : null;
   }
 
-  buildProjectionItem(bookingRequestId) {
+  buildProjectionItem(bookingRequestId, { profileView: profileViewOverride = null } = {}) {
     const bookingRequest = this.getBookingRequestOrThrow(bookingRequestId);
     const bookingHold = this.getHoldForRequest(bookingRequestId);
     const events = this.listRequestEvents(bookingRequestId);
     const guestProfile = this.getGuestProfileOrThrow(bookingRequest.guest_profile_id);
     const { profileView, historyItem } = this.resolveHistoryForBookingRequestOrThrow(
-      bookingRequestId
+      bookingRequestId,
+      profileViewOverride
     );
     const canonicalLinkageState = historyItem.canonical_linkage_state || null;
     const canonicalPresaleReference = buildTelegramCanonicalPresaleReference(
@@ -960,7 +967,11 @@ export class TelegramGuestTicketViewProjectionService {
 
   readGuestTicketViewByBookingRequestReference(input = {}) {
     const bookingRequestId = this.normalizeBookingRequestId(input);
-    return this.buildProjectionItem(bookingRequestId);
+    const profileView =
+      input && typeof input === 'object'
+        ? input.profile_view ?? input.profileView ?? null
+        : null;
+    return this.buildProjectionItem(bookingRequestId, { profileView });
   }
 
   readGuestTicketViewByTelegramUserReference(input = {}) {

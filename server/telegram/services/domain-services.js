@@ -9,6 +9,7 @@ import { TelegramBookingRequestLifecycleProjectionService } from './booking-requ
 import { TelegramBookingRequestPrepaymentConfirmationService } from './booking-request-prepayment-confirmation-service.js';
 import { TelegramBookingRequestCreationService } from './booking-request-creation-service.js';
 import { TelegramBookingRequestService } from './booking-request-service.js';
+import { TelegramConfirmedPrepaymentTicketRepairService } from './confirmed-prepayment-ticket-repair-service.js';
 import { TelegramGuestProfileService } from './guest-profile-service.js';
 import { TelegramGuestCommandActionOrchestrationService } from './guest-command-action-orchestration-service.js';
 import { TelegramGuestTicketViewProjectionService } from './guest-ticket-view-projection-service.js';
@@ -261,6 +262,7 @@ export function createTelegramDomainServices(repositories, options = {}) {
   const productionPresaleHandoffAdapterService =
     new TelegramProductionPresaleHandoffAdapterService({
       bookingRequests: repositories.bookingRequests,
+      bookingRequestEvents: repositories.bookingRequestEvents,
     });
   const realHandoffPreExecutionGuardService = new TelegramRealHandoffPreExecutionGuardService({
     handoffExecutionQueryService,
@@ -539,6 +541,19 @@ export function createTelegramDomainServices(repositories, options = {}) {
       realPresaleHandoffOrchestrationQueryService,
       executeRealPresaleHandoff,
     });
+  const confirmedPrepaymentTicketRepairService =
+    new TelegramConfirmedPrepaymentTicketRepairService({
+      bookingRequests: repositories.bookingRequests,
+      bookingHolds: repositories.bookingHolds,
+      bookingRequestEvents: repositories.bookingRequestEvents,
+      presaleHandoffService,
+      realPresaleHandoffOrchestratorService,
+      now: options.confirmedPrepaymentTicketRepairNow,
+    });
+  sellerWorkQueueService.setPrepaymentBridgeServices({
+    presaleHandoffService,
+    realPresaleHandoffOrchestratorService,
+  });
   const runtimeAnalyticsAutoCaptureService =
     new TelegramRuntimeAnalyticsAutoCaptureService({
       analyticsFoundationService,
@@ -682,6 +697,7 @@ export function createTelegramDomainServices(repositories, options = {}) {
     realPresaleHandoffOrchestrationQueryService,
     bridgeLinkageProjectionService,
     realPresaleHandoffOrchestratorService,
+    confirmedPrepaymentTicketRepairService,
     notificationService: new TelegramDomainService('telegram-notification-service', {
       telegramNotifications: repositories.telegramNotifications,
       telegramContentBlocks: repositories.telegramContentBlocks,

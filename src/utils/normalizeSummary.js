@@ -161,15 +161,27 @@ function buildMissingDispatcherRow({
 
   const visibleSellerCollectedTotal = sumNumericField(
     sellers,
-    (seller) => seller?.collected_total ?? seller?.collectedTotal ?? seller?.total_collected ?? seller?.accepted
+    (seller) => seller?._raw?.accepted ?? seller?.collected_total ?? seller?.collectedTotal ?? seller?.total_collected
   );
   const visibleSellerCollectedCash = sumNumericField(
     sellers,
-    (seller) => seller?.collected_cash ?? seller?.collectedCash
+    (seller) => (
+      (seller?.cash_due_to_owner ?? seller?.cashDueToOwner) !== undefined ||
+      (seller?.deposit_cash ?? seller?.depositCash) !== undefined
+        ? Number(seller?.cash_due_to_owner ?? seller?.cashDueToOwner ?? 0) +
+          Number(seller?.deposit_cash ?? seller?.depositCash ?? 0)
+        : seller?.collected_cash ?? seller?.collectedCash
+    )
   );
   const visibleSellerCollectedCard = sumNumericField(
     sellers,
-    (seller) => seller?.collected_card ?? seller?.collectedCard
+    (seller) => (
+      (seller?.terminal_due_to_owner ?? seller?.terminalDueToOwner) !== undefined ||
+      (seller?.deposit_card ?? seller?.depositCard) !== undefined
+        ? Number(seller?.terminal_due_to_owner ?? seller?.terminalDueToOwner ?? 0) +
+          Number(seller?.deposit_card ?? seller?.depositCard ?? 0)
+        : seller?.collected_card ?? seller?.collectedCard
+    )
   );
   const visibleSellerSalaryDue = sumNumericField(
     sellers,

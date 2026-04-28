@@ -1,8 +1,4 @@
-const RUSSIAN_DEADLINE_DATE_FORMATTER = new Intl.DateTimeFormat('ru-RU', {
-  day: 'numeric',
-  month: 'long',
-  timeZone: 'UTC',
-});
+import { formatMiniAppBusinessHoldDeadlineLabel } from './hold-deadline-format.js';
 
 function normalizeString(value) {
   const normalized = String(value ?? '').trim();
@@ -40,22 +36,6 @@ function formatRussianSeatWord(count) {
   return 'мест';
 }
 
-function formatHoldDeadlineLabel(isoValue) {
-  const normalizedIso = normalizeString(isoValue);
-  if (!normalizedIso) {
-    return null;
-  }
-
-  const parsedDate = new Date(normalizedIso);
-  if (Number.isNaN(parsedDate.getTime())) {
-    return normalizedIso;
-  }
-
-  const dateLabel = RUSSIAN_DEADLINE_DATE_FORMATTER.format(parsedDate);
-  const timeLabel = parsedDate.toISOString().slice(11, 16);
-  return `${dateLabel}, ${timeLabel}`;
-}
-
 function createPresentation(values) {
   return Object.freeze(values);
 }
@@ -65,7 +45,7 @@ function createPendingRequestPresentation({
   holdActive,
   holdExpiresAtIso,
 }) {
-  const holdDeadlineLabel = formatHoldDeadlineLabel(holdExpiresAtIso);
+  const holdDeadlineLabel = formatMiniAppBusinessHoldDeadlineLabel(holdExpiresAtIso);
   const holdStatusLabel = holdActive
     ? holdDeadlineLabel
       ? `До ${holdDeadlineLabel}`
@@ -247,12 +227,10 @@ export function formatMiniAppSeatCountLabel(value) {
 export function resolveMiniAppBuyerTicketPresentation({
   status = null,
   availability = null,
-  bookingRequestId = null,
   buyerTicketCode = null,
   lifecycleState = null,
   holdActive = false,
   requestConfirmed = false,
-  requestedPrepaymentAmount = 0,
   holdExpiresAtIso = null,
 } = {}) {
   const normalizedStatus = normalizeString(status) || 'unknown';

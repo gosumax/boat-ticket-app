@@ -299,7 +299,7 @@ describe('FULL FUNNEL: seller / dispatcher / owner financial chain', () => {
       LIMIT 1
     `).get(prepayPresaleId);
     expect(Number(topupLedger?.seller_id || 0)).toBe(sellerAId);
-    expect(String(topupLedger?.kind || '')).toBe('SELLER_SHIFT');
+    expect(String(topupLedger?.kind || '')).toBe('DISPATCHER_SHIFT');
     expect(toNum(topupLedger?.amount)).toBe(prepayRemaining);
 
     // Dispatcher-on-behalf keeps presale ownership on sellerB.

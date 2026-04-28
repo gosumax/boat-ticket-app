@@ -351,8 +351,23 @@ export class TelegramBookingRequestLifecycleProjectionService {
         limit,
       }
     );
-    const items = rows
-      .map((bookingRequest) => this.buildProjectionItem(bookingRequest))
+    const projectableItems = [];
+    for (const bookingRequest of rows) {
+      try {
+        projectableItems.push(this.buildProjectionItem(bookingRequest));
+      } catch (error) {
+        const message = String(error?.message || '');
+        if (
+          message.includes(
+            'is not projectable inside Telegram lifecycle boundary'
+          )
+        ) {
+          continue;
+        }
+        throw error;
+      }
+    }
+    const items = projectableItems
       .sort(compareProjectionItemsByLatestLifecycleDesc)
       .slice(0, normalizeLimit(input.limit, DEFAULT_LIMIT, MAX_LIMIT));
 

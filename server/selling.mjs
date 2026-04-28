@@ -1,6 +1,17 @@
 ﻿import { Router } from 'express';
 import db from './db.js';
 
+const moneyLedgerColumns = (() => {
+  try {
+    return new Set(db.prepare(`PRAGMA table_info(money_ledger)`).all().map((row) => row.name));
+  } catch {
+    return new Set();
+  }
+})();
+const moneyLedgerHasCashAmount = moneyLedgerColumns.has('cash_amount');
+const moneyLedgerHasCardAmount = moneyLedgerColumns.has('card_amount');
+const moneyLedgerHasDecidedByUserId = moneyLedgerColumns.has('decided_by_user_id');
+
 // Seat-occupying ticket statuses (1 ticket = 1 seat)
 const SEAT_STATUS_LIST = [
   'ACTIVE',
@@ -164,6 +175,10 @@ import {
   buildOwnerWeeklyMotivationReadModel,
 } from './owner.mjs';
 import { getIsoWeekIdForBusinessDay } from './utils/iso-week.mjs';
+import {
+  buildBuyerTicketCodeFromCanonicalPresaleId,
+  parseBuyerTicketCodeToCanonicalPresaleId,
+} from './ticketing/buyer-ticket-reference.mjs';
 
 function getLocalBusinessDay() {
   return db.prepare(`SELECT DATE('now','localtime') AS d`).get()?.d || null;
@@ -171,6 +186,557 @@ function getLocalBusinessDay() {
 
 function roundToKopecks(amount) {
   return Math.round(Number(amount || 0) * 100) / 100;
+}
+
+function toNonNegativeInt(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  const normalized = Math.trunc(numeric);
+  return normalized < 0 ? fallback : normalized;
+}
+
+const SELLER_HANDOFF_TELEGRAM_DEFAULT_BOT_USERNAME = 'seawalk_bot';
+const SELLER_HANDOFF_START_PAYLOAD_SEPARATOR = '__p';
+
+function normalizeTelegramStartToken(value) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) {
+    return null;
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function resolveSellerHandoffTelegramBotUsername() {
+  const envBotUsername = String(process.env.TELEGRAM_BOT_USERNAME ?? '').trim();
+  if (/^[A-Za-z0-9_]{5,}$/.test(envBotUsername)) {
+    return envBotUsername;
+  }
+  return SELLER_HANDOFF_TELEGRAM_DEFAULT_BOT_USERNAME;
+}
+
+function resolveSellerSourceTokenForHandoff(sellerId) {
+  const normalizedSellerId = Number(sellerId);
+  if (!Number.isInteger(normalizedSellerId) || normalizedSellerId <= 0) {
+    return null;
+  }
+
+  try {
+    const registryTableExists = db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'telegram_source_registry_items'"
+      )
+      .get();
+    if (registryTableExists) {
+      const registryRow = db
+        .prepare(
+          `
+            SELECT source_token
+            FROM telegram_source_registry_items
+            WHERE seller_id = ?
+              AND is_enabled = 1
+            ORDER BY source_registry_item_id ASC
+            LIMIT 1
+          `
+        )
+        .get(normalizedSellerId);
+      const tokenFromRegistry = normalizeTelegramStartToken(registryRow?.source_token);
+      if (tokenFromRegistry) {
+        return tokenFromRegistry;
+      }
+    }
+  } catch {
+    // Best-effort handoff source lookup: fall through to deterministic seller token.
+  }
+
+  return normalizeTelegramStartToken(`seller-direct-link-${normalizedSellerId}`);
+}
+
+function parsePositiveIntegerOrNull(value) {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+}
+
+function normalizeDispatcherLookupToken(value) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) {
+    return '';
+  }
+  return normalized.toUpperCase().replace(/\s+/g, ' ');
+}
+
+function normalizeDispatcherLookupCompact(value) {
+  return normalizeDispatcherLookupToken(value).replace(/[^0-9A-ZА-ЯЁ]/g, '');
+}
+
+const DISPATCHER_PUBLIC_TICKET_CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const DISPATCHER_PUBLIC_TICKET_NUMERIC_SPACE = 99;
+
+function buildDispatcherPublicTicketCodeFromPresaleId(presaleId) {
+  const normalized = Number(presaleId);
+  if (!Number.isInteger(normalized) || normalized <= 0) return null;
+
+  const zeroBased = normalized - 1;
+  const prefixOrdinal = Math.floor(zeroBased / DISPATCHER_PUBLIC_TICKET_NUMERIC_SPACE);
+  const numericPart = (zeroBased % DISPATCHER_PUBLIC_TICKET_NUMERIC_SPACE) + 1;
+  const alphabetSize = DISPATCHER_PUBLIC_TICKET_CODE_ALPHABET.length;
+  let remainder = prefixOrdinal + 1;
+  const chars = [];
+
+  while (remainder > 0) {
+    remainder -= 1;
+    chars.push(DISPATCHER_PUBLIC_TICKET_CODE_ALPHABET[remainder % alphabetSize]);
+    remainder = Math.floor(remainder / alphabetSize);
+  }
+
+  return `${chars.reverse().join('')}${numericPart}`;
+}
+
+function parseDispatcherPublicTicketCodeToPresaleId(value) {
+  const normalized = normalizeDispatcherLookupCompact(value);
+  const match = normalized.match(/^([A-Z]+)([1-9]\d{0,1})$/);
+  if (!match) return null;
+
+  const [, prefixPart, numericPartRaw] = match;
+  const numericPart = Number(numericPartRaw);
+  if (!Number.isInteger(numericPart) || numericPart < 1 || numericPart > DISPATCHER_PUBLIC_TICKET_NUMERIC_SPACE) {
+    return null;
+  }
+
+  let ordinalValue = 0;
+  for (const char of Array.from(prefixPart)) {
+    const letterIndex = DISPATCHER_PUBLIC_TICKET_CODE_ALPHABET.indexOf(char);
+    if (letterIndex < 0) return null;
+    ordinalValue = ordinalValue * DISPATCHER_PUBLIC_TICKET_CODE_ALPHABET.length + (letterIndex + 1);
+  }
+
+  const prefixOrdinal = ordinalValue - 1;
+  const presaleId = prefixOrdinal * DISPATCHER_PUBLIC_TICKET_NUMERIC_SPACE + numericPart;
+  return Number.isInteger(presaleId) && presaleId > 0 ? presaleId : null;
+}
+
+function safeDecodeLookupURIComponent(value) {
+  const normalized = String(value ?? '');
+  try {
+    return decodeURIComponent(normalized);
+  } catch {
+    return normalized;
+  }
+}
+
+function buildDispatcherTicketLookupCandidates(rawInput) {
+  const input = String(rawInput ?? '').trim();
+  if (!input) {
+    return [];
+  }
+
+  const candidateMap = new Map();
+  const pushCandidate = (value) => {
+    const decoded = safeDecodeLookupURIComponent(value);
+    const token = normalizeDispatcherLookupToken(decoded);
+    if (!token) {
+      return;
+    }
+    const key = normalizeDispatcherLookupCompact(token) || token;
+    if (!candidateMap.has(key)) {
+      candidateMap.set(key, token);
+    }
+  };
+
+  pushCandidate(input);
+
+  String(input)
+    .split(/[\s,;|]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .forEach((part) => pushCandidate(part));
+
+  let parsedUrl = null;
+  try {
+    parsedUrl = new URL(input);
+  } catch {
+    try {
+      if (/^[a-z0-9.-]+\.[a-z]{2,}/i.test(input)) {
+        parsedUrl = new URL(`https://${input}`);
+      }
+    } catch {
+      parsedUrl = null;
+    }
+  }
+
+  if (parsedUrl) {
+    const hostWithPath = `${parsedUrl.hostname}${parsedUrl.pathname || ''}`;
+    pushCandidate(hostWithPath);
+
+    parsedUrl.pathname
+      .split('/')
+      .map((segment) => segment.trim())
+      .filter(Boolean)
+      .forEach((segment) => pushCandidate(segment));
+
+    parsedUrl.searchParams.forEach((value) => {
+      pushCandidate(value);
+    });
+
+    const hashRaw = String(parsedUrl.hash || '').replace(/^#/, '').trim();
+    if (hashRaw) {
+      pushCandidate(hashRaw);
+      if (hashRaw.includes('=')) {
+        try {
+          const hashParams = new URLSearchParams(hashRaw);
+          hashParams.forEach((value) => {
+            pushCandidate(value);
+          });
+        } catch {
+          // no-op
+        }
+      }
+    }
+  }
+
+  return Array.from(candidateMap.values());
+}
+
+function findDispatcherLookupByPresaleId(presaleId) {
+  const normalizedPresaleId = parsePositiveIntegerOrNull(presaleId);
+  if (!normalizedPresaleId) {
+    return null;
+  }
+  return db.prepare(`
+    SELECT
+      p.id AS presale_id,
+      p.boat_slot_id,
+      p.status AS presale_status,
+      p.total_price,
+      p.prepayment_amount,
+      p.payment_method,
+      p.payment_cash_amount,
+      p.payment_card_amount,
+      COALESCE(bs.time, gs.time) AS slot_time,
+      COALESCE(NULLIF(p.business_day, ''), gs.trip_date, bs.trip_date) AS slot_trip_date,
+      COALESCE(b.name, gb.name) AS boat_name,
+      COALESCE(b.type, gb.type) AS boat_type,
+      CASE
+        WHEN gs.id IS NOT NULL THEN 'generated:' || gs.id
+        WHEN bs.id IS NOT NULL THEN 'manual:' || bs.id
+        ELSE p.slot_uid
+      END AS slot_uid,
+      t.id AS ticket_id,
+      t.ticket_code
+    FROM presales p
+    LEFT JOIN boat_slots bs ON p.boat_slot_id = bs.id
+    LEFT JOIN generated_slots gs ON (p.slot_uid LIKE 'generated:%' AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER))
+    LEFT JOIN boats b ON bs.boat_id = b.id
+    LEFT JOIN boats gb ON gs.boat_id = gb.id
+    LEFT JOIN tickets t ON t.id = (
+      SELECT t2.id
+      FROM tickets t2
+      WHERE t2.presale_id = p.id
+      ORDER BY CASE WHEN t2.status = 'ACTIVE' THEN 0 ELSE 1 END, t2.id ASC
+      LIMIT 1
+    )
+    WHERE p.id = ?
+    LIMIT 1
+  `).get(normalizedPresaleId);
+}
+
+function findDispatcherLookupByTicketId(ticketId) {
+  const normalizedTicketId = parsePositiveIntegerOrNull(ticketId);
+  if (!normalizedTicketId) {
+    return null;
+  }
+  return db.prepare(`
+    SELECT
+      p.id AS presale_id,
+      p.boat_slot_id,
+      p.status AS presale_status,
+      p.total_price,
+      p.prepayment_amount,
+      p.payment_method,
+      p.payment_cash_amount,
+      p.payment_card_amount,
+      COALESCE(bs.time, gs.time) AS slot_time,
+      COALESCE(NULLIF(p.business_day, ''), gs.trip_date, bs.trip_date) AS slot_trip_date,
+      COALESCE(b.name, gb.name) AS boat_name,
+      COALESCE(b.type, gb.type) AS boat_type,
+      CASE
+        WHEN gs.id IS NOT NULL THEN 'generated:' || gs.id
+        WHEN bs.id IS NOT NULL THEN 'manual:' || bs.id
+        ELSE p.slot_uid
+      END AS slot_uid,
+      t.id AS ticket_id,
+      t.ticket_code
+    FROM tickets t
+    JOIN presales p ON p.id = t.presale_id
+    LEFT JOIN boat_slots bs ON p.boat_slot_id = bs.id
+    LEFT JOIN generated_slots gs ON (p.slot_uid LIKE 'generated:%' AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER))
+    LEFT JOIN boats b ON bs.boat_id = b.id
+    LEFT JOIN boats gb ON gs.boat_id = gb.id
+    WHERE t.id = ?
+    LIMIT 1
+  `).get(normalizedTicketId);
+}
+
+function findDispatcherLookupByTicketCode(ticketCodeCandidate) {
+  const normalizedToken = normalizeDispatcherLookupToken(ticketCodeCandidate);
+  if (!normalizedToken) {
+    return null;
+  }
+  const compactToken = normalizeDispatcherLookupCompact(ticketCodeCandidate);
+  if (!compactToken) {
+    return null;
+  }
+
+  return db.prepare(`
+    SELECT
+      p.id AS presale_id,
+      p.boat_slot_id,
+      p.status AS presale_status,
+      p.total_price,
+      p.prepayment_amount,
+      p.payment_method,
+      p.payment_cash_amount,
+      p.payment_card_amount,
+      COALESCE(bs.time, gs.time) AS slot_time,
+      COALESCE(NULLIF(p.business_day, ''), gs.trip_date, bs.trip_date) AS slot_trip_date,
+      COALESCE(b.name, gb.name) AS boat_name,
+      COALESCE(b.type, gb.type) AS boat_type,
+      CASE
+        WHEN gs.id IS NOT NULL THEN 'generated:' || gs.id
+        WHEN bs.id IS NOT NULL THEN 'manual:' || bs.id
+        ELSE p.slot_uid
+      END AS slot_uid,
+      t.id AS ticket_id,
+      t.ticket_code
+    FROM tickets t
+    JOIN presales p ON p.id = t.presale_id
+    LEFT JOIN boat_slots bs ON p.boat_slot_id = bs.id
+    LEFT JOIN generated_slots gs ON (p.slot_uid LIKE 'generated:%' AND gs.id = CAST(substr(p.slot_uid, 11) AS INTEGER))
+    LEFT JOIN boats b ON bs.boat_id = b.id
+    LEFT JOIN boats gb ON gs.boat_id = gb.id
+    WHERE
+      UPPER(COALESCE(t.ticket_code, '')) = ?
+      OR UPPER(REPLACE(REPLACE(REPLACE(COALESCE(t.ticket_code, ''), '-', ''), ' ', ''), '№', '')) = ?
+    ORDER BY
+      CASE
+        WHEN UPPER(COALESCE(t.ticket_code, '')) = ? THEN 0
+        ELSE 1
+      END,
+      t.id DESC
+    LIMIT 1
+  `).get(normalizedToken, compactToken, normalizedToken);
+}
+
+function buildTelegramStartPayloadForSellerHandoff({
+  sourceToken = null,
+  canonicalPresaleId = null,
+} = {}) {
+  const normalizedSourceToken = normalizeTelegramStartToken(sourceToken);
+  if (!normalizedSourceToken) {
+    return null;
+  }
+
+  const normalizedPresaleId = parsePositiveIntegerOrNull(canonicalPresaleId);
+  if (!normalizedPresaleId) {
+    return normalizedSourceToken;
+  }
+
+  return `${normalizedSourceToken}${SELLER_HANDOFF_START_PAYLOAD_SEPARATOR}${normalizedPresaleId}`;
+}
+
+function buildTelegramDeepLinkForSellerHandoff(startPayload = null) {
+  const normalizedPayload = normalizeTelegramStartToken(startPayload);
+  if (!normalizedPayload) {
+    return null;
+  }
+
+  const botUsername = resolveSellerHandoffTelegramBotUsername();
+  return `https://t.me/${botUsername}?start=${encodeURIComponent(normalizedPayload)}`;
+}
+
+function buildSellerBuyerHandoffSummary({
+  canonicalPresaleId = null,
+  buyerTicketCode = null,
+  sellerId = null,
+} = {}) {
+  const normalizedPresaleId = parsePositiveIntegerOrNull(canonicalPresaleId);
+  const normalizedBuyerTicketCode = String(buyerTicketCode ?? '').trim() || null;
+  const sourceToken = resolveSellerSourceTokenForHandoff(sellerId);
+  const telegramStartPayload = buildTelegramStartPayloadForSellerHandoff({
+    sourceToken,
+    canonicalPresaleId: normalizedPresaleId,
+  });
+  const telegramDeepLinkUrl = buildTelegramDeepLinkForSellerHandoff(telegramStartPayload);
+
+  return Object.freeze({
+    response_version: 'seller_buyer_handoff.v1',
+    buyer_ticket_code: normalizedBuyerTicketCode,
+    canonical_presale_id: normalizedPresaleId,
+    source_token: sourceToken,
+    channels: Object.freeze({
+      telegram: Object.freeze({
+        channel_key: 'telegram',
+        channel_label: 'Telegram',
+        handoff_status: telegramDeepLinkUrl ? 'ready' : 'blocked',
+        source_token: sourceToken,
+        start_payload: telegramStartPayload,
+        start_command_payload: telegramStartPayload ? `/start ${telegramStartPayload}` : null,
+        deeplink_url: telegramDeepLinkUrl,
+        qr_payload_text: telegramDeepLinkUrl,
+      }),
+      max: Object.freeze({
+        channel_key: 'max',
+        channel_label: 'Max',
+        handoff_status: 'planned',
+        message: 'Канал Max скоро будет доступен.',
+        deeplink_url: null,
+        qr_payload_text: null,
+      }),
+      website: Object.freeze({
+        channel_key: 'website',
+        channel_label: 'Сайт',
+        handoff_status: 'planned',
+        message: 'Веб-канал скоро будет доступен.',
+        deeplink_url: null,
+        qr_payload_text: null,
+      }),
+    }),
+  });
+}
+
+function resolveSlotCapacityTotal(slot) {
+  return toNonNegativeInt(slot?.capacity ?? slot?.boat_capacity, 0);
+}
+
+function resolveCachedSeatsLeft(slot, capacityTotal) {
+  const rawValue = slot?.seats_left_cache;
+  if (rawValue === null || rawValue === undefined || rawValue === '') {
+    return capacityTotal;
+  }
+  return Math.min(capacityTotal, toNonNegativeInt(rawValue, capacityTotal));
+}
+
+let hasLoggedTelegramHoldSummaryReadError = false;
+
+function readActiveTelegramHoldSummaryBySlotUid() {
+  try {
+    const rows = db
+      .prepare(
+        `
+          WITH request_slot_refs AS (
+            SELECT
+              e.booking_request_id,
+              COALESCE(
+                json_extract(e.event_payload, '$.creation_result.requested_trip_slot_reference.slot_uid'),
+                json_extract(e.event_payload, '$.requested_trip_slot_reference.slot_uid')
+              ) AS slot_uid
+            FROM telegram_booking_request_events e
+            INNER JOIN (
+              SELECT
+                booking_request_id,
+                MIN(booking_request_event_id) AS first_request_created_event_id
+              FROM telegram_booking_request_events
+              WHERE event_type = 'REQUEST_CREATED'
+              GROUP BY booking_request_id
+            ) first_created_event
+              ON first_created_event.booking_request_id = e.booking_request_id
+             AND first_created_event.first_request_created_event_id = e.booking_request_event_id
+            WHERE e.event_type = 'REQUEST_CREATED'
+          )
+          SELECT
+            request_slot_refs.slot_uid AS slot_uid,
+            SUM(
+              CASE
+                WHEN br.requested_seats IS NULL OR br.requested_seats < 0 THEN 0
+                ELSE br.requested_seats
+              END
+            ) AS held_seats,
+            COUNT(1) AS active_hold_count,
+            MIN(h.hold_expires_at) AS next_hold_expires_at
+          FROM telegram_booking_holds h
+          INNER JOIN telegram_booking_requests br
+            ON br.booking_request_id = h.booking_request_id
+          INNER JOIN request_slot_refs
+            ON request_slot_refs.booking_request_id = br.booking_request_id
+          WHERE br.request_status = 'HOLD_ACTIVE'
+            AND h.hold_status IN ('ACTIVE', 'EXTENDED')
+            AND datetime(h.hold_expires_at) > datetime('now')
+            AND request_slot_refs.slot_uid IS NOT NULL
+            AND (
+              request_slot_refs.slot_uid GLOB 'generated:[0-9]*'
+              OR request_slot_refs.slot_uid GLOB 'manual:[0-9]*'
+            )
+          GROUP BY request_slot_refs.slot_uid
+        `
+      )
+      .all();
+
+    const holdSummaryBySlotUid = new Map();
+    for (const row of rows || []) {
+      const slotUid = String(row?.slot_uid || '').trim();
+      if (!slotUid) {
+        continue;
+      }
+      holdSummaryBySlotUid.set(slotUid, {
+        held_seats: toNonNegativeInt(row?.held_seats, 0),
+        active_hold_count: toNonNegativeInt(row?.active_hold_count, 0),
+        next_hold_expires_at: row?.next_hold_expires_at || null,
+      });
+    }
+    return holdSummaryBySlotUid;
+  } catch (error) {
+    if (!hasLoggedTelegramHoldSummaryReadError) {
+      hasLoggedTelegramHoldSummaryReadError = true;
+      console.warn(
+        '[TELEGRAM_HOLD_VISIBILITY_READ_FAILED]',
+        error?.message || error
+      );
+    }
+    return new Map();
+  }
+}
+
+function applyTelegramHoldVisibilityToSlots(slotRows = []) {
+  const holdSummaryBySlotUid = readActiveTelegramHoldSummaryBySlotUid();
+  return slotRows.map((slot) => {
+    const slotUid = String(slot?.slot_uid || slot?.slotUid || '').trim();
+    const holdSummary = holdSummaryBySlotUid.get(slotUid) || null;
+    const capacityTotal = resolveSlotCapacityTotal(slot);
+    const ticketBasedSeatsLeft = Math.min(
+      capacityTotal,
+      toNonNegativeInt(slot?.seats_left ?? slot?.available_seats, capacityTotal)
+    );
+    const cachedSeatsLeft = resolveCachedSeatsLeft(slot, capacityTotal);
+    const explicitHeldSeats = toNonNegativeInt(holdSummary?.held_seats, 0);
+    const seatsLeftAfterExplicitHolds = Math.max(
+      0,
+      ticketBasedSeatsLeft - explicitHeldSeats
+    );
+    const effectiveSeatsLeft = Math.max(
+      0,
+      Math.min(ticketBasedSeatsLeft, cachedSeatsLeft, seatsLeftAfterExplicitHolds)
+    );
+    const derivedHeldSeats = Math.max(0, ticketBasedSeatsLeft - effectiveSeatsLeft);
+    const visibleHeldSeats = Math.max(explicitHeldSeats, derivedHeldSeats);
+
+    return {
+      ...slot,
+      seats_left_without_telegram_holds: ticketBasedSeatsLeft,
+      seats_left: effectiveSeatsLeft,
+      available_seats: effectiveSeatsLeft,
+      telegram_active_hold_seats: visibleHeldSeats,
+      telegram_active_hold_count: toNonNegativeInt(
+        holdSummary?.active_hold_count,
+        visibleHeldSeats > 0 ? 1 : 0
+      ),
+      telegram_hold_expires_at: holdSummary?.next_hold_expires_at || null,
+    };
+  });
 }
 
 function getLocalBusinessDayWindow() {
@@ -846,6 +1412,129 @@ function resolveSaleMoneyAttribution(attributedUserId, fallbackUserId = null) {
   };
 }
 
+function resolveLedgerKindByActor(actorUserId, fallbackKind = 'DISPATCHER_SHIFT') {
+  const actorId = Number(actorUserId || 0);
+  if (!Number.isFinite(actorId) || actorId <= 0) return fallbackKind;
+  const actorRole = getUserRoleById(actorId);
+  if (actorRole === 'seller') return 'SELLER_SHIFT';
+  return 'DISPATCHER_SHIFT';
+}
+
+function normalizeLedgerCashCardSplit({
+  method,
+  amount = 0,
+  cashAmount = 0,
+  cardAmount = 0,
+} = {}) {
+  const normalizedAmount = Math.max(0, Math.round(Number(amount || 0)));
+  const normalizedMethod = String(method || '').toUpperCase();
+
+  if (normalizedAmount <= 0) {
+    return { cash: 0, card: 0 };
+  }
+
+  if (normalizedMethod === 'CASH') {
+    return { cash: normalizedAmount, card: 0 };
+  }
+  if (normalizedMethod === 'CARD') {
+    return { cash: 0, card: normalizedAmount };
+  }
+
+  let cash = Math.max(0, Math.round(Number(cashAmount || 0)));
+  let card = Math.max(0, Math.round(Number(cardAmount || 0)));
+  const splitSum = cash + card;
+
+  if (splitSum <= 0) {
+    cash = Math.floor(normalizedAmount / 2);
+    card = normalizedAmount - cash;
+    return { cash, card };
+  }
+
+  if (splitSum !== normalizedAmount) {
+    cash = Math.round((normalizedAmount * cash) / splitSum);
+    cash = Math.max(0, Math.min(normalizedAmount, cash));
+    card = normalizedAmount - cash;
+    return { cash, card };
+  }
+
+  return { cash, card };
+}
+
+function insertSaleMoneyLedgerRow({
+  presaleId,
+  slotId = null,
+  kind,
+  type,
+  method = null,
+  amount = 0,
+  sellerId = null,
+  businessDay = null,
+  tripDay = null,
+  cashAmount = 0,
+  cardAmount = 0,
+  decidedByUserId = null,
+} = {}) {
+  const columns = [
+    'presale_id',
+    'slot_id',
+    'event_time',
+    'kind',
+    'type',
+    'method',
+    'amount',
+    'status',
+    'seller_id',
+    'business_day',
+    'trip_day',
+  ];
+  const placeholders = [
+    '?',
+    '?',
+    "datetime('now','localtime')",
+    '?',
+    '?',
+    '?',
+    '?',
+    '?',
+    '?',
+    '?',
+    '?',
+  ];
+  const values = [
+    presaleId,
+    slotId ?? null,
+    kind,
+    type,
+    method || null,
+    Math.round(Number(amount || 0)),
+    'POSTED',
+    sellerId ?? null,
+    businessDay ?? null,
+    tripDay ?? null,
+  ];
+
+  if (moneyLedgerHasCashAmount) {
+    columns.push('cash_amount');
+    placeholders.push('?');
+    values.push(Math.round(Number(cashAmount || 0)));
+  }
+  if (moneyLedgerHasCardAmount) {
+    columns.push('card_amount');
+    placeholders.push('?');
+    values.push(Math.round(Number(cardAmount || 0)));
+  }
+  if (moneyLedgerHasDecidedByUserId) {
+    columns.push('decided_by_user_id');
+    placeholders.push('?');
+    values.push(Number.isFinite(Number(decidedByUserId)) ? Number(decidedByUserId) : null);
+  }
+
+  db.prepare(`
+    INSERT INTO money_ledger (${columns.join(', ')})
+    VALUES (${placeholders.join(', ')})
+  `).run(...values);
+}
+
 function buildPresalePaymentSnapshot({
   paymentMethod = null,
   paymentCashAmount = 0,
@@ -1424,7 +2113,7 @@ router.get('/boats/:type/slots', authenticateToken, canSell, (req, res) => {
     // Get active slots for active boats of the specified type with available seats
     // IMPORTANT: seats_left is calculated from active tickets, NOT from generated_slots.seats_left column
     // This ensures consistency between seller and dispatcher views
-    const slots = db.prepare(`
+    const rawSlots = db.prepare(`
       SELECT
         gs.id as slot_id,
         ('generated:' || gs.id) as slot_uid,
@@ -1433,6 +2122,7 @@ router.get('/boats/:type/slots', authenticateToken, canSell, (req, res) => {
         gs.time,
         gs.price_adult as price,
         gs.capacity,
+        gs.seats_left as seats_left_cache,
         (gs.capacity - COALESCE(ticket_counts.active_tickets, 0)) as seats_left,
         gs.duration_minutes,
         gs.price_adult,
@@ -1466,6 +2156,7 @@ router.get('/boats/:type/slots', authenticateToken, canSell, (req, res) => {
         )
       ORDER BY gs.trip_date, gs.time
     `).all(boatType);
+    const slots = applyTelegramHoldVisibilityToSlots(rawSlots);
     
     console.log(`[SELLER_ZERO_DEBUG] Final slots returned: ${slots.length}`);
     
@@ -2246,23 +2937,26 @@ INSERT INTO presales (
 	          try { return db.prepare(`SELECT DATE('now','localtime') AS d`).get()?.d; } catch { return null; }
 	        })();
 
-	        db.prepare(`
-	          INSERT INTO money_ledger (
-	            presale_id, slot_id, event_time, kind, type, method, amount, status, seller_id, business_day, trip_day
-	          ) VALUES (
-	            @presale_id, @slot_id, datetime('now','localtime'), @kind, @type, @method, @amount, 'POSTED', @seller_id, @business_day, @trip_day
-	          )
-	        `).run({
-	          presale_id: presaleResult.lastInsertRowid,
-	          slot_id: boatSlotIdForFK ?? null,
+          const split = normalizeLedgerCashCardSplit({
+            method: paymentMethodUpper,
+            amount: paidNow,
+            cashAmount: paymentCashAmount,
+            cardAmount: paymentCardAmount,
+          });
+          insertSaleMoneyLedgerRow({
+            presaleId: presaleResult.lastInsertRowid,
+            slotId: boatSlotIdForFK ?? null,
             kind: saleAttribution.ledger_kind,
-	          type: ledgerType,
-	          method: paymentMethodUpper || null,
-	          amount: paidNow,
-	          seller_id: saleAttribution.attributed_user_id,
-	          business_day: bd,
-	          trip_day: presaleBusinessDay ?? null
-	        });
+            type: ledgerType,
+            method: paymentMethodUpper || null,
+            amount: paidNow,
+            sellerId: saleAttribution.attributed_user_id,
+            businessDay: bd,
+            tripDay: presaleBusinessDay ?? null,
+            cashAmount: split.cash,
+            cardAmount: split.card,
+            decidedByUserId: req.user?.id ?? null,
+          });
 	      }
 	    }
 	  } catch (e) {
@@ -2491,13 +3185,14 @@ return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedT
 // Execute the transaction
 
     let newPresaleId;
+    let effectiveSellerId = null;
     try {
       // Money attribution follows business owner of the sale, not the clicking actor.
       const saleAttribution = resolveSaleMoneyAttribution(
         req.user?.role === 'seller' ? req.user?.id : sellerId,
         req.user?.id
       );
-      const effectiveSellerId = saleAttribution.attributed_user_id;
+      effectiveSellerId = saleAttribution.attributed_user_id;
       
       let zoneAtSale = null;
       if (effectiveSellerId) {
@@ -2562,12 +3257,20 @@ return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedT
       WHERE p.id = ?
     `).get(newPresaleId);
     
+    const buyerTicketCode = buildBuyerTicketCodeFromCanonicalPresaleId(newPresaleId);
+    const buyerHandoff = buildSellerBuyerHandoffSummary({
+      canonicalPresaleId: newPresaleId,
+      buyerTicketCode,
+      sellerId: effectiveSellerId,
+    });
+
     // Return success response with structured data
     res.status(201).json({
       ok: true,
       presale: {
         ...presaleRow,
-        remaining_amount: calculatedTotalPrice - prepayment
+        remaining_amount: calculatedTotalPrice - prepayment,
+        buyer_ticket_code: buyerTicketCode,
       },
       slot: {
         slot_uid: slotUid,
@@ -2579,6 +3282,8 @@ return { lastInsertRowid: presaleResult.lastInsertRowid, totalPrice: calculatedT
         price: resolvedSlot.price,
         capacity: resolvedSlot.capacity
       },
+      buyer_ticket_code: buyerTicketCode,
+      buyer_handoff: buyerHandoff,
       debug: { 
         resolved_slot_kind: resolvedSlot.source_type, 
         sql_path: "SELECT presales row + attach slot info", 
@@ -2610,10 +3315,38 @@ router.get('/presales', authenticateToken, canSell, (req, res) => {
   try {
     const where = [];
     const params = [];
+    const slotUidFilter = String(req.query?.slot_uid ?? req.query?.slotUid ?? '').trim();
+    const rawBoatSlotIdFilter = req.query?.boat_slot_id ?? req.query?.boatSlotId;
+    const boatSlotIdFilter = parsePositiveIntegerOrNull(rawBoatSlotIdFilter);
 
     if (String(req.user?.role || '').toLowerCase() === 'seller') {
       where.push('p.seller_id = ?');
       params.push(Number(req.user.id || 0));
+    }
+
+    if (slotUidFilter) {
+      if (slotUidFilter.startsWith('generated:')) {
+        where.push('p.slot_uid = ?');
+        params.push(slotUidFilter);
+      } else if (slotUidFilter.startsWith('manual:')) {
+        const manualSlotId = parsePositiveIntegerOrNull(slotUidFilter.slice('manual:'.length));
+        if (manualSlotId) {
+          where.push('(p.slot_uid = ? OR p.boat_slot_id = ?)');
+          params.push(slotUidFilter, manualSlotId);
+        } else {
+          where.push('p.slot_uid = ?');
+          params.push(slotUidFilter);
+        }
+      } else if (boatSlotIdFilter) {
+        where.push('(p.slot_uid = ? OR p.boat_slot_id = ?)');
+        params.push(slotUidFilter, boatSlotIdFilter);
+      } else {
+        where.push('p.slot_uid = ?');
+        params.push(slotUidFilter);
+      }
+    } else if (boatSlotIdFilter) {
+      where.push('p.boat_slot_id = ?');
+      params.push(boatSlotIdFilter);
     }
 
     const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
@@ -2655,8 +3388,23 @@ router.get('/presales', authenticateToken, canSell, (req, res) => {
       ${whereSql}
       ORDER BY p.created_at DESC
     `).all(...params);
-    
-    res.json(presales);
+
+    const normalizedPresales = Array.isArray(presales)
+      ? presales.map((presale) => {
+          let buyerTicketCode = null;
+          try {
+            buyerTicketCode = buildBuyerTicketCodeFromCanonicalPresaleId(Number(presale?.id));
+          } catch {
+            buyerTicketCode = null;
+          }
+          return {
+            ...presale,
+            buyer_ticket_code: buyerTicketCode,
+          };
+        })
+      : [];
+
+    res.json(normalizedPresales);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales method=GET message=' + error.message + ' stack=' + error.stack);
     res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
@@ -3637,7 +4385,7 @@ router.get('/dispatcher/sellers', authenticateToken, canSell, (req, res) => {
 // Get all slots for dispatcher (including inactive)
 router.get('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req, res) => {
   try {
-    const rows = db.prepare(`
+    const rawRows = db.prepare(`
       SELECT *
       FROM (
         SELECT
@@ -3660,6 +4408,7 @@ router.get('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req,
           b.is_active as boat_is_active,
           CASE WHEN b.id IS NULL THEN 1 ELSE 0 END as boat_missing,
           'generated' as source_type,
+          gs.seats_left as seats_left_cache,
           (gs.capacity - COALESCE(tc.active_tickets, 0)) as seats_left
         FROM generated_slots gs
         LEFT JOIN boats b ON b.id = gs.boat_id
@@ -3696,6 +4445,7 @@ router.get('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req,
           b.is_active as boat_is_active,
           CASE WHEN b.id IS NULL THEN 1 ELSE 0 END as boat_missing,
           'manual' as source_type,
+          bs.seats_left as seats_left_cache,
           (bs.capacity - COALESCE(tc.active_tickets, 0)) as seats_left
         FROM boat_slots bs
         LEFT JOIN boats b ON b.id = bs.boat_id
@@ -3719,11 +4469,130 @@ router.get('/dispatcher/slots', authenticateToken, canDispatchManageSlots, (req,
       )
       ORDER BY trip_date, time
     `).all();
+    const rows = applyTelegramHoldVisibilityToSlots(rawRows);
 
     res.json(rows);
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/dispatcher/slots method=GET message=' + (error?.message || error) + ' stack=' + (error?.stack || ''));
     res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
+  }
+});
+
+// Get tickets for a specific dispatcher slot
+router.get('/dispatcher/ticket-lookup', authenticateToken, canDispatchManageSlots, (req, res) => {
+  try {
+    const rawQuery = String(req.query?.query ?? req.query?.q ?? '').trim();
+    if (!rawQuery) {
+      return res.status(400).json({ ok: false, error: 'QUERY_REQUIRED' });
+    }
+
+    const candidates = buildDispatcherTicketLookupCandidates(rawQuery);
+    if (candidates.length === 0) {
+      return res.status(400).json({ ok: false, error: 'QUERY_REQUIRED' });
+    }
+
+    let matched = null;
+    let matchedBy = null;
+    let matchedValue = null;
+
+    for (const candidate of candidates) {
+      const presaleIdCandidate = parsePositiveIntegerOrNull(candidate);
+      if (presaleIdCandidate) {
+        const presaleMatch = findDispatcherLookupByPresaleId(presaleIdCandidate);
+        if (presaleMatch) {
+          matched = presaleMatch;
+          matchedBy = 'presale_id';
+          matchedValue = candidate;
+          break;
+        }
+
+        const ticketIdMatch = findDispatcherLookupByTicketId(presaleIdCandidate);
+        if (ticketIdMatch) {
+          matched = ticketIdMatch;
+          matchedBy = 'ticket_id';
+          matchedValue = candidate;
+          break;
+        }
+      }
+
+      try {
+        const buyerTicketPresaleId = parseBuyerTicketCodeToCanonicalPresaleId(candidate);
+        const buyerTicketMatch = findDispatcherLookupByPresaleId(buyerTicketPresaleId);
+        if (buyerTicketMatch) {
+          matched = buyerTicketMatch;
+          matchedBy = 'buyer_ticket_code';
+          matchedValue = candidate;
+          break;
+        }
+      } catch {
+        // Ignore unsupported buyer-ticket formats and continue with generic lookup.
+      }
+
+      const dispatcherPublicTicketPresaleId = parseDispatcherPublicTicketCodeToPresaleId(candidate);
+      if (dispatcherPublicTicketPresaleId) {
+        const dispatcherPublicTicketMatch = findDispatcherLookupByPresaleId(dispatcherPublicTicketPresaleId);
+        if (dispatcherPublicTicketMatch) {
+          matched = dispatcherPublicTicketMatch;
+          matchedBy = 'public_ticket_code';
+          matchedValue = candidate;
+          break;
+        }
+      }
+
+      const ticketCodeMatch = findDispatcherLookupByTicketCode(candidate);
+      if (ticketCodeMatch) {
+        matched = ticketCodeMatch;
+        matchedBy = 'ticket_code';
+        matchedValue = candidate;
+        break;
+      }
+    }
+
+    if (!matched) {
+      return res.status(404).json({ ok: false, error: 'TICKET_NOT_FOUND' });
+    }
+
+    const resolvedPresaleId = Number(matched.presale_id);
+    const buyerTicketCode =
+      Number.isInteger(resolvedPresaleId) && resolvedPresaleId > 0
+        ? buildBuyerTicketCodeFromCanonicalPresaleId(resolvedPresaleId)
+        : null;
+    const publicTicketCode = buildDispatcherPublicTicketCodeFromPresaleId(resolvedPresaleId);
+    const totalPrice = Number(matched.total_price || 0);
+    const prepaymentAmount = Number(matched.prepayment_amount || 0);
+    const remainingAmount = Math.max(0, Math.round(totalPrice - prepaymentAmount));
+
+    res.json({
+      ok: true,
+      query: rawQuery,
+      matched_by: matchedBy,
+      matched_value: matchedValue,
+      match: {
+        presale_id: resolvedPresaleId,
+        ticket_id: matched.ticket_id != null ? Number(matched.ticket_id) : null,
+        ticket_code: matched.ticket_code || null,
+        buyer_ticket_code: buyerTicketCode,
+        public_ticket_code: publicTicketCode,
+        slot_uid: String(matched.slot_uid || ''),
+        boat_slot_id: matched.boat_slot_id != null ? Number(matched.boat_slot_id) : null,
+        presale_status: matched.presale_status || null,
+        total_price: Math.round(totalPrice),
+        prepayment_amount: Math.round(prepaymentAmount),
+        remaining_amount: remainingAmount,
+        payment_method: matched.payment_method || null,
+        payment_cash_amount: Math.round(Number(matched.payment_cash_amount || 0)),
+        payment_card_amount: Math.round(Number(matched.payment_card_amount || 0)),
+        trip: {
+          trip_date: matched.slot_trip_date || null,
+          time: matched.slot_time || null,
+          boat_name: matched.boat_name || null,
+          boat_type: matched.boat_type || null,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('[SELLING_500] route=/api/selling/dispatcher/ticket-lookup method=GET message=' + (error?.message || error) + ' stack=' + (error?.stack || ''));
+    res.status(500).json({ ok: false, error: 'SERVER_ERROR' });
   }
 });
 
@@ -3953,22 +4822,26 @@ router.patch('/presales/:id/payment', authenticateToken, canSell, (req, res) => 
         else if (paymentMethodUpper === 'CARD') ledgerType = `${ledgerType}_CARD`;
         else ledgerType = `${ledgerType}_CASH`;
 
-        db.prepare(`
-          INSERT INTO money_ledger (
-            presale_id, slot_id, event_time, kind, type, method, amount, status, seller_id, business_day, trip_day
-          ) VALUES (
-            @presale_id, @slot_id, datetime('now','localtime'), @kind, @type, @method, @amount, 'POSTED', @seller_id, @business_day, @trip_day
-          )
-        `).run({
-          presale_id: presaleId,
-          slot_id: presale.boat_slot_id ?? null,
+        const ledgerAmount = Math.round(Number(payment || 0));
+        const split = normalizeLedgerCashCardSplit({
+          method: paymentMethodUpper,
+          amount: ledgerAmount,
+          cashAmount: deltaCash,
+          cardAmount: deltaCard,
+        });
+        insertSaleMoneyLedgerRow({
+          presaleId,
+          slotId: presale.boat_slot_id ?? null,
           kind: ledgerKind,
           type: ledgerType,
           method: paymentMethodUpper || null,
-          amount: Math.round(Number(payment || 0)),
-          seller_id: ledgerSellerId,
-          business_day: todayBusinessDay,
-          trip_day: tripBusinessDay
+          amount: ledgerAmount,
+          sellerId: ledgerSellerId,
+          businessDay: todayBusinessDay,
+          tripDay: tripBusinessDay,
+          cashAmount: split.cash,
+          cardAmount: split.card,
+          decidedByUserId: userId,
         });
       }
     } catch (e) {
@@ -4072,6 +4945,17 @@ if (method === 'CASH') {
   }
 }
 
+cashAmount = Math.max(0, Math.round(Number(cashAmount || 0)));
+cardAmount = Math.max(0, Math.round(Number(cardAmount || 0)));
+
+const prevCashTotal = Math.max(0, Math.round(Number(presale.payment_cash_amount || 0)));
+const prevCardTotal = Math.max(0, Math.round(Number(presale.payment_card_amount || 0)));
+const nextCashTotal = prevCashTotal + cashAmount;
+const nextCardTotal = prevCardTotal + cardAmount;
+let nextPaymentMethodUpper = 'CASH';
+if (nextCashTotal > 0 && nextCardTotal > 0) nextPaymentMethodUpper = 'MIXED';
+else if (nextCardTotal > 0) nextPaymentMethodUpper = 'CARD';
+
 const stmt = db.prepare(`
   UPDATE presales 
   SET 
@@ -4083,7 +4967,7 @@ const stmt = db.prepare(`
   WHERE id = ?
 `);
 
-stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
+stmt.run(nextPaymentMethodUpper, nextCashTotal, nextCardTotal, presaleId);
 
 
     // Write seller money movement to money_ledger (so shift-close / seller balances can be computed)
@@ -4118,7 +5002,8 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
 
         const totalAccepted = Math.round((Number(cashAmount || 0) + Number(cardAmount || 0)) || 0);
 
-        // Money attribution must follow the sale owner, not the UI actor.
+        // Owner-of-money stays tied to sale attribution (seller_id),
+        // while kind follows the actor who accepted the payment.
         const saleAttribution = resolveSaleMoneyAttribution(presale.seller_id, userId);
         const ledgerSellerId = saleAttribution.attributed_user_id;
 
@@ -4126,26 +5011,29 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
         if (Number(cashAmount) > 0 && Number(cardAmount) > 0) ledgerType = 'SALE_ACCEPTED_MIXED';
         else if (Number(cashAmount) > 0) ledgerType = 'SALE_ACCEPTED_CASH';
         else if (Number(cardAmount) > 0) ledgerType = 'SALE_ACCEPTED_CARD';
-        const ledgerKind = saleAttribution.ledger_kind;
+        const ledgerKind = resolveLedgerKindByActor(userId, saleAttribution.ledger_kind);
+        const split = normalizeLedgerCashCardSplit({
+          method,
+          amount: totalAccepted,
+          cashAmount,
+          cardAmount,
+        });
 
-        db.prepare(`
-          INSERT INTO money_ledger (
-            presale_id, slot_id, event_time, kind, type, method, amount, status, seller_id, business_day, trip_day
-          ) VALUES (
-            @presale_id, @slot_id, datetime('now','localtime'), @kind, @type, @method, @amount, 'POSTED', @seller_id, @business_day, @trip_day
-          )
-        `).run({
-          presale_id: presaleId,
-          slot_id: presale.boat_slot_id ?? null,
+        insertSaleMoneyLedgerRow({
+          presaleId,
+          slotId: presale.boat_slot_id ?? null,
           kind: ledgerKind,
           type: ledgerType,
           method: method || null,
           amount: totalAccepted,
-          seller_id: ledgerSellerId,
+          sellerId: ledgerSellerId,
           // business_day in money_ledger is payment/refund cashflow day.
-          business_day: todayBusinessDay,
+          businessDay: todayBusinessDay,
           // trip_day in money_ledger is the trip date (earned-by-trip-day / reserve semantics).
-          trip_day: tripBusinessDay
+          tripDay: tripBusinessDay,
+          cashAmount: split.cash,
+          cardAmount: split.card,
+          decidedByUserId: userId,
         });
       }
     } catch (e) {
@@ -4156,7 +5044,7 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
     // IMPORTANT: Owner "РќР°Р»/РљР°СЂС‚Р°" Р°РЅР°Р»РёС‚РёРєР° С‡РёС‚Р°РµС‚СЃСЏ РёР· sales_transactions_canonical,
     // РїРѕСЌС‚РѕРјСѓ РїРѕСЃР»Рµ РїСЂРёРЅСЏС‚РёСЏ РѕРїР»Р°С‚С‹ РЅСѓР¶РЅРѕ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°С‚СЊ РґРµРЅСЊРіРё РІ РєР°РЅРѕРЅРµ.
     try {
-      const pmLower = String(method).toLowerCase();
+      const pmLower = String(nextPaymentMethodUpper).toLowerCase();
       // tickets may not have payment_method in older schemas
       try {
         db.prepare(`UPDATE tickets SET payment_method = ? WHERE presale_id = ?`).run(pmLower, presaleId);
@@ -4178,14 +5066,14 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
         if (canonRows && canonRows.length > 0) {
           const total = canonRows.reduce((s, r) => s + Number(r.amount || 0), 0);
 
-          if (method === 'CASH') {
+          if (nextPaymentMethodUpper === 'CASH') {
             const upd = db.prepare(`
               UPDATE sales_transactions_canonical
               SET method = 'CASH', cash_amount = amount, card_amount = 0
               WHERE presale_id = ? AND status = 'VALID'
             `);
             upd.run(presaleId);
-          } else if (method === 'CARD') {
+          } else if (nextPaymentMethodUpper === 'CARD') {
             const upd = db.prepare(`
               UPDATE sales_transactions_canonical
               SET method = 'CARD', cash_amount = 0, card_amount = amount
@@ -4193,9 +5081,8 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
             `);
             upd.run(presaleId);
           } else {
-            // MIXED: split cash/card across tickets proportionally, keep per-ticket sum == amount
-            const cashTotal = Math.round(Number(cashAmount || 0));
-            const cardTotal = Math.round(Number(cardAmount || 0));
+            // MIXED: split final paid cash/card totals proportionally across tickets.
+            const cashTotal = Math.max(0, Math.round(Number(nextCashTotal || 0)));
             const denom = Math.max(1, total);
             const cashRatio = cashTotal / denom;
 
@@ -4215,9 +5102,8 @@ stmt.run(method, Math.round(cashAmount), Math.round(cardAmount), presaleId);
                 const cardPart = amt - cashPart;
                 updOne.run(cashPart, cardPart, row.ticket_id);
               } else {
-                const ideal = amt * cashRatio;
-                let cashPart = Math.round(ideal);
-                cashPart = Math.max(0, Math.min(cashPart, amt, cashRemaining));
+                let cashPart = Math.round(amt * cashRatio);
+                cashPart = Math.max(0, Math.min(cashPart, cashRemaining, amt));
                 const cardPart = amt - cashPart;
                 updOne.run(cashPart, cardPart, row.ticket_id);
                 cashRemaining -= cashPart;
@@ -5154,7 +6040,10 @@ router.get('/presales/:id/tickets', authenticateToken, canSell, (req, res) => {
       ORDER BY ticket_code
     `).all(presaleId);
     
-    res.json(tickets);
+    res.json(tickets.map((ticket) => ({
+      ...ticket,
+      public_ticket_code: buildDispatcherPublicTicketCodeFromPresaleId(ticket.presale_id),
+    })));
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/presales/:id/tickets method=GET id=' + req.params.id + ' message=' + error.message + ' stack=' + error.stack);
     res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });
@@ -5164,42 +6053,45 @@ router.get('/presales/:id/tickets', authenticateToken, canSell, (req, res) => {
 // Get tickets for a specific boat slot (trip)
 router.get('/slots/:slotId/tickets', authenticateToken, canSell, (req, res) => {
   try {
- const slotIdRaw = String(req.params.slotId || '').trim();
+    const slotIdRaw = String(req.params.slotId || '').trim();
+    const isGenerated = slotIdRaw.startsWith('generated:');
+    const isManual = slotIdRaw.startsWith('manual:');
+    const slotIdNum = isGenerated
+      ? null
+      : parseInt(isManual ? slotIdRaw.slice('manual:'.length) : slotIdRaw, 10);
 
-const isGenerated = slotIdRaw.startsWith('generated:');
-const slotIdNum = isGenerated ? null : parseInt(slotIdRaw, 10);
+    if (!isGenerated && isNaN(slotIdNum)) {
+      return res.status(400).json({ error: 'Invalid slot ID' });
+    }
 
-if (!isGenerated && isNaN(slotIdNum)) {
-  return res.status(400).json({ error: 'Invalid slot ID' });
-}
+    const tickets = isGenerated
+      ? db.prepare(`
+          SELECT
+            t.id, t.presale_id, t.ticket_code, t.status, t.price,
+            t.created_at, t.updated_at,
+            p.customer_name, p.customer_phone
+          FROM presales p
+          JOIN tickets t ON t.presale_id = p.id
+          WHERE p.slot_uid = ?
+            AND p.status NOT IN ('CANCELLED', 'CANCELLED_TRIP_PENDING', 'REFUNDED')
+          ORDER BY t.ticket_code
+        `).all(slotIdRaw)
+      : db.prepare(`
+          SELECT
+            t.id, t.presale_id, t.ticket_code, t.status, t.price,
+            t.created_at, t.updated_at,
+            p.customer_name, p.customer_phone
+          FROM tickets t
+          JOIN presales p ON t.presale_id = p.id
+          WHERE t.boat_slot_id = ?
+            AND p.status NOT IN ('CANCELLED', 'CANCELLED_TRIP_PENDING', 'REFUNDED')
+          ORDER BY t.ticket_code
+        `).all(slotIdNum);
 
- const tickets = isGenerated
-  ? db.prepare(`
-      SELECT
-        t.id, t.presale_id, t.ticket_code, t.status, t.price,
-        t.created_at, t.updated_at,
-        p.customer_name, p.customer_phone
-      FROM tickets t
-      JOIN presales p ON t.presale_id = p.id
-      WHERE p.slot_uid = ?
-        AND p.status NOT IN ('CANCELLED', 'CANCELLED_TRIP_PENDING', 'REFUNDED')
-      ORDER BY t.ticket_code
-    `).all(slotIdRaw)
-  : db.prepare(`
-      SELECT
-        t.id, t.presale_id, t.ticket_code, t.status, t.price,
-        t.created_at, t.updated_at,
-        p.customer_name, p.customer_phone
-      FROM tickets t
-      JOIN presales p ON t.presale_id = p.id
-      WHERE t.boat_slot_id = ?
-        AND p.status NOT IN ('CANCELLED', 'CANCELLED_TRIP_PENDING', 'REFUNDED')
-      ORDER BY t.ticket_code
-    `).all(slotIdNum);
-
-
-    
-    res.json(tickets);
+    res.json(tickets.map((ticket) => ({
+      ...ticket,
+      public_ticket_code: buildDispatcherPublicTicketCodeFromPresaleId(ticket.presale_id),
+    })));
   } catch (error) {
     console.error('[SELLING_500] route=/api/selling/slots/:slotId/tickets method=GET id=' + req.params.slotId + ' message=' + error.message + ' stack=' + error.stack);
     res.status(500).json({ error: 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°' });

@@ -8,11 +8,13 @@ import {
 } from './_mini-app-foundation-test-helpers.js';
 
 describe('telegram mini app trips catalog query service', () => {
+  let db;
   let context;
   let routingDecision;
 
   beforeEach(() => {
     const seeded = createMiniAppFoundationContext();
+    db = seeded.db;
     context = seeded.context;
     routingDecision = seeded.routingDecision;
   });
@@ -79,6 +81,34 @@ describe('telegram mini app trips catalog query service', () => {
       true
     );
     expect(result.items.every((item) => item.trip_type_summary.trip_type === 'speed')).toBe(true);
+  });
+
+  it('does not offer same-day trips that have already departed', () => {
+    context.services.miniAppTripsCatalogQueryService.now = () =>
+      new Date('2036-04-11T12:03:00.000Z');
+    db.prepare(
+      `
+        INSERT INTO generated_slots (
+          id, schedule_template_id, trip_date, boat_id, time, capacity, seats_left,
+          duration_minutes, is_active, price_adult, price_child, price_teen
+        )
+        VALUES
+          (45, 1, ?, 1, '15:00', 12, 12, 60, 1, 1500, 1000, 1200),
+          (46, 1, ?, 1, '15:24', 12, 12, 60, 1, 1500, 1000, 1200)
+      `
+    ).run(MINI_APP_FUTURE_DATE, MINI_APP_FUTURE_DATE);
+
+    const result = context.services.miniAppTripsCatalogQueryService.listMiniAppTripsForGuest(
+      {
+        telegram_guest: routingDecision.telegram_user_summary,
+        date: MINI_APP_FUTURE_DATE,
+        only_active_bookable: true,
+      }
+    );
+
+    const slotUids = result.items.map((item) => item.trip_slot_reference.slot_uid);
+    expect(slotUids).not.toContain('generated:45');
+    expect(slotUids).toContain('generated:46');
   });
 
   it('rejects invalid filters and guest identity deterministically', () => {

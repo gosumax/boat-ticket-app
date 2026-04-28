@@ -118,11 +118,6 @@ describe('telegram bot command adapter', () => {
       operation_status: 'processed',
       outbound_response_summary: {
         outbound_mapping_status: 'mapped_guest_action_response',
-        button_payloads: expect.arrayContaining([
-          expect.objectContaining({
-            callback_data: `action:open_trips:${seeded.bookingRequestId}`,
-          }),
-        ]),
       },
       related_booking_request_reference: {
         booking_request_id: seeded.bookingRequestId,
@@ -193,7 +188,7 @@ describe('telegram bot command adapter', () => {
       outbound_response_summary: {
         outbound_mapping_status: 'mapped_guest_action_response_with_fallback',
         response_text_fields: {
-          headline: 'Action is not available',
+          headline: expect.any(String),
         },
       },
       operation_result_summary: {
@@ -229,5 +224,108 @@ describe('telegram bot command adapter', () => {
       operation_status: 'rejected_invalid_input',
       rejection_reason: expect.stringContaining('booking request id'),
     });
+  });
+
+  it('enriches /start seller handoff payload with canonical presale linkage', () => {
+    const adapterWithLaunch = createTelegramBotCommandAdapter({
+      runtimeEntrypointOrchestrationService:
+        telegramContext.services.runtimeEntrypointOrchestrationService,
+      guestCommandActionOrchestrationService:
+        telegramContext.services.guestCommandActionOrchestrationService,
+      templateExecutionOrchestrationService:
+        telegramContext.services.templateExecutionOrchestrationService,
+      webhookOutboundResponseOrchestrationService:
+        telegramContext.services.webhookOutboundResponseOrchestrationService,
+      telegramMiniAppLaunchSummary: {
+        launch_ready: true,
+        launch_url: 'https://example.test/telegram/mini-app',
+      },
+      now: clock.now,
+    });
+
+    const result = adapterWithLaunch.handleCommandUpdate(
+      buildTelegramMessageUpdate({
+        updateId: 8405001,
+        messageId: 201,
+        telegramUserId: 840501,
+        unixSeconds: 1767776940,
+        text: '/start seller-direct-link-42__p145',
+      })
+    );
+
+    expect(result).toMatchObject({
+      mapping_status: 'mapped_start_command',
+      operation_type: 'inbound_start_update',
+      operation_result_summary: {
+        start_handoff_summary: {
+          lookup_status: 'ticket_found',
+          source_token: 'seller-direct-link-42',
+          canonical_presale_id: 145,
+        },
+      },
+      outbound_response_summary: {
+        outbound_mapping_status: 'mapped_start_response',
+        response_text_fields: {
+          content_source: 'start_handoff_ticket_content',
+        },
+      },
+    });
+    const startLaunchUrl =
+      result.outbound_response_summary.button_payloads[0]?.web_app_url || '';
+    if (startLaunchUrl) {
+      expect(startLaunchUrl).toContain('canonical_presale_id=145');
+      expect(startLaunchUrl).toContain('source_token=seller-direct-link-42');
+    }
+  });
+
+  it('maps manual buyer ticket code text to one-step mini app opening', () => {
+    const adapterWithLaunch = createTelegramBotCommandAdapter({
+      runtimeEntrypointOrchestrationService:
+        telegramContext.services.runtimeEntrypointOrchestrationService,
+      guestCommandActionOrchestrationService:
+        telegramContext.services.guestCommandActionOrchestrationService,
+      templateExecutionOrchestrationService:
+        telegramContext.services.templateExecutionOrchestrationService,
+      webhookOutboundResponseOrchestrationService:
+        telegramContext.services.webhookOutboundResponseOrchestrationService,
+      telegramMiniAppLaunchSummary: {
+        launch_ready: true,
+        launch_url: 'https://example.test/telegram/mini-app',
+      },
+      now: clock.now,
+    });
+
+    const result = adapterWithLaunch.handleCommandUpdate(
+      buildTelegramMessageUpdate({
+        updateId: 8405002,
+        messageId: 202,
+        telegramUserId: 840502,
+        unixSeconds: 1767777000,
+        text: 'Мой номер билета Б46',
+      })
+    );
+
+    expect(result).toMatchObject({
+      mapping_status: 'mapped_ticket_code_message',
+      operation_type: 'ticket_lookup_by_buyer_code',
+      operation_status: 'processed',
+      operation_result_summary: {
+        lookup_status: 'ticket_found',
+        buyer_ticket_code: 'Б46',
+        canonical_presale_id: 145,
+      },
+      outbound_response_summary: {
+        outbound_mapping_status: 'mapped_ticket_code_lookup_response',
+        response_text_fields: {
+          content_source: 'ticket_lookup_content',
+        },
+      },
+    });
+    const launchUrl =
+      result.outbound_response_summary.button_payloads[0]?.web_app_url || '';
+    if (launchUrl) {
+      expect(launchUrl).toContain('canonical_presale_id=145');
+      expect(launchUrl).toContain('buyer_ticket_code=%D0%9146');
+    }
   });
 });

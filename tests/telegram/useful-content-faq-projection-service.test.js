@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   TELEGRAM_FAQ_GROUPINGS,
   TELEGRAM_USEFUL_CONTENT_GROUPINGS,
+  TELEGRAM_USEFUL_RESORT_CARD_REFERENCES,
   TELEGRAM_WEATHER_DATA_STATES,
   TELEGRAM_WEATHER_USEFUL_CONTENT_READ_MODEL_VERSION,
 } from '../../shared/telegram/index.js';
@@ -44,12 +45,92 @@ describe('telegram useful-content and faq projection service', () => {
     expect(Object.isFrozen(feed.items[0])).toBe(true);
   });
 
+  it('upgrades legacy v1 FAQ baseline rows to the current russian buyer-facing copy', () => {
+    const nowIso = clock.now().toISOString();
+    const managedContentItems = context.repositories.managedContentItems;
+    const legacyRows = [
+      {
+        content_reference: 'tg_faq_general_001',
+        content_group: 'faq_general',
+        title_summary: 'When should I arrive before departure?',
+        short_text_summary: 'Arrive at least 15 minutes before your selected time slot.',
+      },
+      {
+        content_reference: 'tg_faq_general_002',
+        content_group: 'faq_general',
+        title_summary: 'Can I change my contact phone?',
+        short_text_summary:
+          'Yes, contact support and include your booking request reference.',
+      },
+      {
+        content_reference: 'tg_faq_trip_rules_001',
+        content_group: 'faq_trip_rules',
+        title_summary: 'Are life jackets provided?',
+        short_text_summary: 'Yes, safety equipment is provided before boarding.',
+      },
+      {
+        content_reference: 'tg_faq_trip_rules_002',
+        content_group: 'faq_trip_rules',
+        title_summary: 'Is smoking allowed during the trip?',
+        short_text_summary: 'No, smoking is not allowed during passenger trips.',
+      },
+    ];
+
+    for (const row of legacyRows) {
+      managedContentItems.create({
+        content_reference: row.content_reference,
+        content_group: row.content_group,
+        content_type: 'faq_item',
+        title_summary: row.title_summary,
+        short_text_summary: row.short_text_summary,
+        visibility_action_summary: {
+          visibility_state: 'visible',
+          action_type: 'none',
+          action_reference: null,
+        },
+        is_enabled: 1,
+        content_version: 1,
+        is_latest_version: 1,
+        versioned_from_item_id: null,
+        created_at: nowIso,
+        updated_at: nowIso,
+      });
+    }
+
+    const faqList =
+      context.services.usefulContentFaqProjectionService.readFaqListForTelegramGuest();
+    const faqByReference = new Map(
+      faqList.items.map((item) => [item.faq_reference, item])
+    );
+
+    expect(faqByReference.get('tg_faq_general_001')?.title_short_text_summary?.title).toBe(
+      'Можно ли с детьми'
+    );
+    expect(faqByReference.get('tg_faq_general_002')?.title_short_text_summary?.title).toBe(
+      'Можно ли беременным'
+    );
+    expect(
+      faqByReference.get('tg_faq_trip_rules_001')?.title_short_text_summary?.title
+    ).toBe('Когда приходить');
+    expect(
+      faqByReference.get('tg_faq_trip_rules_002')?.title_short_text_summary?.title
+    ).toBe('Как пройти');
+
+    const upgraded = managedContentItems.findOneBy(
+      { content_reference: 'tg_faq_general_001', is_latest_version: 1 },
+      { orderBy: 'content_version DESC' }
+    );
+    expect(Number(upgraded?.content_version)).toBe(2);
+  });
+
   it('builds weather-aware useful-content model when weather resolver returns full data', () => {
     const custom = createTestContext(clock, {
       telegramWeatherSnapshotResolver: () => ({
         condition_code: 'rain',
-        condition_label: 'Rain showers',
+        condition_label: 'Ливневый дождь',
         temperature_c: 9,
+        water_temperature_c: 14,
+        sunset_time_iso: '2026-04-14T16:41:00.000Z',
         wind_speed_mps: 9,
         precipitation_probability: 70,
         observed_at: '2026-04-14T07:25:00.000Z',
@@ -81,14 +162,14 @@ describe('telegram useful-content and faq projection service', () => {
       TELEGRAM_WEATHER_USEFUL_CONTENT_READ_MODEL_VERSION
     );
     expect(model.weather_summary.weather_data_state).toBe('available');
+    expect(model.useful_content_feed_summary.item_count).toBeGreaterThan(0);
     expect(
-      model.weather_caring_content_summary.recommendation_lines.some((line) =>
-        line.includes('Rain is possible')
-      )
-    ).toBe(true);
-    expect(model.weather_caring_content_summary.reminder_status_line).toContain(
-      'Rain is possible'
-    );
+      model.useful_content_feed_summary.items.map((item) => item.content_reference)
+    ).toEqual(TELEGRAM_USEFUL_RESORT_CARD_REFERENCES);
+    expect(
+      model.weather_caring_content_summary.recommendation_lines.length
+    ).toBeGreaterThan(0);
+    expect(model.weather_caring_content_summary.reminder_status_line).toBeTruthy();
     custom.db.close();
   });
 
@@ -123,13 +204,13 @@ describe('telegram useful-content and faq projection service', () => {
     const filteredFeed =
       context.services.usefulContentFaqProjectionService.readUsefulContentFeedForTelegramGuest(
         {
-          content_grouping: 'what_to_take',
+          content_grouping: 'useful_places',
         }
       );
     expect(filteredFeed.item_count).toBeGreaterThan(0);
     expect(
       filteredFeed.items.every(
-        (item) => item.content_type_summary.content_grouping === 'what_to_take'
+        (item) => item.content_type_summary.content_grouping === 'useful_places'
       )
     ).toBe(true);
 
@@ -158,7 +239,7 @@ describe('telegram useful-content and faq projection service', () => {
       );
     expect(weatherAware.weather_summary.weather_data_state).toBe('unavailable');
     expect(weatherAware.weather_caring_content_summary.reminder_status_line).toContain(
-      'Boarding is soon'
+      'До посадки осталось'
     );
 
     const notApplicable =

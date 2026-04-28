@@ -199,7 +199,7 @@ export class TelegramMiniAppTripsCatalogQueryService {
       rejectCatalog('Mini App trip catalog requires a SQLite persistence context');
     }
 
-    const projectedItems = listMiniAppTripRows(this.db, filters, rejectCatalog)
+    const projectedItems = listMiniAppTripRows(this.db, filters, rejectCatalog, nowIso)
       .map((row) => withCatalogItemEnvelope(projectMiniAppTripItem(row, nowIso)))
       .filter((item) =>
         filters.only_active_bookable

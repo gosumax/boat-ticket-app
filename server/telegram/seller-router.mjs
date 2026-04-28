@@ -127,6 +127,10 @@ function mapRouteError(error, routeOperationType) {
   if (
     lower.includes('not assigned to seller') ||
     lower.includes('cannot apply') ||
+    lower.includes('cannot extend') ||
+    lower.includes('already used') ||
+    lower.includes('already extended') ||
+    lower.includes('prepayment is final') ||
     lower.includes('no active seller path') ||
     lower.includes('no longer actionable')
   ) {

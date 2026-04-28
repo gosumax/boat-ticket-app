@@ -1,6 +1,7 @@
 import clsx from 'clsx';
 import QRCode from 'qrcode';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   TELEGRAM_MINI_APP_ENTRYPOINT_KEYS,
   resolveTelegramMiniAppEntrypointContent,
@@ -18,6 +19,7 @@ import {
   subscribeMiniAppApiDiagnostics,
   fetchMiniAppUsefulContentScreen,
   fetchMiniAppTicketViewWithOfflineFallback,
+  fetchMiniAppTicketViewByCanonicalPresale,
   fetchMiniAppTripCard,
   submitMiniAppBookingRequest,
 } from './mini-app-api.js';
@@ -26,6 +28,10 @@ import {
   buildMiniAppFaqViewModel,
 } from './faq-contact-view-model.js';
 import { buildMiniAppHoldResultViewModel } from './hold-result-view-model.js';
+import {
+  formatMiniAppBusinessHoldDeadlineLabel,
+  normalizeMiniAppHoldExpiresAtIso,
+} from './hold-deadline-format.js';
 import { buildMiniAppTicketDetailViewModel } from './ticket-access-view-model.js';
 import {
   formatMiniAppSeatCountLabel,
@@ -43,6 +49,7 @@ import {
   markMiniAppBootstrapCheckpointOnce,
 } from './mini-app-bootstrap-diagnostics.js';
 import './mini-app.css';
+import buyerBoardingReferenceImage from './assets/buyer-boarding-reference.png';
 
 const ENTRYPOINT_LABELS = Object.freeze({
   catalog: 'Каталог',
@@ -99,7 +106,25 @@ const MINI_APP_ENTRY_URL_META_NAME = 'telegram-mini-app-entry-url';
 const RUSSIAN_BUYER_DATE_FORMATTER = new Intl.DateTimeFormat('ru-RU', {
   day: 'numeric',
   month: 'long',
-  timeZone: 'UTC',
+});
+const BUYER_BOARDING_DESTINATION_SEAM = Object.freeze({
+  sourceMapsShortUrl: 'https://maps.app.goo.gl/RhLswd6CSBT8GApt9',
+  latitude: 44.358359,
+  longitude: 38.525406,
+});
+const BUYER_BOARDING_REFERENCE_IMAGE_SEAM = buyerBoardingReferenceImage;
+const BUYER_BOARDING_GUIDE_TEXT_SEAM =
+  'Ориентир: точка посадки у устья реки Вулан.';
+const BUYER_BOARDING_DESTINATION_LABEL = [
+  BUYER_BOARDING_DESTINATION_SEAM.latitude,
+  BUYER_BOARDING_DESTINATION_SEAM.longitude,
+].join(',');
+const BUYER_BOARDING_MAP_LINKS = Object.freeze({
+  yandex: `https://yandex.ru/maps/?rtext=~${BUYER_BOARDING_DESTINATION_LABEL}&rtt=auto`,
+  google: `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+    BUYER_BOARDING_DESTINATION_LABEL
+  )}`,
+  apple: `https://maps.apple.com/?daddr=${encodeURIComponent(BUYER_BOARDING_DESTINATION_LABEL)}&dirflg=d`,
 });
 
 function readQueryParam(name) {
@@ -259,6 +284,19 @@ function readInitialCatalogDate() {
   return normalizeCatalogDateValue(readQueryParam('date'));
 }
 
+function readInitialCanonicalPresaleId() {
+  const value = Number(readQueryParam('canonical_presale_id'));
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function readInitialBuyerTicketCode() {
+  return normalizeString(readQueryParam('buyer_ticket_code'));
+}
+
+function readInitialSourceToken() {
+  return normalizeString(readQueryParam('source_token'));
+}
+
 export const BUYER_CATALOG_TYPE_SELECTION_OPTIONS = Object.freeze([
   {
     key: 'speed',
@@ -346,7 +384,26 @@ export function isBuyerVisibleCatalogItem(item) {
   );
 }
 
-export function filterBuyerCatalogItems(items, selectedTripType = 'all') {
+function parseBuyerTripLocalStartMs(item) {
+  const requestedTripDate = normalizeString(item?.date_time_summary?.requested_trip_date);
+  const requestedTimeSlot = normalizeString(item?.date_time_summary?.requested_time_slot);
+  if (!requestedTripDate || !requestedTimeSlot) {
+    return null;
+  }
+
+  const parsedMs = Date.parse(`${requestedTripDate}T${requestedTimeSlot}:00`);
+  return Number.isFinite(parsedMs) ? parsedMs : null;
+}
+
+export function isBuyerCatalogItemUpcoming(item, nowMs = Date.now()) {
+  const tripStartMs = parseBuyerTripLocalStartMs(item);
+  if (tripStartMs === null) {
+    return true;
+  }
+  return tripStartMs > Number(nowMs);
+}
+
+export function filterBuyerCatalogItems(items, selectedTripType = 'all', nowMs = Date.now()) {
   const resolvedTripType = resolveBuyerCatalogTripTypeFilter(selectedTripType);
   if (!Array.isArray(items) || items.length === 0) {
     return [];
@@ -354,6 +411,9 @@ export function filterBuyerCatalogItems(items, selectedTripType = 'all') {
 
   return items.filter((item) => {
     if (!isBuyerVisibleCatalogItem(item)) {
+      return false;
+    }
+    if (!isBuyerCatalogItemUpcoming(item, nowMs)) {
       return false;
     }
     if (resolvedTripType === 'all') {
@@ -494,7 +554,7 @@ export function validateBuyerCustomerName(value) {
     return Object.freeze({
       isValid: false,
       normalizedName,
-      message: 'РРјСЏ должно содержать минимум 2 символа.',
+      message: 'Имя должно содержать минимум 2 символа.',
     });
   }
 
@@ -688,7 +748,52 @@ function formatStateLabel(value) {
     .filter(Boolean)
     .join(' ');
 }
+function formatUsefulTemperature(value) {
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) {
+    return '—';
+  }
+  const rounded = Math.round(normalized * 10) / 10;
+  return `${rounded.toLocaleString('ru-RU')}°C`;
+}
 
+function formatUsefulSunsetTime({
+  sunsetTimeIso = null,
+  sunsetTimeLocal = null,
+} = {}) {
+  const normalizedIso = normalizeString(sunsetTimeIso);
+  if (normalizedIso) {
+    const parsed = new Date(normalizedIso);
+    if (!Number.isNaN(parsed.getTime())) {
+      return new Intl.DateTimeFormat('ru-RU', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+        timeZone: 'Europe/Moscow',
+      }).format(parsed);
+    }
+  }
+
+  const normalizedLocal = normalizeString(sunsetTimeLocal);
+  if (!normalizedLocal) {
+    return '—';
+  }
+  const match = normalizedLocal.match(/(\d{2}:\d{2})/);
+  return match ? match[1] : normalizedLocal;
+}
+
+function formatUsefulConditionLabel({
+  conditionLabel = null,
+  weatherDataState = null,
+} = {}) {
+  const normalizedCondition = normalizeString(conditionLabel);
+  if (normalizedCondition) {
+    return normalizedCondition;
+  }
+  return weatherDataState === 'unavailable'
+    ? MINI_APP_WEATHER_UNAVAILABLE_MESSAGE
+    : 'Без описания';
+}
 function resolveStateTone(value) {
   const normalized = normalizeString(value);
   if (!normalized) {
@@ -816,6 +921,182 @@ function buildLifecycleItemMap(readModel) {
   return lifecycleItemMap;
 }
 
+export function findMiniAppTicketItemByBookingRequestId(items, bookingRequestId) {
+  const normalizedBookingRequestId = Number(bookingRequestId);
+  if (!Number.isInteger(normalizedBookingRequestId) || normalizedBookingRequestId <= 0) {
+    return null;
+  }
+
+  const ticketItems = Array.isArray(items) ? items : [];
+  return (
+    ticketItems.find(
+      (item) =>
+        readBookingRequestId(item?.booking_request_reference) === normalizedBookingRequestId
+    ) || null
+  );
+}
+
+function resolveMiniAppFriendlyLoadErrorMessage(
+  error,
+  fallbackMessage = 'Не удалось загрузить данные. Попробуйте обновить.'
+) {
+  const fallback =
+    normalizeString(fallbackMessage) || 'Не удалось загрузить данные. Попробуйте обновить.';
+  const rawMessage = normalizeString(error?.message);
+  if (!rawMessage) {
+    return fallback;
+  }
+
+  const lowered = rawMessage.toLowerCase();
+  if (
+    lowered.includes('timeout') ||
+    lowered.includes('timed out') ||
+    lowered.includes('networkerror') ||
+    lowered.includes('network error') ||
+    lowered.includes('failed to fetch') ||
+    lowered.includes('aborterror')
+  ) {
+    return fallback;
+  }
+
+  return rawMessage;
+}
+
+export function buildMiniAppTicketDetailSeedState({
+  ticketItem = null,
+  bookingRequestId = null,
+} = {}) {
+  const normalizedBookingRequestId = Number(bookingRequestId);
+  if (!Number.isInteger(normalizedBookingRequestId) || normalizedBookingRequestId <= 0) {
+    return null;
+  }
+
+  if (!ticketItem || typeof ticketItem !== 'object') {
+    return null;
+  }
+
+  const projectionBookingRequestId = readBookingRequestId(ticketItem?.booking_request_reference);
+  if (projectionBookingRequestId !== normalizedBookingRequestId) {
+    return null;
+  }
+
+  return {
+    loading: false,
+    error: null,
+    selectedBookingRequestId: normalizedBookingRequestId,
+    ticketView: ticketItem,
+    offlineSnapshot: null,
+    fallbackUsed: false,
+    ticketViewErrorMessage: null,
+  };
+}
+
+export function resolveMiniAppCanonicalHoldExpiresAtIso({
+  bookingRequestId,
+  ticketItems = [],
+  fallbackHoldExpiresAtIso = null,
+}) {
+  const ticketItem = findMiniAppTicketItemByBookingRequestId(ticketItems, bookingRequestId);
+  const canonicalHoldExpiresAtIso = normalizeString(
+    ticketItem?.hold_status_summary?.hold_expires_at_summary?.iso
+  );
+  return (
+    normalizeMiniAppHoldExpiresAtIso(canonicalHoldExpiresAtIso) ||
+    normalizeMiniAppHoldExpiresAtIso(fallbackHoldExpiresAtIso)
+  );
+}
+
+export function buildMiniAppPolledTicketDetailState({
+  previousState,
+  selectedBookingRequestId,
+  refreshedTicketView = null,
+  ticketItems = [],
+  hasRefreshFailure = false,
+  refreshFailureMessage = 'Не удалось загрузить данные. Попробуйте обновить.',
+}) {
+  const normalizedSelectedBookingRequestId = Number(selectedBookingRequestId);
+  if (
+    !Number.isInteger(normalizedSelectedBookingRequestId) ||
+    normalizedSelectedBookingRequestId <= 0
+  ) {
+    return previousState;
+  }
+
+  if (
+    Number(previousState?.selectedBookingRequestId) !==
+    normalizedSelectedBookingRequestId
+  ) {
+    return previousState;
+  }
+
+  const listProjection = findMiniAppTicketItemByBookingRequestId(
+    ticketItems,
+    normalizedSelectedBookingRequestId
+  );
+  if (listProjection) {
+    return {
+      loading: false,
+      error: null,
+      selectedBookingRequestId: normalizedSelectedBookingRequestId,
+      ticketView: listProjection,
+      offlineSnapshot: null,
+      fallbackUsed: false,
+      ticketViewErrorMessage: null,
+    };
+  }
+
+  if (refreshedTicketView) {
+    return {
+      loading: false,
+      error: null,
+      selectedBookingRequestId: normalizedSelectedBookingRequestId,
+      ticketView: refreshedTicketView.ticketView,
+      offlineSnapshot: refreshedTicketView.offlineSnapshot,
+      fallbackUsed: refreshedTicketView.fallbackUsed,
+      ticketViewErrorMessage: refreshedTicketView.ticketViewErrorMessage,
+    };
+  }
+
+  if (hasRefreshFailure && previousState?.loading) {
+    return {
+      loading: false,
+      error:
+        normalizeString(refreshFailureMessage) ||
+        'Не удалось загрузить данные. Попробуйте обновить.',
+      selectedBookingRequestId: normalizedSelectedBookingRequestId,
+      ticketView: previousState?.ticketView || null,
+      offlineSnapshot: previousState?.offlineSnapshot || null,
+      fallbackUsed: Boolean(previousState?.fallbackUsed),
+      ticketViewErrorMessage: normalizeString(previousState?.ticketViewErrorMessage),
+    };
+  }
+
+  return previousState;
+}
+
+export function shouldShowMiniAppCurrentTicketContext({
+  hasCurrentTicketContext,
+  selectedBookingRequestId,
+  ticketItems = [],
+}) {
+  if (!hasCurrentTicketContext) {
+    return false;
+  }
+
+  const normalizedSelectedBookingRequestId = Number(selectedBookingRequestId);
+  if (
+    !Number.isInteger(normalizedSelectedBookingRequestId) ||
+    normalizedSelectedBookingRequestId <= 0
+  ) {
+    return true;
+  }
+
+  return !findMiniAppTicketItemByBookingRequestId(
+    ticketItems,
+    normalizedSelectedBookingRequestId
+  );
+}
+
 function resolveBuyerTicketCode(summary) {
   return normalizeString(summary?.buyer_ticket_code);
 }
@@ -845,7 +1126,7 @@ const BUYER_PENDING_FLOW_STEPS = Object.freeze([
 const BUYER_PENDING_FLOW_TITLE = 'Свяжитесь с продавцом и передайте предоплату';
 
 function parseIsoMs(value) {
-  const normalized = normalizeString(value);
+  const normalized = normalizeMiniAppHoldExpiresAtIso(value);
   if (!normalized) {
     return null;
   }
@@ -877,23 +1158,11 @@ function formatMiniAppCountdownClock(remainingMs) {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
-function formatMiniAppHoldDeadlineLabel(isoValue) {
-  const normalizedIso = normalizeString(isoValue);
-  if (!normalizedIso) {
-    return null;
-  }
-
-  const parsedDate = new Date(normalizedIso);
-  if (Number.isNaN(parsedDate.getTime())) {
-    return normalizedIso;
-  }
-
-  const dateLabel = RUSSIAN_BUYER_DATE_FORMATTER.format(parsedDate);
-  const timeLabel = parsedDate.toISOString().slice(11, 16);
-  return `${dateLabel}, ${timeLabel}`;
+export function formatMiniAppHoldDeadlineLabel(isoValue) {
+  return formatMiniAppBusinessHoldDeadlineLabel(isoValue);
 }
 
-function buildMiniAppBuyerCountdownSummary(holdExpiresAtIso, nowMs = Date.now()) {
+export function buildMiniAppBuyerCountdownSummary(holdExpiresAtIso, nowMs = Date.now()) {
   const holdExpiresAtMs = parseIsoMs(holdExpiresAtIso);
   if (holdExpiresAtMs === null) {
     return Object.freeze({
@@ -1246,24 +1515,21 @@ function MiniAppBoardingQrCard({
 
   return (
     <div
-      className="tg-mini-app__subpanel tg-mini-app__subpanel--boarding-qr"
+      className="tg-mini-app__subpanel tg-mini-app__subpanel--boarding-qr tg-mini-app__subpanel--ticket-centered"
       data-testid="telegram-mini-app-ticket-qr"
     >
       <div className="tg-mini-app__boarding-qr-head">
         <div>
           <p className="tg-mini-app__section-eyebrow">Посадка</p>
-          <h3 className="tg-mini-app__subpanel-title">
-            {normalizedBuyerTicketCode
-              ? `QR для билета ${normalizedBuyerTicketCode}`
-              : 'QR для посадки'}
-          </h3>
           <p className="tg-mini-app__note">
             Покажите этот QR диспетчеру при посадке на рейс.
           </p>
+          {normalizedBuyerTicketCode ? (
+            <p className="tg-mini-app__ticket-reference">
+              Номер билета {normalizedBuyerTicketCode}
+            </p>
+          ) : null}
         </div>
-        {normalizedBuyerTicketCode ? (
-          <MiniAppPill tone="accent">{normalizedBuyerTicketCode}</MiniAppPill>
-        ) : null}
       </div>
       <div className="tg-mini-app__boarding-qr-frame">
         {qrDataUrl ? (
@@ -1282,6 +1548,217 @@ function MiniAppBoardingQrCard({
       </div>
       {qrError ? <p className="tg-mini-app__error">{qrError}</p> : null}
     </div>
+  );
+}
+
+export function buildMiniAppPostCreateActiveRequestDeadlineViewModel({
+  bookingRequestId,
+  ticketItems = [],
+  submitHoldExpiresAtIso = null,
+  nowMs = Date.now(),
+}) {
+  const ticketItem = findMiniAppTicketItemByBookingRequestId(
+    ticketItems,
+    bookingRequestId
+  );
+  const rawTicketHoldExpiresAtIso = normalizeString(
+    ticketItem?.hold_status_summary?.hold_expires_at_summary?.iso
+  );
+  const rawSubmitHoldExpiresAtIso = normalizeString(submitHoldExpiresAtIso);
+  const rawHoldExpiresAtIso = rawTicketHoldExpiresAtIso || rawSubmitHoldExpiresAtIso;
+  const holdExpiresAtIso = resolveMiniAppCanonicalHoldExpiresAtIso({
+    bookingRequestId,
+    ticketItems,
+    fallbackHoldExpiresAtIso: rawSubmitHoldExpiresAtIso,
+  });
+
+  return Object.freeze({
+    rawHoldExpiresAtIso,
+    rawTicketHoldExpiresAtIso,
+    rawSubmitHoldExpiresAtIso,
+    holdExpiresAtIso,
+    holdDeadlineLabel: formatMiniAppHoldDeadlineLabel(holdExpiresAtIso),
+    countdownSummary: buildMiniAppBuyerCountdownSummary(holdExpiresAtIso, nowMs),
+  });
+}
+
+function MiniAppHowToGetThereCard({
+  collapsible = true,
+  testId = 'telegram-mini-app-ticket-how-to-get',
+}) {
+  const [isImageLightboxOpen, setIsImageLightboxOpen] = useState(false);
+  const lightboxContentRef = useRef(null);
+
+  useEffect(() => {
+    if (typeof Image === 'undefined') {
+      return;
+    }
+    const preloadImage = new Image();
+    preloadImage.decoding = 'async';
+    preloadImage.src = BUYER_BOARDING_REFERENCE_IMAGE_SEAM;
+    if (typeof preloadImage.decode === 'function') {
+      preloadImage.decode().catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isImageLightboxOpen || typeof window === 'undefined') {
+      return undefined;
+    }
+    const scrollY = window.scrollY || window.pageYOffset || 0;
+    const bodyStyle = document.body.style;
+    const previousOverflow = bodyStyle.overflow;
+    const previousPosition = bodyStyle.position;
+    const previousTop = bodyStyle.top;
+    const previousWidth = bodyStyle.width;
+
+    bodyStyle.overflow = 'hidden';
+    bodyStyle.position = 'fixed';
+    bodyStyle.top = `-${scrollY}px`;
+    bodyStyle.width = '100%';
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setIsImageLightboxOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.requestAnimationFrame(() => {
+      lightboxContentRef.current?.focus();
+    });
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      bodyStyle.overflow = previousOverflow;
+      bodyStyle.position = previousPosition;
+      bodyStyle.top = previousTop;
+      bodyStyle.width = previousWidth;
+      window.scrollTo(0, scrollY);
+    };
+  }, [isImageLightboxOpen]);
+
+  const contentClassName = clsx(
+    'tg-mini-app__how-to-get-content',
+    !collapsible && 'tg-mini-app__how-to-get-content--standalone'
+  );
+
+  const howToGetContent = (
+    <div className={contentClassName}>
+      <button
+        type="button"
+        className="tg-mini-app__how-to-get-image-button"
+        onClick={() => setIsImageLightboxOpen(true)}
+        aria-label="Открыть изображение карты на весь экран"
+      >
+        <img
+          className="tg-mini-app__how-to-get-image"
+          src={BUYER_BOARDING_REFERENCE_IMAGE_SEAM}
+          alt="Точка посадки на карте"
+          loading="eager"
+          decoding="async"
+          fetchPriority="high"
+          width="2048"
+          height="725"
+        />
+      </button>
+      <p className="tg-mini-app__note tg-mini-app__how-to-get-note">{BUYER_BOARDING_GUIDE_TEXT_SEAM}</p>
+      <div className="tg-mini-app__how-to-get-actions">
+        <a
+          className="tg-mini-app__button tg-mini-app__button--secondary tg-mini-app__how-to-get-link"
+          href={BUYER_BOARDING_MAP_LINKS.yandex}
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          Открыть в Яндекс Картах
+        </a>
+        <a
+          className="tg-mini-app__button tg-mini-app__button--secondary tg-mini-app__how-to-get-link"
+          href={BUYER_BOARDING_MAP_LINKS.google}
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          Открыть в Google Maps
+        </a>
+        <a
+          className="tg-mini-app__button tg-mini-app__button--secondary tg-mini-app__how-to-get-link"
+          href={BUYER_BOARDING_MAP_LINKS.apple}
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          Открыть в Apple Maps
+        </a>
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      {collapsible ? (
+        <details
+          className="tg-mini-app__subpanel tg-mini-app__subpanel--how-to-get tg-mini-app__subpanel--ticket-centered"
+          data-testid={testId}
+        >
+          <summary className="tg-mini-app__how-to-get-summary">
+            <div className="tg-mini-app__how-to-get-head">
+              <h3 className="tg-mini-app__subpanel-title">Как добраться</h3>
+              <p className="tg-mini-app__how-to-get-hint">
+                Нажмите на изображение, чтобы увеличить
+              </p>
+            </div>
+            <span className="tg-mini-app__how-to-get-trigger">Открыть</span>
+          </summary>
+          {howToGetContent}
+        </details>
+      ) : (
+        <div
+          className="tg-mini-app__subpanel tg-mini-app__subpanel--how-to-get tg-mini-app__subpanel--how-to-get-standalone tg-mini-app__subpanel--ticket-centered"
+          data-testid={testId}
+        >
+          <h3 className="tg-mini-app__subpanel-title">Как добраться</h3>
+          <p className="tg-mini-app__how-to-get-hint">
+            Нажмите на изображение, чтобы увеличить
+          </p>
+          {howToGetContent}
+        </div>
+      )}
+      {isImageLightboxOpen && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              className="tg-mini-app__image-lightbox"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Просмотр карты"
+              onClick={() => setIsImageLightboxOpen(false)}
+            >
+              <div
+                className="tg-mini-app__image-lightbox-content"
+                onClick={(event) => event.stopPropagation()}
+                ref={lightboxContentRef}
+                tabIndex={-1}
+              >
+                <button
+                  type="button"
+                  className="tg-mini-app__image-lightbox-close"
+                  onClick={() => setIsImageLightboxOpen(false)}
+                  aria-label="Закрыть просмотр карты"
+                >
+                  ×
+                </button>
+                <img
+                  className="tg-mini-app__image-lightbox-image"
+                  src={BUYER_BOARDING_REFERENCE_IMAGE_SEAM}
+                  alt="Точка посадки на карте"
+                  loading="eager"
+                  decoding="async"
+                  fetchPriority="high"
+                  width="2048"
+                  height="725"
+                />
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+    </>
   );
 }
 
@@ -1401,6 +1878,18 @@ function MiniAppApiDiagnosticsCard({ title, diagnostic }) {
           <strong>Response status:</strong> {formatDiagnosticValue(diagnostic.status)}
         </li>
         <li>
+          <strong>Duration (ms):</strong> {formatDiagnosticValue(diagnostic.durationMs)}
+        </li>
+        <li>
+          <strong>Timed out:</strong> {formatDiagnosticFlag(diagnostic.timedOut)}
+        </li>
+        <li>
+          <strong>Request failed:</strong> {formatDiagnosticFlag(diagnostic.requestFailed)}
+        </li>
+        <li>
+          <strong>Retried:</strong> {formatDiagnosticFlag(diagnostic.retryAttempted)}
+        </li>
+        <li>
           <strong>Response content-type:</strong> {formatDiagnosticValue(diagnostic.contentType)}
         </li>
         <li>
@@ -1450,6 +1939,104 @@ const MINI_APP_SECTION_BY_DEEP_LINK = Object.freeze({
   '/my-requests': 'my_tickets',
   '/my-tickets': 'my_tickets',
 });
+const MINI_APP_SINGLE_INSTANCE_LOCK_KEY = 'telegram_mini_app_single_instance_lock_v1';
+const MINI_APP_SINGLE_INSTANCE_HEARTBEAT_MS = 1500;
+const MINI_APP_SINGLE_INSTANCE_STALE_MS = 10000;
+const MINI_APP_GENERIC_LOAD_ERROR = 'Не удалось загрузить данные. Попробуйте обновить.';
+const MINI_APP_WEATHER_UNAVAILABLE_MESSAGE = 'Погода временно недоступна.';
+
+function resolveMiniAppLocalStorage() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  try {
+    return window.localStorage || null;
+  } catch {
+    return null;
+  }
+}
+
+function readMiniAppSingleInstanceLock(storage) {
+  if (!storage) {
+    return null;
+  }
+  try {
+    const raw = normalizeString(storage.getItem(MINI_APP_SINGLE_INSTANCE_LOCK_KEY));
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    const instanceId = normalizeString(parsed?.instance_id);
+    const heartbeatAtMs = Number(parsed?.heartbeat_at_ms);
+    if (
+      !instanceId ||
+      !Number.isInteger(Math.trunc(heartbeatAtMs)) ||
+      heartbeatAtMs <= 0
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      instanceId,
+      heartbeatAtMs: Math.trunc(heartbeatAtMs),
+    });
+  } catch {
+    return null;
+  }
+}
+
+function writeMiniAppSingleInstanceLock(storage, instanceId, heartbeatAtMs) {
+  if (!storage) {
+    return false;
+  }
+  const normalizedInstanceId = normalizeString(instanceId);
+  const normalizedHeartbeatAtMs = Math.trunc(Number(heartbeatAtMs));
+  if (!normalizedInstanceId || normalizedHeartbeatAtMs <= 0) {
+    return false;
+  }
+  try {
+    storage.setItem(
+      MINI_APP_SINGLE_INSTANCE_LOCK_KEY,
+      JSON.stringify({
+        instance_id: normalizedInstanceId,
+        heartbeat_at_ms: normalizedHeartbeatAtMs,
+      })
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function releaseMiniAppSingleInstanceLockIfOwner(storage, instanceId) {
+  if (!storage) {
+    return false;
+  }
+  const normalizedInstanceId = normalizeString(instanceId);
+  if (!normalizedInstanceId) {
+    return false;
+  }
+  const currentLock = readMiniAppSingleInstanceLock(storage);
+  if (currentLock?.instanceId !== normalizedInstanceId) {
+    return false;
+  }
+  try {
+    storage.removeItem(MINI_APP_SINGLE_INSTANCE_LOCK_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isMiniAppSingleInstanceLockActive(lockSummary, nowMs) {
+  if (!lockSummary) {
+    return false;
+  }
+  const normalizedNowMs = Math.trunc(Number(nowMs));
+  if (normalizedNowMs <= 0) {
+    return false;
+  }
+  return normalizedNowMs - lockSummary.heartbeatAtMs < MINI_APP_SINGLE_INSTANCE_STALE_MS;
+}
 
 function readWindowPathname() {
   if (typeof window === 'undefined') {
@@ -1490,10 +2077,20 @@ export default function TelegramMiniApp() {
 
   const [telegramUserId, setTelegramUserId] = useState(readTelegramMiniAppUserId);
   const [catalogDate, setCatalogDate] = useState(readInitialCatalogDate);
+  const [initialCanonicalPresaleId] = useState(readInitialCanonicalPresaleId);
+  const [initialBuyerTicketCode] = useState(readInitialBuyerTicketCode);
+  const [initialSourceToken] = useState(readInitialSourceToken);
   const [initialMiniAppSection] = useState(() =>
     resolveInitialMiniAppSection(readWindowPathname())
   );
   const [deepLinkMyTicketsOpened, setDeepLinkMyTicketsOpened] = useState(false);
+  const deepLinkTicketViewOpenedRef = useRef(false);
+  const ticketDetailRequestSeqRef = useRef(0);
+  const miniAppInstanceIdRef = useRef(
+    `mini-app-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  );
+  const [miniAppInstanceMode, setMiniAppInstanceMode] = useState('pending');
+  const [miniAppActiveInstanceId, setMiniAppActiveInstanceId] = useState(null);
   const [catalogState, setCatalogState] = useState({
     loading: false,
     error: null,
@@ -1563,10 +2160,6 @@ export default function TelegramMiniApp() {
     () => buildMiniAppHoldResultViewModel(submitResult),
     [submitResult]
   );
-  const resultCountdownSummary = useMemo(
-    () => buildMiniAppBuyerCountdownSummary(holdResultViewModel.holdExpiresAtIso, nowMs),
-    [holdResultViewModel.holdExpiresAtIso, nowMs]
-  );
   const resultSellerContact = useMemo(
     () => resolveMiniAppSellerContact(holdResultViewModel.sellerContact),
     [holdResultViewModel.sellerContact]
@@ -1575,6 +2168,102 @@ export default function TelegramMiniApp() {
     () => buildLifecycleItemMap(myRequestsState.readModel),
     [myRequestsState.readModel]
   );
+  const resultBookingRequestId = useMemo(
+    () => readBookingRequestId(submitResult?.booking_request_reference),
+    [submitResult]
+  );
+  const resultLifecycleItem = useMemo(() => {
+    return Number.isInteger(resultBookingRequestId) && resultBookingRequestId > 0
+      ? lifecycleItemByBookingRequestId.get(resultBookingRequestId) || null
+      : null;
+  }, [resultBookingRequestId, lifecycleItemByBookingRequestId]);
+  const resultTicketItem = useMemo(() => {
+    if (!Number.isInteger(resultBookingRequestId) || resultBookingRequestId <= 0) {
+      return null;
+    }
+
+    const ticketItems = Array.isArray(ticketsState.items) ? ticketsState.items : [];
+    return (
+      ticketItems.find((item) => {
+        const bookingRequestId = readBookingRequestId(item?.booking_request_reference);
+        return bookingRequestId === resultBookingRequestId;
+      }) || null
+    );
+  }, [resultBookingRequestId, ticketsState.items]);
+  const resultDeadlineViewModel = useMemo(
+    () =>
+      buildMiniAppPostCreateActiveRequestDeadlineViewModel({
+        bookingRequestId: resultBookingRequestId,
+        ticketItems: ticketsState.items,
+        submitHoldExpiresAtIso: holdResultViewModel.holdExpiresAtIso,
+        nowMs,
+      }),
+    [
+      holdResultViewModel.holdExpiresAtIso,
+      nowMs,
+      resultBookingRequestId,
+      ticketsState.items,
+    ]
+  );
+  const resultHoldExpiresAtIso = resultDeadlineViewModel.holdExpiresAtIso;
+  const resultCountdownSummary = useMemo(
+    () => resultDeadlineViewModel.countdownSummary,
+    [resultDeadlineViewModel]
+  );
+  const resultPresentation = useMemo(
+    () =>
+      resolveMiniAppBuyerTicketPresentation({
+        status:
+          resultTicketItem?.ticket_status_summary?.deterministic_ticket_state ||
+          'request_created',
+        availability: resultTicketItem?.ticket_availability_state || 'not_available_yet',
+        bookingRequestId: resultBookingRequestId,
+        buyerTicketCode: resolveBuyerTicketCode(resultTicketItem?.buyer_ticket_reference_summary),
+        lifecycleState: resultLifecycleItem?.lifecycle_state,
+        holdActive: resultLifecycleItem?.hold_active,
+        requestConfirmed: resultLifecycleItem?.request_confirmed,
+        requestedPrepaymentAmount: resultLifecycleItem?.requested_prepayment_amount,
+        holdExpiresAtIso: resultHoldExpiresAtIso,
+      }),
+    [
+      resultBookingRequestId,
+      resultHoldExpiresAtIso,
+      resultLifecycleItem,
+      resultTicketItem,
+    ]
+  );
+  const resultPendingPrepaymentFlow = useMemo(
+    () =>
+      isMiniAppPendingPrepaymentFlow({
+        status: resultTicketItem?.ticket_status_summary?.deterministic_ticket_state || 'request_created',
+        availability: resultTicketItem?.ticket_availability_state || 'not_available_yet',
+        lifecycleState: resultLifecycleItem?.lifecycle_state,
+      }),
+    [resultLifecycleItem?.lifecycle_state, resultTicketItem]
+  );
+  const resultHeaderTitle =
+    holdResultViewModel.isSuccess && !resultPendingPrepaymentFlow
+      ? resultPresentation.statusLabel
+      : holdResultViewModel.headline;
+  const resultHeaderDescription =
+    holdResultViewModel.isSuccess && !resultPendingPrepaymentFlow
+      ? resultPresentation.description
+      : holdResultViewModel.primaryText;
+  const resultShowsPendingFlow =
+    holdResultViewModel.isSuccess && resultPendingPrepaymentFlow;
+  const resultCanOpenTicketView = Boolean(
+    holdResultViewModel.isSuccess &&
+      !resultPendingPrepaymentFlow &&
+      Number.isInteger(resultBookingRequestId) &&
+      resultBookingRequestId > 0
+  );
+  const resultOpenTicketTarget = resultCanOpenTicketView
+    ? resultTicketItem || {
+        booking_request_reference: {
+          booking_request_id: resultBookingRequestId,
+        },
+      }
+    : null;
   const ticketDetailLifecycleItem = useMemo(() => {
     const selectedBookingRequestId = Number(ticketDetailState.selectedBookingRequestId);
     return Number.isInteger(selectedBookingRequestId) && selectedBookingRequestId > 0
@@ -1603,15 +2292,23 @@ export default function TelegramMiniApp() {
         holdActive: ticketDetailLifecycleItem?.hold_active,
         requestConfirmed: ticketDetailLifecycleItem?.request_confirmed,
         requestedPrepaymentAmount: ticketDetailLifecycleItem?.requested_prepayment_amount,
-        holdExpiresAtIso: ticketDetailViewModel.holdExpiresAtIso,
+        holdExpiresAtIso: resolveMiniAppCanonicalHoldExpiresAtIso({
+          bookingRequestId:
+            ticketDetailViewModel.bookingRequestId ??
+            ticketDetailState.selectedBookingRequestId,
+          ticketItems: ticketsState.items,
+          fallbackHoldExpiresAtIso: ticketDetailViewModel.holdExpiresAtIso,
+        }),
       }),
     [
+      ticketDetailState.selectedBookingRequestId,
       ticketDetailViewModel.availability,
       ticketDetailViewModel.bookingRequestId,
       ticketDetailViewModel.buyerTicketCode,
       ticketDetailViewModel.holdExpiresAtIso,
       ticketDetailViewModel.status,
       ticketDetailLifecycleItem,
+      ticketsState.items,
     ]
   );
   const ticketDetailPendingPrepaymentFlow = useMemo(
@@ -1628,8 +2325,24 @@ export default function TelegramMiniApp() {
     ]
   );
   const ticketDetailCountdownSummary = useMemo(
-    () => buildMiniAppBuyerCountdownSummary(ticketDetailViewModel.holdExpiresAtIso, nowMs),
-    [ticketDetailViewModel.holdExpiresAtIso, nowMs]
+    () =>
+      buildMiniAppBuyerCountdownSummary(
+        resolveMiniAppCanonicalHoldExpiresAtIso({
+          bookingRequestId:
+            ticketDetailViewModel.bookingRequestId ??
+            ticketDetailState.selectedBookingRequestId,
+          ticketItems: ticketsState.items,
+          fallbackHoldExpiresAtIso: ticketDetailViewModel.holdExpiresAtIso,
+        }),
+        nowMs
+      ),
+    [
+      nowMs,
+      ticketDetailState.selectedBookingRequestId,
+      ticketDetailViewModel.bookingRequestId,
+      ticketDetailViewModel.holdExpiresAtIso,
+      ticketsState.items,
+    ]
   );
   const ticketDetailSellerContact = useMemo(
     () =>
@@ -1639,21 +2352,30 @@ export default function TelegramMiniApp() {
       }),
     [ticketDetailViewModel.sellerName, ticketDetailViewModel.sellerPhone]
   );
-  const ticketDetailCanOpenSavedCopy = useMemo(() => {
-    const selectedBookingRequestId = Number(ticketDetailState.selectedBookingRequestId);
-    if (!Number.isInteger(selectedBookingRequestId) || selectedBookingRequestId <= 0) {
-      return false;
-    }
-    if (ticketDetailPendingPrepaymentFlow) {
-      return false;
-    }
-    return Boolean(ticketDetailViewModel.hasBoardingQr || ticketDetailViewModel.buyerTicketCode);
-  }, [
-    ticketDetailPendingPrepaymentFlow,
-    ticketDetailState.selectedBookingRequestId,
-    ticketDetailViewModel.buyerTicketCode,
-    ticketDetailViewModel.hasBoardingQr,
-  ]);
+  const hasCurrentTicketContext =
+    !ticketDetailState.loading &&
+    !ticketDetailState.error &&
+    ticketDetailViewModel.renderState !== 'empty';
+  const showCurrentTicketContext = useMemo(
+    () =>
+      shouldShowMiniAppCurrentTicketContext({
+        hasCurrentTicketContext,
+        selectedBookingRequestId:
+          ticketDetailViewModel.bookingRequestId ??
+          ticketDetailState.selectedBookingRequestId,
+        ticketItems: ticketsState.items,
+      }),
+    [
+      hasCurrentTicketContext,
+      ticketDetailState.selectedBookingRequestId,
+      ticketDetailViewModel.bookingRequestId,
+      ticketsState.items,
+    ]
+  );
+  const currentTicketContextDateTimeLabel = formatDateTimeLabel(
+    ticketDetailViewModel.requestedTripDate,
+    ticketDetailViewModel.requestedTimeSlot
+  );
   const usefulContentViewModel = useMemo(
     () =>
       buildMiniAppUsefulContentViewModel({
@@ -1684,26 +2406,37 @@ export default function TelegramMiniApp() {
       }),
     [contactState]
   );
+  const contactDispatcherPhone =
+    ticketDetailSellerContact?.sellerPhone || contactViewModel.contactPhone || null;
+  const contactDispatcherCallHref = contactDispatcherPhone
+    ? `tel:${contactDispatcherPhone}`
+    : null;
   const isMiniAppDebugMode = isMiniAppApiDiagnosticsEnabled();
   const showMiniAppApiDiagnostics = isMiniAppDebugMode;
   const activeNavSection = resolveActiveNavSection(activeSection);
   const catalogDatePresets = useMemo(() => createCatalogDatePresets(), []);
   const visibleCatalogItems = useMemo(
-    () => filterBuyerCatalogItems(catalogState.items),
-    [catalogState.items]
+    () => filterBuyerCatalogItems(catalogState.items, 'all', nowMs),
+    [catalogState.items, nowMs]
   );
   const filteredCatalogItems = useMemo(
     () =>
-      catalogTripType ? filterBuyerCatalogItems(catalogState.items, catalogTripType) : [],
-    [catalogState.items, catalogTripType]
+      catalogTripType
+        ? filterBuyerCatalogItems(catalogState.items, catalogTripType, nowMs)
+        : [],
+    [catalogState.items, catalogTripType, nowMs]
   );
   const catalogTypeSelectionCards = useMemo(
     () =>
       BUYER_CATALOG_TYPE_SELECTION_OPTIONS.map((selectionOption) => ({
         ...selectionOption,
-        tripCount: filterBuyerCatalogItems(catalogState.items, selectionOption.key).length,
+        tripCount: filterBuyerCatalogItems(
+          catalogState.items,
+          selectionOption.key,
+          nowMs
+        ).length,
       })),
-    [catalogState.items]
+    [catalogState.items, nowMs]
   );
   const selectedCatalogTripType =
     BUYER_CATALOG_TYPE_SELECTION_OPTIONS.find(
@@ -1754,6 +2487,9 @@ export default function TelegramMiniApp() {
   const bookingCapacityExceeded =
     selectedTripAvailableSeats !== null &&
     bookingTicketSelection.totalSeats > selectedTripAvailableSeats;
+  const selectedTripIsUpcoming = selectedTripCard
+    ? isBuyerCatalogItemUpcoming(selectedTripCard, nowMs)
+    : true;
   const bookingNameValidation = useMemo(
     () => validateBuyerCustomerName(bookingForm.customerName),
     [bookingForm.customerName]
@@ -1770,6 +2506,7 @@ export default function TelegramMiniApp() {
   const bookingCanSubmit =
     bookingTicketSelection.totalSeats > 0 &&
     !bookingCapacityExceeded &&
+    selectedTripIsUpcoming &&
     bookingRequiredFieldsFilled;
   const bookingSubmitButtonLabel = !bookingRequiredFieldsFilled
     ? 'Заполните имя и телефон'
@@ -1777,32 +2514,128 @@ export default function TelegramMiniApp() {
       ? 'Выберите хотя бы один билет'
       : bookingCapacityExceeded
         ? 'Недостаточно мест'
-        : 'Отправить заявку';
+        : !selectedTripIsUpcoming
+          ? 'Рейс уже отправился'
+          : 'Отправить заявку';
 
   const resolvedBookingSubmitButtonLabel =
     bookingTicketSelection.totalSeats <= 0
       ? 'Выберите хотя бы один билет'
       : bookingCapacityExceeded
         ? 'Недостаточно мест'
-        : !bookingNameValidation.isValid && !bookingPhoneValidation.isValid
-          ? 'Укажите имя и телефон'
-          : !bookingNameValidation.isValid
-            ? 'Укажите имя'
-            : !bookingPhoneValidation.isValid
-              ? 'Проверьте телефон'
-              : bookingSubmitButtonLabel;
+        : !selectedTripIsUpcoming
+          ? 'Рейс уже отправился'
+          : !bookingNameValidation.isValid && !bookingPhoneValidation.isValid
+            ? 'Укажите имя и телефон'
+            : !bookingNameValidation.isValid
+              ? 'Укажите имя'
+              : !bookingPhoneValidation.isValid
+                ? 'Проверьте телефон'
+                : bookingSubmitButtonLabel;
   const bookingSubmitHelperText =
     bookingTicketSelection.totalSeats <= 0
       ? 'Выберите хотя бы один билет для заявки.'
       : bookingCapacityExceeded
         ? `Доступно только ${formatMiniAppSeatCountLabel(selectedTripAvailableSeats)}.`
-        : !bookingNameValidation.isValid && !bookingPhoneValidation.isValid
-          ? 'Чтобы отправить заявку, укажите имя от 2 символов и телефон в формате +7XXXXXXXXXX или 8XXXXXXXXXX.'
-          : !bookingNameValidation.isValid
-            ? bookingNameValidation.message
-            : !bookingPhoneValidation.isValid
-              ? bookingPhoneValidation.message
-              : null;
+        : !selectedTripIsUpcoming
+          ? 'Этот рейс уже отправился. Выберите другой рейс в каталоге.'
+          : !bookingNameValidation.isValid && !bookingPhoneValidation.isValid
+            ? 'Чтобы отправить заявку, укажите имя от 2 символов и телефон в формате +7XXXXXXXXXX или 8XXXXXXXXXX.'
+            : !bookingNameValidation.isValid
+              ? bookingNameValidation.message
+              : !bookingPhoneValidation.isValid
+                ? bookingPhoneValidation.message
+                : null;
+  const isPrimaryMiniAppInstance = miniAppInstanceMode === 'primary';
+
+  useEffect(() => {
+    const storage = resolveMiniAppLocalStorage();
+    const currentInstanceId = miniAppInstanceIdRef.current;
+    if (!storage) {
+      setMiniAppInstanceMode('primary');
+      setMiniAppActiveInstanceId(null);
+      return undefined;
+    }
+
+    const now = Date.now();
+    const currentLock = readMiniAppSingleInstanceLock(storage);
+    if (
+      isMiniAppSingleInstanceLockActive(currentLock, now) &&
+      currentLock.instanceId !== currentInstanceId
+    ) {
+      setMiniAppInstanceMode('secondary');
+      setMiniAppActiveInstanceId(currentLock.instanceId);
+      return undefined;
+    }
+
+    writeMiniAppSingleInstanceLock(storage, currentInstanceId, now);
+    setMiniAppInstanceMode('primary');
+    setMiniAppActiveInstanceId(null);
+    return undefined;
+  }, []);
+
+  useEffect(() => {
+    if (!isPrimaryMiniAppInstance) {
+      return undefined;
+    }
+
+    const storage = resolveMiniAppLocalStorage();
+    const currentInstanceId = miniAppInstanceIdRef.current;
+    if (!storage) {
+      return undefined;
+    }
+
+    const syncLockOwnership = () => {
+      const now = Date.now();
+      const currentLock = readMiniAppSingleInstanceLock(storage);
+      if (
+        isMiniAppSingleInstanceLockActive(currentLock, now) &&
+        currentLock.instanceId !== currentInstanceId
+      ) {
+        setMiniAppInstanceMode('secondary');
+        setMiniAppActiveInstanceId(currentLock.instanceId);
+        return;
+      }
+      writeMiniAppSingleInstanceLock(storage, currentInstanceId, now);
+    };
+
+    const releaseLock = () => {
+      releaseMiniAppSingleInstanceLockIfOwner(storage, currentInstanceId);
+    };
+
+    syncLockOwnership();
+    const intervalId = setInterval(
+      syncLockOwnership,
+      MINI_APP_SINGLE_INSTANCE_HEARTBEAT_MS
+    );
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', releaseLock);
+      window.addEventListener('pagehide', releaseLock);
+    }
+
+    return () => {
+      clearInterval(intervalId);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('beforeunload', releaseLock);
+        window.removeEventListener('pagehide', releaseLock);
+      }
+      releaseLock();
+    };
+  }, [isPrimaryMiniAppInstance]);
+
+  function handleMiniAppTakeover() {
+    const storage = resolveMiniAppLocalStorage();
+    if (storage) {
+      writeMiniAppSingleInstanceLock(
+        storage,
+        miniAppInstanceIdRef.current,
+        Date.now()
+      );
+    }
+    setMiniAppInstanceMode('primary');
+    setMiniAppActiveInstanceId(null);
+  }
+
   useEffect(() => {
     const intervalId = setInterval(() => {
       setNowMs(Date.now());
@@ -1814,6 +2647,10 @@ export default function TelegramMiniApp() {
   }, []);
 
   useEffect(() => {
+    if (!isPrimaryMiniAppInstance) {
+      return;
+    }
+
     markMiniAppBootstrapCheckpointOnce('TelegramMiniApp first useEffect entered');
     completeMiniAppBootstrap();
     setRuntimeDiagnostics(readMiniAppRuntimeDiagnosticsSnapshot());
@@ -1841,11 +2678,15 @@ export default function TelegramMiniApp() {
     if (runtimeTelegramUserId) {
       setTelegramUserId((prev) => normalizeString(prev) || runtimeTelegramUserId);
     }
-  }, []);
+  }, [isPrimaryMiniAppInstance]);
 
   useEffect(() => subscribeMiniAppApiDiagnostics(setApiDiagnostics), []);
 
   useEffect(() => {
+    if (!isPrimaryMiniAppInstance) {
+      return undefined;
+    }
+
     if (normalizeString(telegramUserId)) {
       return undefined;
     }
@@ -1867,9 +2708,13 @@ export default function TelegramMiniApp() {
     return () => {
       clearInterval(intervalId);
     };
-  }, [telegramUserId]);
+  }, [isPrimaryMiniAppInstance, telegramUserId]);
 
   useEffect(() => {
+    if (!isPrimaryMiniAppInstance) {
+      return undefined;
+    }
+
     let isAlive = true;
 
     async function loadCatalog() {
@@ -1919,9 +2764,13 @@ export default function TelegramMiniApp() {
     return () => {
       isAlive = false;
     };
-  }, [telegramUserId, catalogDate]);
+  }, [isPrimaryMiniAppInstance, telegramUserId, catalogDate]);
 
   useEffect(() => {
+    if (!isPrimaryMiniAppInstance) {
+      return undefined;
+    }
+
     let isAlive = true;
 
     async function loadMyRequests() {
@@ -1974,7 +2823,152 @@ export default function TelegramMiniApp() {
     return () => {
       isAlive = false;
     };
-  }, [telegramUserId]);
+  }, [isPrimaryMiniAppInstance, telegramUserId]);
+
+  useEffect(() => {
+    if (!isPrimaryMiniAppInstance) {
+      return undefined;
+    }
+
+    const normalizedTelegramUserId = normalizeString(telegramUserId);
+    const hasRuntimeInitData = Boolean(readTelegramMiniAppInitDataRaw());
+    const selectedTicketViewBookingRequestId = Number(
+      ticketDetailState.selectedBookingRequestId
+    );
+    const shouldRefreshTicketView =
+      activeSection === 'ticket_view' &&
+      Number.isInteger(selectedTicketViewBookingRequestId) &&
+      selectedTicketViewBookingRequestId > 0;
+    const canReadBuyerState = Boolean(
+      ((activeSection === 'result' &&
+        holdResultViewModel.isSuccess &&
+        Number.isInteger(resultBookingRequestId) &&
+        resultBookingRequestId > 0) ||
+        activeSection === 'my_tickets' ||
+        shouldRefreshTicketView) &&
+        (normalizedTelegramUserId || hasRuntimeInitData)
+    );
+    if (!canReadBuyerState) {
+      return undefined;
+    }
+
+    let isAlive = true;
+    let refreshInFlight = false;
+
+    const refreshBuyerState = async () => {
+      if (refreshInFlight) {
+        return;
+      }
+      refreshInFlight = true;
+      try {
+        const [readModelResult, ticketListResult, refreshedTicketViewResult] =
+          await Promise.allSettled([
+            fetchMiniAppMyRequests({
+              telegramUserId: normalizedTelegramUserId,
+            }),
+            fetchMiniAppMyTickets({
+              telegramUserId: normalizedTelegramUserId,
+            }),
+            shouldRefreshTicketView
+              ? fetchMiniAppTicketViewWithOfflineFallback({
+                  telegramUserId: normalizedTelegramUserId,
+                  bookingRequestId: selectedTicketViewBookingRequestId,
+                })
+              : Promise.resolve(null),
+          ]);
+        if (!isAlive) {
+          return;
+        }
+
+        if (readModelResult.status === 'fulfilled') {
+          setMyRequestsState({
+            loading: false,
+            error: null,
+            readModel: readModelResult.value,
+          });
+        } else {
+          const refreshErrorMessage = resolveMiniAppFriendlyLoadErrorMessage(
+            readModelResult.reason
+          );
+          setMyRequestsState((prev) => {
+            if (!prev.loading) {
+              return prev;
+            }
+            return {
+              loading: false,
+              error: refreshErrorMessage,
+              readModel: prev.readModel,
+            };
+          });
+        }
+
+        const nextTicketItems =
+          ticketListResult.status === 'fulfilled' && Array.isArray(ticketListResult.value?.items)
+            ? ticketListResult.value.items
+            : null;
+        if (nextTicketItems) {
+          setTicketsState({
+            loading: false,
+            error: null,
+            items: nextTicketItems,
+          });
+        } else {
+          const refreshErrorMessage = resolveMiniAppFriendlyLoadErrorMessage(
+            ticketListResult.reason
+          );
+          setTicketsState((prev) => {
+            if (!prev.loading) {
+              return prev;
+            }
+            return {
+              loading: false,
+              error: refreshErrorMessage,
+              items: Array.isArray(prev.items) ? prev.items : [],
+            };
+          });
+        }
+
+        const refreshedTicketView =
+          refreshedTicketViewResult.status === 'fulfilled'
+            ? refreshedTicketViewResult.value
+            : null;
+        const ticketRefreshFailed =
+          shouldRefreshTicketView && refreshedTicketViewResult.status === 'rejected';
+        const ticketRefreshFailureMessage = ticketRefreshFailed
+          ? resolveMiniAppFriendlyLoadErrorMessage(refreshedTicketViewResult.reason)
+          : null;
+        if (shouldRefreshTicketView && (refreshedTicketView || nextTicketItems || ticketRefreshFailed)) {
+          setTicketDetailState((prev) => {
+            return buildMiniAppPolledTicketDetailState({
+              previousState: prev,
+              selectedBookingRequestId: selectedTicketViewBookingRequestId,
+              refreshedTicketView,
+              ticketItems: nextTicketItems || [],
+              hasRefreshFailure: ticketRefreshFailed,
+              refreshFailureMessage: ticketRefreshFailureMessage,
+            });
+          });
+        }
+      } finally {
+        refreshInFlight = false;
+      }
+    };
+
+    refreshBuyerState();
+    const intervalId = setInterval(refreshBuyerState, 4000);
+
+    return () => {
+      isAlive = false;
+      clearInterval(intervalId);
+    };
+  }, [
+    isPrimaryMiniAppInstance,
+    activeSection,
+    holdResultViewModel.isSuccess,
+    resultBookingRequestId,
+    ticketDetailState.selectedBookingRequestId,
+    telegramUserId,
+  ]);
 
   function resetToCatalog() {
     setActiveSection('catalog');
@@ -2003,22 +2997,14 @@ export default function TelegramMiniApp() {
     }
   }
 
-  function resetTicketDetail() {
-    setTicketDetailState({
-      loading: false,
-      error: null,
-      selectedBookingRequestId: null,
-      ticketView: null,
-      offlineSnapshot: null,
-      fallbackUsed: false,
-      ticketViewErrorMessage: null,
-    });
-  }
-
   async function openTripCard(catalogItem) {
     const reference = catalogItem?.trip_slot_reference || null;
     if (!reference?.slot_uid) {
       setTripCardError('Выбранный рейс не содержит корректной ссылки на слот.');
+      return;
+    }
+    if (!isBuyerCatalogItemUpcoming(catalogItem, Date.now())) {
+      setTripCardError('Этот рейс уже отправился. Выберите другой рейс.');
       return;
     }
     setTripCardError(null);
@@ -2089,6 +3075,10 @@ export default function TelegramMiniApp() {
   }
 
   async function openEntrypoint(entrypointKey) {
+    if (!isPrimaryMiniAppInstance) {
+      return;
+    }
+
     if (entrypointKey === 'catalog') {
       resetToCatalog();
       return;
@@ -2097,7 +3087,6 @@ export default function TelegramMiniApp() {
       const normalizedTelegramUserId = normalizeString(telegramUserId);
       const hasRuntimeInitData = Boolean(readTelegramMiniAppInitDataRaw());
       setActiveSection('my_tickets');
-      resetTicketDetail();
       if (!normalizedTelegramUserId && !hasRuntimeInitData) {
         setTicketsState({
           loading: false,
@@ -2134,7 +3123,7 @@ export default function TelegramMiniApp() {
       } catch (error) {
         setTicketsState({
           loading: false,
-          error: error?.message || 'Не удалось загрузить список заявок и билетов.',
+          error: resolveMiniAppFriendlyLoadErrorMessage(error, MINI_APP_GENERIC_LOAD_ERROR),
           items: [],
         });
       }
@@ -2151,7 +3140,7 @@ export default function TelegramMiniApp() {
       setUsefulContentState({
         loading: true,
         error: null,
-        content: null,
+        content: usefulContentState.content || USEFUL_CONTENT_FALLBACK,
       });
       try {
         const content = await fetchMiniAppUsefulContentScreen({
@@ -2166,7 +3155,7 @@ export default function TelegramMiniApp() {
       } catch (error) {
         setUsefulContentState({
           loading: false,
-          error: error?.message || 'Не удалось загрузить полезную информацию.',
+          error: resolveMiniAppFriendlyLoadErrorMessage(error, MINI_APP_GENERIC_LOAD_ERROR),
           content: USEFUL_CONTENT_FALLBACK,
         });
       }
@@ -2192,7 +3181,7 @@ export default function TelegramMiniApp() {
       } catch (error) {
         setFaqState({
           loading: false,
-          error: error?.message || 'Не удалось загрузить раздел с вопросами.',
+          error: resolveMiniAppFriendlyLoadErrorMessage(error, MINI_APP_GENERIC_LOAD_ERROR),
           content: FAQ_FALLBACK,
         });
       }
@@ -2224,7 +3213,7 @@ export default function TelegramMiniApp() {
       } catch (error) {
         setContactState({
           loading: false,
-          error: error?.message || 'Не удалось загрузить контакты.',
+          error: resolveMiniAppFriendlyLoadErrorMessage(error, MINI_APP_GENERIC_LOAD_ERROR),
           content: CONTACT_FALLBACK,
         });
       }
@@ -2245,6 +3234,9 @@ export default function TelegramMiniApp() {
   // This effect intentionally boots deep-link my-tickets once when guest identity becomes available.
   /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
+    if (!isPrimaryMiniAppInstance) {
+      return;
+    }
     if (initialMiniAppSection !== 'my_tickets' || deepLinkMyTicketsOpened) {
       return;
     }
@@ -2257,11 +3249,86 @@ export default function TelegramMiniApp() {
     setDeepLinkMyTicketsOpened(true);
     openEntrypoint('my_tickets');
   }, [
+    isPrimaryMiniAppInstance,
     deepLinkMyTicketsOpened,
     initialMiniAppSection,
     telegramUserId,
   ]);
   /* eslint-enable react-hooks/exhaustive-deps */
+
+  useEffect(() => {
+    if (!isPrimaryMiniAppInstance) {
+      return undefined;
+    }
+    if (!initialCanonicalPresaleId || deepLinkTicketViewOpenedRef.current) {
+      return undefined;
+    }
+    const hasRuntimeIdentity = Boolean(
+      normalizeString(telegramUserId) || readTelegramMiniAppInitDataRaw()
+    );
+    if (!hasRuntimeIdentity) {
+      return undefined;
+    }
+
+    let disposed = false;
+    deepLinkTicketViewOpenedRef.current = true;
+    setActiveSection('ticket_view');
+    setTicketDetailState({
+      loading: true,
+      error: null,
+      selectedBookingRequestId: null,
+      ticketView: null,
+      offlineSnapshot: null,
+      fallbackUsed: false,
+      ticketViewErrorMessage: null,
+    });
+
+    fetchMiniAppTicketViewByCanonicalPresale({
+      telegramUserId,
+      canonicalPresaleId: initialCanonicalPresaleId,
+      buyerTicketCode: initialBuyerTicketCode,
+      sourceToken: initialSourceToken,
+    })
+      .then((ticketView) => {
+        if (disposed) {
+          return;
+        }
+        const bookingRequestId = readBookingRequestId(ticketView?.booking_request_reference);
+        setTicketDetailState({
+          loading: false,
+          error: null,
+          selectedBookingRequestId: bookingRequestId,
+          ticketView,
+          offlineSnapshot: null,
+          fallbackUsed: false,
+          ticketViewErrorMessage: null,
+        });
+      })
+      .catch((error) => {
+        if (disposed) {
+          return;
+        }
+        setTicketDetailState({
+          loading: false,
+          error: resolveMiniAppFriendlyLoadErrorMessage(error, MINI_APP_GENERIC_LOAD_ERROR),
+          selectedBookingRequestId: null,
+          ticketView: null,
+          offlineSnapshot: null,
+          fallbackUsed: false,
+          ticketViewErrorMessage: null,
+        });
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [
+    isPrimaryMiniAppInstance,
+    initialBuyerTicketCode,
+    initialCanonicalPresaleId,
+    initialSourceToken,
+    telegramUserId,
+  ]);
 
   async function openTicketView(ticketItem) {
     const bookingRequestId = Number(ticketItem?.booking_request_reference?.booking_request_id);
@@ -2279,23 +3346,44 @@ export default function TelegramMiniApp() {
       return;
     }
 
+    const requestSeq = ticketDetailRequestSeqRef.current + 1;
+    ticketDetailRequestSeqRef.current = requestSeq;
     setActiveSection('ticket_view');
-    setTicketDetailState({
-      loading: true,
-      error: null,
-      selectedBookingRequestId: bookingRequestId,
-      ticketView: null,
-      offlineSnapshot: null,
-      fallbackUsed: false,
-      ticketViewErrorMessage: null,
+    const listProjection =
+      buildMiniAppTicketDetailSeedState({
+        ticketItem,
+        bookingRequestId,
+      })?.ticketView || findMiniAppTicketItemByBookingRequestId(ticketsState.items, bookingRequestId);
+    const seededState = buildMiniAppTicketDetailSeedState({
+      ticketItem: listProjection,
+      bookingRequestId,
     });
+    if (seededState) {
+      setTicketDetailState(seededState);
+    } else {
+      setTicketDetailState({
+        loading: true,
+        error: null,
+        selectedBookingRequestId: bookingRequestId,
+        ticketView: null,
+        offlineSnapshot: null,
+        fallbackUsed: false,
+        ticketViewErrorMessage: null,
+      });
+    }
 
     try {
       if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        if (seededState) {
+          return;
+        }
         const offlineSnapshot = await fetchMiniAppOfflineTicketSnapshot({
           telegramUserId,
           bookingRequestId,
         });
+        if (requestSeq !== ticketDetailRequestSeqRef.current) {
+          return;
+        }
         setTicketDetailState({
           loading: false,
           error: null,
@@ -2312,58 +3400,61 @@ export default function TelegramMiniApp() {
         telegramUserId,
         bookingRequestId,
       });
-      setTicketDetailState({
-        loading: false,
-        error: null,
-        selectedBookingRequestId: bookingRequestId,
-        ticketView: result.ticketView,
-        offlineSnapshot: result.offlineSnapshot,
-        fallbackUsed: result.fallbackUsed,
-        ticketViewErrorMessage: result.ticketViewErrorMessage,
+      if (requestSeq !== ticketDetailRequestSeqRef.current) {
+        return;
+      }
+      setTicketDetailState((prev) => {
+        if (Number(prev?.selectedBookingRequestId) !== bookingRequestId) {
+          return prev;
+        }
+        return {
+          loading: false,
+          error: null,
+          selectedBookingRequestId: bookingRequestId,
+          ticketView: result.ticketView || prev.ticketView || null,
+          offlineSnapshot: result.offlineSnapshot || prev.offlineSnapshot || null,
+          fallbackUsed: result.fallbackUsed || Boolean(prev.fallbackUsed),
+          ticketViewErrorMessage: result.ticketViewErrorMessage || null,
+        };
       });
     } catch (error) {
-      setTicketDetailState({
-        loading: false,
-        error: error?.message || 'Не удалось загрузить детали билета.',
-        selectedBookingRequestId: bookingRequestId,
-        ticketView: null,
-        offlineSnapshot: null,
-        fallbackUsed: false,
-        ticketViewErrorMessage: null,
+      if (requestSeq !== ticketDetailRequestSeqRef.current) {
+        return;
+      }
+      const friendlyMessage = resolveMiniAppFriendlyLoadErrorMessage(
+        error,
+        MINI_APP_GENERIC_LOAD_ERROR
+      );
+      setTicketDetailState((prev) => {
+        if (Number(prev?.selectedBookingRequestId) !== bookingRequestId) {
+          return prev;
+        }
+        const hasAnyProjection = Boolean(prev?.ticketView || prev?.offlineSnapshot);
+        return {
+          loading: false,
+          error: hasAnyProjection ? null : friendlyMessage,
+          selectedBookingRequestId: bookingRequestId,
+          ticketView: prev?.ticketView || null,
+          offlineSnapshot: prev?.offlineSnapshot || null,
+          fallbackUsed: Boolean(prev?.fallbackUsed),
+          ticketViewErrorMessage: friendlyMessage,
+        };
       });
     }
   }
 
-  async function loadOfflineSnapshotForSelectedTicket() {
+  function retryCurrentTicketDetailLoad() {
     const bookingRequestId = Number(ticketDetailState.selectedBookingRequestId);
     if (!Number.isInteger(bookingRequestId) || bookingRequestId <= 0) {
       return;
     }
-
-    setTicketDetailState((prev) => ({
-      ...prev,
-      loading: true,
-      error: null,
-    }));
-    try {
-      const offlineSnapshot = await fetchMiniAppOfflineTicketSnapshot({
-        telegramUserId,
-        bookingRequestId,
-      });
-      setTicketDetailState((prev) => ({
-        ...prev,
-        loading: false,
-        error: null,
-        offlineSnapshot,
-        fallbackUsed: true,
-      }));
-    } catch (error) {
-      setTicketDetailState((prev) => ({
-        ...prev,
-        loading: false,
-        error: error?.message || 'Не удалось загрузить офлайн-снимок билета.',
-      }));
-    }
+    const ticketItem =
+      findMiniAppTicketItemByBookingRequestId(ticketsState.items, bookingRequestId) || {
+        booking_request_reference: {
+          booking_request_id: bookingRequestId,
+        },
+      };
+    openTicketView(ticketItem);
   }
 
   async function submitBooking(event) {
@@ -2379,6 +3470,10 @@ export default function TelegramMiniApp() {
     }
     if (!bookingRequiredCustomerName || !bookingRequiredContactPhone) {
       setBookingFormError('Заполните имя и контактный телефон.');
+      return;
+    }
+    if (!selectedTripIsUpcoming) {
+      setBookingFormError('Этот рейс уже отправился. Выберите другой рейс в каталоге.');
       return;
     }
     if (bookingTicketSelection.totalSeats <= 0) {
@@ -2421,6 +3516,52 @@ export default function TelegramMiniApp() {
   }
 
   markMiniAppBootstrapCheckpointOnce('TelegramMiniApp first return JSX reached');
+
+  if (miniAppInstanceMode === 'pending') {
+    return (
+      <div className="tg-mini-app">
+        <div className="tg-mini-app__shell">
+          <section className="tg-mini-app__panel tg-mini-app__panel--hero-subtle">
+            <MiniAppSectionHeader
+              eyebrow="Mini App"
+              title="Подключаем приложение"
+              description="Проверяем активное окно Mini App..."
+            />
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isPrimaryMiniAppInstance) {
+    return (
+      <div className="tg-mini-app">
+        <div className="tg-mini-app__shell">
+          <section className="tg-mini-app__panel tg-mini-app__panel--hero-subtle">
+            <MiniAppSectionHeader
+              eyebrow="Mini App"
+              title="Приложение уже открыто"
+              description="У вас уже открыто другое окно Mini App. Вернитесь в него или продолжите здесь."
+            />
+            <div className="tg-mini-app__button-stack">
+              <button
+                type="button"
+                className="tg-mini-app__button tg-mini-app__button--primary"
+                onClick={handleMiniAppTakeover}
+              >
+                Продолжить здесь
+              </button>
+            </div>
+            {miniAppActiveInstanceId && (
+              <p className="tg-mini-app__hint">
+                Активное окно: {miniAppActiveInstanceId}
+              </p>
+            )}
+          </section>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="tg-mini-app">
@@ -2894,7 +4035,7 @@ export default function TelegramMiniApp() {
                 />
               </label>
               <label className="tg-mini-app__field tg-mini-app__field-card">
-                <span>РРјСЏ</span>
+                <span>Имя</span>
                 <input
                   className="tg-mini-app__input"
                   value={bookingForm.customerName}
@@ -2955,7 +4096,7 @@ export default function TelegramMiniApp() {
                 className="tg-mini-app__metric-card tg-mini-app__metric-card--featured tg-mini-app__booking-total-card"
                 data-testid="telegram-mini-app-booking-total-card"
               >
-                <div className="tg-mini-app__metric-label">РС‚РѕРіРѕ</div>
+                <div className="tg-mini-app__metric-label">Итого</div>
                 <div
                   className="tg-mini-app__booking-total-price"
                   data-testid="telegram-mini-app-booking-total-price"
@@ -3009,10 +4150,14 @@ export default function TelegramMiniApp() {
             data-testid="telegram-mini-app-submit-result"
           >
             <MiniAppSectionHeader
-              title={holdResultViewModel.headline}
-              description={holdResultViewModel.primaryText}
+              title={resultHeaderTitle}
+              description={resultHeaderDescription}
               aside={
-                holdResultViewModel.isSuccess ? null : (
+                holdResultViewModel.isSuccess && !resultPendingPrepaymentFlow ? (
+                  <MiniAppPill tone={resultPresentation.statusTone}>
+                    {resultPresentation.statusLabel}
+                  </MiniAppPill>
+                ) : holdResultViewModel.isSuccess ? null : (
                   <MiniAppPill tone="warning">
                     {holdResultViewModel.statusLabel}
                   </MiniAppPill>
@@ -3022,7 +4167,7 @@ export default function TelegramMiniApp() {
             {holdResultViewModel.secondaryText && (
               <p className="tg-mini-app__note">{holdResultViewModel.secondaryText}</p>
             )}
-            {holdResultViewModel.isSuccess && (
+            {resultShowsPendingFlow && (
               <>
                 <div className="tg-mini-app__subpanel tg-mini-app__subpanel--buyer-flow">
                   <div className="tg-mini-app__buyer-flow-head tg-mini-app__buyer-flow-head--with-timer">
@@ -3037,9 +4182,7 @@ export default function TelegramMiniApp() {
                       data-testid="telegram-mini-app-post-request-timer"
                     >
                       <MiniAppInfoCard
-                        label={
-                          '\u041E\u0441\u0442\u0430\u043B\u043E\u0441\u044C \u0432\u0440\u0435\u043C\u0435\u043D\u0438'
-                        }
+                        label={'Осталось времени'}
                         value={resultCountdownSummary.valueLabel}
                         tone={resultCountdownSummary.tone}
                         className="tg-mini-app__buyer-flow-timer-card tg-mini-app__info-card--centered"
@@ -3068,18 +4211,44 @@ export default function TelegramMiniApp() {
                     </div>
                   )}
                 </div>
+                {resultInfoCards.length > 0 && (
+                  <div
+                    className="tg-mini-app__info-grid tg-mini-app__info-grid--post-request"
+                    data-testid="telegram-mini-app-post-request-lower-grid"
+                  >
+                    {resultInfoCards.map((item) => (
+                      <MiniAppInfoCard
+                        key={`${item.label}:${item.value}`}
+                        label={item.label}
+                        value={item.value}
+                        tone={item.tone}
+                        className="tg-mini-app__info-card--centered"
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+            {holdResultViewModel.isSuccess && !resultPendingPrepaymentFlow && (
+              <>
                 <div className="tg-mini-app__subpanel">
-                  <h3 className="tg-mini-app__subpanel-title">Срок брони</h3>
-                  <div className="tg-mini-app__info-grid">
-                    <MiniAppInfoCard
-                      label={
-                        holdResultViewModel.holdDeadlineLabel
-                          ? 'Бронь действует до'
-                          : 'Срок брони'
-                      }
-                      value={holdResultViewModel.holdDeadlineLabel || '15 минут'}
-                      tone={resultCountdownSummary.tone}
-                      className="tg-mini-app__info-card--centered"
+                  <h3 className="tg-mini-app__subpanel-title">{resultPresentation.statusLabel}</h3>
+                  <p className="tg-mini-app__note">{resultPresentation.nextActionLabel}</p>
+                  <div className="tg-mini-app__meta-grid">
+                    <MiniAppMetaItem
+                      label="Бронь"
+                      value={resultPresentation.holdStatusLabel}
+                      tone={resultPresentation.holdTone}
+                    />
+                    <MiniAppMetaItem
+                      label="Предоплата"
+                      value={resultPresentation.prepaymentStatusLabel}
+                      tone={resultPresentation.prepaymentTone}
+                    />
+                    <MiniAppMetaItem
+                      label="Билет"
+                      value={resultPresentation.ticketStatusLabel}
+                      tone={resultPresentation.ticketTone}
                     />
                   </div>
                 </div>
@@ -3110,9 +4279,15 @@ export default function TelegramMiniApp() {
               <button
                 type="button"
                 className="tg-mini-app__button tg-mini-app__button--secondary"
-                onClick={() => openEntrypoint('my_tickets')}
+                onClick={() => {
+                  if (resultCanOpenTicketView && resultOpenTicketTarget) {
+                    openTicketView(resultOpenTicketTarget);
+                    return;
+                  }
+                  openEntrypoint('my_tickets');
+                }}
               >
-                Открыть мои заявки
+                {resultCanOpenTicketView ? resultPresentation.actionLabel : 'Открыть мои заявки'}
               </button>
               <button
                 type="button"
@@ -3144,6 +4319,37 @@ export default function TelegramMiniApp() {
               <p className="tg-mini-app__hint">Загружаем список заявок и билетов...</p>
             )}
             {ticketsState.error && <p className="tg-mini-app__error">{ticketsState.error}</p>}
+            {showCurrentTicketContext && (
+              <div
+                className="tg-mini-app__subpanel tg-mini-app__subpanel--ticket-centered"
+                data-testid="telegram-mini-app-current-ticket-context"
+              >
+                <div className="tg-mini-app__list-card-topline">
+                  <MiniAppPill tone={ticketDetailPresentation.statusTone}>
+                    {ticketDetailPresentation.statusLabel}
+                  </MiniAppPill>
+                  {ticketDetailViewModel.buyerTicketCode && (
+                    <div className="tg-mini-app__list-card-reference">
+                      {formatBuyerTicketReferenceTopline({
+                        buyer_ticket_code: ticketDetailViewModel.buyerTicketCode,
+                      })}
+                    </div>
+                  )}
+                </div>
+                <h3 className="tg-mini-app__list-title">{ticketDetailPresentation.cardTitle}</h3>
+                <p className="tg-mini-app__list-subtitle">{currentTicketContextDateTimeLabel}</p>
+                <p className="tg-mini-app__note">{ticketDetailPresentation.description}</p>
+                <div className="tg-mini-app__panel-actions">
+                  <button
+                    type="button"
+                    className="tg-mini-app__button tg-mini-app__button--secondary"
+                    onClick={() => setActiveSection('ticket_view')}
+                  >
+                    {ticketDetailPresentation.actionLabel}
+                  </button>
+                </div>
+              </div>
+            )}
             {!ticketsState.loading && !ticketsState.error && ticketsState.items.length > 0 && (
               <ul className="tg-mini-app__list">
                 {ticketsState.items.map((item, index) => {
@@ -3167,8 +4373,10 @@ export default function TelegramMiniApp() {
                     holdActive: lifecycleItem?.hold_active,
                     requestConfirmed: lifecycleItem?.request_confirmed,
                     requestedPrepaymentAmount: lifecycleItem?.requested_prepayment_amount,
+                    holdExpiresAtIso:
+                      item?.hold_status_summary?.hold_expires_at_summary?.iso,
                   });
-                  const canOpen = Number.isInteger(Number(bookingRequestId));
+                  const canOpen = Number.isInteger(bookingRequestId) && bookingRequestId > 0;
                   const requestedTripDate =
                     item?.date_time_summary?.requested_trip_date ||
                     lifecycleItem?.requested_trip_slot_reference?.requested_trip_date ||
@@ -3194,6 +4402,9 @@ export default function TelegramMiniApp() {
                   const buyerTicketCode = resolveBuyerTicketCode(
                     item?.buyer_ticket_reference_summary
                   );
+                  const readyTicketFlow =
+                    !pendingPrepaymentFlow &&
+                    (status === 'linked_ticket_ready' || availability === 'available');
 
                   return (
                     <li
@@ -3231,6 +4442,30 @@ export default function TelegramMiniApp() {
                                 label="Пассажиры"
                                 value={formatMiniAppSeatCountLabel(requestedSeats)}
                                 className="tg-mini-app__meta-item--centered"
+                              />
+                            </div>
+                          </>
+                        ) : readyTicketFlow ? (
+                          <>
+                            <div className="tg-mini-app__list-card-header tg-mini-app__list-card-header--ready-ticket">
+                              <div>
+                                <p className="tg-mini-app__list-subtitle">{dateTimeLabel}</p>
+                                {buyerTicketCode ? (
+                                  <h3 className="tg-mini-app__list-title">
+                                    Номер билета {buyerTicketCode}
+                                  </h3>
+                                ) : null}
+                              </div>
+                              <MiniAppPill tone={presentation.statusTone}>
+                                {presentation.statusLabel}
+                              </MiniAppPill>
+                            </div>
+                            <div className="tg-mini-app__meta-grid tg-mini-app__meta-grid--single">
+                              <MiniAppMetaItem
+                                label="Следующий шаг"
+                                value={presentation.nextActionLabel}
+                                tone={presentation.nextActionTone}
+                                className="tg-mini-app__meta-item--centered tg-mini-app__meta-item--next-step"
                               />
                             </div>
                           </>
@@ -3325,30 +4560,23 @@ export default function TelegramMiniApp() {
             data-testid="telegram-mini-app-ticket-view"
           >
             <MiniAppSectionHeader
-              eyebrow={ticketDetailPendingPrepaymentFlow ? null : ticketDetailPresentation.entityLabel}
-              title={
-                ticketDetailPendingPrepaymentFlow
-                  ? ticketDetailPresentation.statusLabel
-                  : ticketDetailPresentation.detailTitle
-              }
-              description={
-                ticketDetailPendingPrepaymentFlow
-                  ? null
-                  : ticketDetailPresentation.detailDescription
-              }
-              aside={
-                ticketDetailPendingPrepaymentFlow ? null : (
-                  <MiniAppPill tone={ticketDetailPresentation.statusTone}>
-                    {ticketDetailPresentation.statusLabel}
-                  </MiniAppPill>
-                )
-              }
+              title={ticketDetailPendingPrepaymentFlow ? ticketDetailPresentation.statusLabel : 'Мой билет'}
+              className={ticketDetailPendingPrepaymentFlow ? '' : 'tg-mini-app__section-header--centered'}
             />
             {ticketDetailState.loading && (
               <p className="tg-mini-app__hint">Загружаем детали билета...</p>
             )}
             {!ticketDetailState.loading && ticketDetailState.error && (
-              <p className="tg-mini-app__error">{ticketDetailState.error}</p>
+              <div className="tg-mini-app__panel-actions">
+                <p className="tg-mini-app__error">{ticketDetailState.error}</p>
+                <button
+                  type="button"
+                  className="tg-mini-app__button tg-mini-app__button--secondary"
+                  onClick={retryCurrentTicketDetailLoad}
+                >
+                  Повторить
+                </button>
+              </div>
             )}
             {!ticketDetailState.loading &&
               !ticketDetailState.error &&
@@ -3365,12 +4593,23 @@ export default function TelegramMiniApp() {
                   {ticketDetailPendingPrepaymentFlow ? (
                     <div className="tg-mini-app__ticket-view-stack tg-mini-app__ticket-view-stack--pending">
                       <div className="tg-mini-app__subpanel tg-mini-app__subpanel--buyer-flow">
-                        <div className="tg-mini-app__buyer-flow-head">
+                        <div className="tg-mini-app__buyer-flow-head tg-mini-app__buyer-flow-head--with-timer">
                           <div>
                             <p className="tg-mini-app__section-eyebrow">Что делать сейчас</p>
                             <h3 className="tg-mini-app__subpanel-title">
                               {BUYER_PENDING_FLOW_TITLE}
                             </h3>
+                          </div>
+                          <div
+                            className="tg-mini-app__buyer-flow-timer"
+                            data-testid="telegram-mini-app-ticket-view-timer"
+                          >
+                            <MiniAppInfoCard
+                              label="Осталось времени"
+                              value={ticketDetailCountdownSummary.valueLabel}
+                              tone={ticketDetailCountdownSummary.tone}
+                              className="tg-mini-app__buyer-flow-timer-card tg-mini-app__info-card--centered"
+                            />
                           </div>
                         </div>
                         <MiniAppBuyerFlowSteps />
@@ -3392,25 +4631,6 @@ export default function TelegramMiniApp() {
                             )}
                           </div>
                         )}
-                      </div>
-
-                      <div className="tg-mini-app__subpanel">
-                        <h3 className="tg-mini-app__subpanel-title">Срок брони</h3>
-                        <div className="tg-mini-app__info-grid">
-                          <MiniAppInfoCard
-                            label={
-                              ticketDetailViewModel.holdExpiresAtIso
-                                ? 'Бронь действует до'
-                                : 'Срок брони'
-                            }
-                            value={
-                              formatMiniAppHoldDeadlineLabel(
-                                ticketDetailViewModel.holdExpiresAtIso
-                              ) || '15 минут'
-                            }
-                            tone={ticketDetailCountdownSummary.tone}
-                          />
-                        </div>
                       </div>
 
                       <div className="tg-mini-app__subpanel tg-mini-app__subpanel--hero">
@@ -3440,79 +4660,18 @@ export default function TelegramMiniApp() {
                     </div>
                   ) : (
                     <div className="tg-mini-app__ticket-view-stack">
-                      <div className="tg-mini-app__subpanel tg-mini-app__subpanel--hero">
-                        <div className="tg-mini-app__ticket-headline">
-                          <div>
-                            <p className="tg-mini-app__section-eyebrow">Статус заявки</p>
-                            <h3 className="tg-mini-app__section-title">
-                              {formatDateTimeLabel(
-                                ticketDetailViewModel.requestedTripDate,
-                                ticketDetailViewModel.requestedTimeSlot
-                              )}
-                            </h3>
-                            {ticketDetailViewModel.buyerTicketCode && (
-                              <p className="tg-mini-app__ticket-reference">
-                                Код билета {ticketDetailViewModel.buyerTicketCode}
-                              </p>
-                            )}
-                            <p className="tg-mini-app__note">
-                              {ticketDetailPresentation.nextActionLabel}
-                            </p>
-                          </div>
-                          <div className="tg-mini-app__hero-pills">
-                            <MiniAppPill tone={ticketDetailPresentation.holdTone}>
-                              {ticketDetailPresentation.holdStatusLabel}
-                            </MiniAppPill>
-                            <MiniAppPill tone={ticketDetailPresentation.prepaymentTone}>
-                              {ticketDetailPresentation.prepaymentStatusLabel}
-                            </MiniAppPill>
-                            <MiniAppPill tone={ticketDetailPresentation.ticketTone}>
-                              {ticketDetailPresentation.ticketStatusLabel}
-                            </MiniAppPill>
-                          </div>
-                        </div>
-                        <div className="tg-mini-app__meta-grid">
-                          {ticketDetailViewModel.buyerTicketCode && (
-                            <MiniAppMetaItem
-                              label="Код билета"
-                              value={ticketDetailViewModel.buyerTicketCode}
-                              tone="accent"
-                            />
+                      <div className="tg-mini-app__subpanel tg-mini-app__subpanel--ticket-centered tg-mini-app__subpanel--ticket-datetime">
+                        <h3 className="tg-mini-app__subpanel-title">
+                          {formatDateTimeLabel(
+                            ticketDetailViewModel.requestedTripDate,
+                            ticketDetailViewModel.requestedTimeSlot
                           )}
-                          <MiniAppMetaItem
-                            label="Пассажиры"
-                            value={formatMiniAppSeatCountLabel(ticketDetailViewModel.requestedSeats)}
-                          />
-                          <MiniAppMetaItem
-                            label="Бронь"
-                            value={ticketDetailPresentation.holdStatusLabel}
-                            tone={ticketDetailPresentation.holdTone}
-                          />
-                          <MiniAppMetaItem
-                            label="Предоплата"
-                            value={ticketDetailPresentation.prepaymentStatusLabel}
-                            tone={ticketDetailPresentation.prepaymentTone}
-                          />
-                          <MiniAppMetaItem
-                            label="Билет"
-                            value={ticketDetailPresentation.ticketStatusLabel}
-                            tone={ticketDetailPresentation.ticketTone}
-                          />
-                          <MiniAppMetaItem
-                            label="Оформлено билетов"
-                            value={ticketDetailViewModel.linkedTicketCount ?? 'н/д'}
-                          />
-                          {ticketDetailViewModel.offlineReferenceCode && (
-                            <MiniAppMetaItem
-                              label="Офлайн-код"
-                              value={ticketDetailViewModel.offlineReferenceCode}
-                              tone="accent"
-                            />
-                          )}
-                        </div>
+                        </h3>
                       </div>
                     </div>
                   )}
+
+                  {!ticketDetailPendingPrepaymentFlow && <MiniAppHowToGetThereCard />}
 
                   {ticketDetailViewModel.hasBoardingQr && (
                     <MiniAppBoardingQrCard
@@ -3522,7 +4681,7 @@ export default function TelegramMiniApp() {
                   )}
 
                   {!ticketDetailPendingPrepaymentFlow && ticketDetailViewModel.paymentSummary && (
-                    <div className="tg-mini-app__subpanel">
+                    <div className="tg-mini-app__subpanel tg-mini-app__subpanel--ticket-centered">
                       <h3 className="tg-mini-app__subpanel-title">Оплата</h3>
                       <div className="tg-mini-app__info-grid">
                         <MiniAppInfoCard
@@ -3532,6 +4691,7 @@ export default function TelegramMiniApp() {
                             ticketDetailViewModel.paymentSummary.currency
                           )}
                           tone="accent"
+                          className="tg-mini-app__info-card--centered"
                         />
                         <MiniAppInfoCard
                           label="Итого"
@@ -3539,6 +4699,7 @@ export default function TelegramMiniApp() {
                             ticketDetailViewModel.paymentSummary.total_price,
                             ticketDetailViewModel.paymentSummary.currency
                           )}
+                          className="tg-mini-app__info-card--centered"
                         />
                         <MiniAppInfoCard
                           label="Осталось"
@@ -3547,28 +4708,29 @@ export default function TelegramMiniApp() {
                             ticketDetailViewModel.paymentSummary.currency
                           )}
                           tone="warning"
+                          className="tg-mini-app__info-card--centered"
                         />
                       </div>
                     </div>
                   )}
 
-                  {!ticketDetailPendingPrepaymentFlow && ticketDetailViewModel.contactPhone && (
-                    <div className="tg-mini-app__subpanel tg-mini-app__subpanel--contact">
-                      <span className="tg-mini-app__section-eyebrow">Контакт</span>
+                  {!ticketDetailPendingPrepaymentFlow && ticketDetailSellerContact?.sellerPhone && (
+                    <div className="tg-mini-app__subpanel tg-mini-app__subpanel--contact tg-mini-app__subpanel--ticket-centered">
+                      <span className="tg-mini-app__section-eyebrow">Контакт диспетчера</span>
                       <a
                         className="tg-mini-app__link tg-mini-app__link--phone"
-                        href={ticketDetailViewModel.contactCallHref}
+                        href={`tel:${ticketDetailSellerContact.sellerPhone}`}
                       >
-                        {ticketDetailViewModel.contactPhone}
+                        {ticketDetailSellerContact.sellerPhone}
                       </a>
                     </div>
                   )}
-                  {ticketDetailViewModel.fallbackUsed && (
+                  {showMiniAppApiDiagnostics && ticketDetailViewModel.fallbackUsed && (
                     <p className="tg-mini-app__hint">
                       Для этого билета используется офлайн-снимок.
                     </p>
                   )}
-                  {ticketDetailState.ticketViewErrorMessage && (
+                  {showMiniAppApiDiagnostics && ticketDetailState.ticketViewErrorMessage && (
                     <p className="tg-mini-app__hint">
                       Причина перехода на офлайн-снимок:{' '}
                       {ticketDetailState.ticketViewErrorMessage}
@@ -3584,212 +4746,141 @@ export default function TelegramMiniApp() {
               >
                 Назад к моим заявкам
               </button>
-              {ticketDetailCanOpenSavedCopy && (
-                <button
-                  type="button"
-                  className="tg-mini-app__button tg-mini-app__button--secondary"
-                  onClick={loadOfflineSnapshotForSelectedTicket}
-                  disabled={ticketDetailState.loading}
-                >
-                  Открыть сохранённую копию
-                </button>
-              )}
             </div>
           </section>
         )}
 
         {activeSection === 'useful_content' && (
-          <section className="tg-mini-app__panel">
+          <section className="tg-mini-app__panel tg-mini-app__panel--useful">
             <MiniAppSectionHeader
-              eyebrow="Полезное"
               title={usefulContentViewModel.title}
               description={usefulContentViewModel.body}
-              aside={
-                <MiniAppPill tone="accent">
-                  Погода: {formatStateLabel(usefulContentViewModel.weatherDataState)}
-                </MiniAppPill>
-              }
             />
             {usefulContentViewModel.renderState === 'loading' && (
-              <p className="tg-mini-app__hint">Загружаем полезную информацию...</p>
+              <p className="tg-mini-app__hint">Обновляем данные по погоде и курорту...</p>
             )}
             {usefulContentViewModel.renderState === 'error' && (
-              <p className="tg-mini-app__error">
-                {usefulContentViewModel.errorMessage}
-              </p>
+              <p className="tg-mini-app__error">{usefulContentViewModel.errorMessage}</p>
             )}
-            <div className="tg-mini-app__info-grid">
-              <MiniAppInfoCard
-                label="Применимость"
-                value={formatStateLabel(usefulContentViewModel.tripApplicabilityState)}
-              />
-              <MiniAppInfoCard
-                label="Резервный режим"
-                value={usefulContentViewModel.fallbackUsed ? 'Включён' : 'Не используется'}
-                tone={usefulContentViewModel.fallbackUsed ? 'warning' : 'success'}
-              />
+
+            <div className="tg-mini-app__weather-grid">
+              <article className="tg-mini-app__weather-card tg-mini-app__weather-card--accent">
+                <p className="tg-mini-app__weather-label">Погода</p>
+                <p className="tg-mini-app__weather-value">
+                  {formatUsefulConditionLabel({
+                    conditionLabel: usefulContentViewModel.weatherConditionLabel,
+                    weatherDataState: usefulContentViewModel.weatherDataState,
+                  })}
+                </p>
+              </article>
+              <article className="tg-mini-app__weather-card">
+                <p className="tg-mini-app__weather-label">Температура воздуха</p>
+                <p className="tg-mini-app__weather-value">
+                  {formatUsefulTemperature(usefulContentViewModel.airTemperatureC)}
+                </p>
+              </article>
+              <article className="tg-mini-app__weather-card">
+                <p className="tg-mini-app__weather-label">Температура воды</p>
+                <p className="tg-mini-app__weather-value">
+                  {formatUsefulTemperature(usefulContentViewModel.waterTemperatureC)}
+                </p>
+              </article>
+              <article className="tg-mini-app__weather-card">
+                <p className="tg-mini-app__weather-label">Закат</p>
+                <p className="tg-mini-app__weather-value">
+                  {formatUsefulSunsetTime({
+                    sunsetTimeIso: usefulContentViewModel.sunsetTimeIso,
+                    sunsetTimeLocal: usefulContentViewModel.sunsetTimeLocal,
+                  })}
+                </p>
+              </article>
             </div>
-            {usefulContentViewModel.reminderStatusLine && (
-              <p className="tg-mini-app__hint">
-                {usefulContentViewModel.reminderStatusLine}
-              </p>
-            )}
-            {usefulContentViewModel.recommendationLines.length > 0 && (
-              <ul className="tg-mini-app__detail-list">
-                {usefulContentViewModel.recommendationLines.map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
-            )}
-            {usefulContentViewModel.hasUsefulItems && (
-              <ul className="tg-mini-app__list">
-                {usefulContentViewModel.feedItems.map((item) => (
-                  <li
-                    key={item.contentReference}
-                    className="tg-mini-app__list-card tg-mini-app__list-card--compact"
-                  >
-                    <div className="tg-mini-app__list-card-main">
-                      <div className="tg-mini-app__list-card-header">
-                        <div>
-                          <h3 className="tg-mini-app__list-title">{item.title}</h3>
-                          <p className="tg-mini-app__list-subtitle">{item.shortText}</p>
-                        </div>
-                        <MiniAppPill tone="neutral">
-                          {formatStateLabel(item.contentGrouping)}
-                        </MiniAppPill>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {!usefulContentViewModel.hasUsefulItems && (
-              <MiniAppEmptyState
-                title="Полезной информации пока нет"
-                description="Сейчас для этого контекста покупателя нет доступных полезных материалов."
-              />
-            )}
+
+            <p className="tg-mini-app__hint tg-mini-app__hint--useful-location">
+              {usefulContentViewModel.locationSummary.country}, {usefulContentViewModel.locationSummary.region},{' '}
+              {usefulContentViewModel.locationSummary.locality} · {usefulContentViewModel.locationSummary.waterBody}
+            </p>
+
+            <ul className="tg-mini-app__useful-cards">
+              {usefulContentViewModel.resortCards.map((item) => (
+                <li key={item.contentReference} className="tg-mini-app__useful-card">
+                  <h3 className="tg-mini-app__list-title">{item.title}</h3>
+                  <p className="tg-mini-app__list-subtitle">{item.shortText}</p>
+                </li>
+              ))}
+            </ul>
           </section>
         )}
 
         {activeSection === 'faq' && (
-          <section className="tg-mini-app__panel">
+          <section className="tg-mini-app__panel tg-mini-app__panel--faq">
             <MiniAppSectionHeader
-              eyebrow="Вопросы"
               title={faqViewModel.title}
               description={faqViewModel.body}
-              aside={
-                <MiniAppPill tone="neutral">
-                  {faqViewModel.questionCount} вопросов
-                </MiniAppPill>
-              }
             />
             {faqViewModel.renderState === 'loading' && (
               <p className="tg-mini-app__hint">Загружаем вопросы...</p>
             )}
-            {faqViewModel.renderState === 'error' && (
-              <p className="tg-mini-app__error">{faqViewModel.errorMessage}</p>
-            )}
             {faqViewModel.hasFaqItems && (
-              <ul className="tg-mini-app__list">
+              <ul className="tg-mini-app__faq-list">
                 {faqViewModel.faqItems.map((item) => (
-                  <li
-                    key={item.faqReference}
-                    className="tg-mini-app__list-card tg-mini-app__list-card--compact"
-                  >
-                    <div className="tg-mini-app__list-card-main">
-                      <div className="tg-mini-app__list-card-header">
-                        <div>
-                          <h3 className="tg-mini-app__list-title">{item.title}</h3>
-                          <p className="tg-mini-app__list-subtitle">{item.shortText}</p>
-                        </div>
-                        <MiniAppPill tone="neutral">
-                          {formatStateLabel(item.contentGrouping)}
-                        </MiniAppPill>
-                      </div>
-                    </div>
+                  <li key={item.faqReference}>
+                    <details className="tg-mini-app__faq-item">
+                      <summary className="tg-mini-app__faq-summary">
+                        <h3 className="tg-mini-app__faq-question">{item.title}</h3>
+                        <span className="tg-mini-app__faq-toggle" aria-hidden="true">
+                          +
+                        </span>
+                      </summary>
+                      <p className="tg-mini-app__faq-answer">{item.shortText}</p>
+                    </details>
                   </li>
                 ))}
               </ul>
             )}
-            {!faqViewModel.hasFaqItems && (
+            {!faqViewModel.hasFaqItems && faqViewModel.renderState !== 'loading' && (
               <MiniAppEmptyState
-                title="Раздел с вопросами пока пуст"
-                description="Сейчас для этого контекста покупателя нет доступных материалов с вопросами и ответами."
+                title="Скоро добавим ответы"
+                description="Раздел временно обновляется. Попробуйте открыть его чуть позже."
               />
-            )}
-            {faqViewModel.fallbackUsed && (
-              <p className="tg-mini-app__hint">РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ резервный раздел с вопросами.</p>
             )}
           </section>
         )}
 
         {activeSection === 'contact' && (
-          <section className="tg-mini-app__panel">
+          <section className="tg-mini-app__panel tg-mini-app__panel--contact">
             <MiniAppSectionHeader
+              className="tg-mini-app__section-header--centered"
               eyebrow="Связь"
-              title={contactViewModel.title}
-              description={contactViewModel.body}
-              aside={
-                <MiniAppPill tone="accent">
-                  {formatStateLabel(contactViewModel.applicabilityState)}
-                </MiniAppPill>
-              }
+              title="Контакты и маршрут"
+              description="Куда идти, где построить маршрут и как связаться с диспетчером."
             />
             {contactViewModel.renderState === 'loading' && (
               <p className="tg-mini-app__hint">Загружаем контакты...</p>
             )}
             {contactViewModel.renderState === 'error' && (
-              <p className="tg-mini-app__error">{contactViewModel.errorMessage}</p>
+              <p className="tg-mini-app__error">{MINI_APP_GENERIC_LOAD_ERROR}</p>
             )}
-            {contactViewModel.contactPhone ? (
-              <p className="tg-mini-app__note">
-                Телефон для связи:{' '}
-                <a className="tg-mini-app__link" href={contactViewModel.contactCallHref}>
-                  {contactViewModel.contactPhone}
+            <MiniAppHowToGetThereCard
+              collapsible={false}
+              testId="telegram-mini-app-contact-how-to-get"
+            />
+            {contactDispatcherPhone ? (
+              <div className="tg-mini-app__subpanel tg-mini-app__subpanel--contact tg-mini-app__subpanel--ticket-centered">
+                <span className="tg-mini-app__section-eyebrow">Телефон диспетчера</span>
+                <a className="tg-mini-app__link tg-mini-app__link--phone" href={contactDispatcherCallHref}>
+                  {contactDispatcherPhone}
                 </a>
-              </p>
+              </div>
             ) : (
-              <p className="tg-mini-app__hint">
-                Для текущего контекста нет доступного контактного телефона.
-              </p>
-            )}
-            {contactViewModel.hasSupportItems && (
-              <ul className="tg-mini-app__list">
-                {contactViewModel.supportItems.map((item) => (
-                  <li
-                    key={item.contentReference}
-                    className="tg-mini-app__list-card tg-mini-app__list-card--compact"
-                  >
-                    <div className="tg-mini-app__list-card-main">
-                      <div className="tg-mini-app__list-card-header">
-                        <div>
-                          <h3 className="tg-mini-app__list-title">{item.title}</h3>
-                          <p className="tg-mini-app__list-subtitle">{item.shortText}</p>
-                        </div>
-                        <MiniAppPill tone="neutral">
-                          {formatStateLabel(item.contentGrouping)}
-                        </MiniAppPill>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {!contactViewModel.hasSupportItems && (
-              <MiniAppEmptyState
-                title="Подсказок поддержки пока нет"
-                description="Сейчас для этого контекста покупателя нет доступных подсказок поддержки."
-              />
-            )}
-            {contactViewModel.fallbackUsed && (
-              <p className="tg-mini-app__hint">
-                РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ резервный контактный контент.
-              </p>
+              <div className="tg-mini-app__subpanel tg-mini-app__subpanel--ticket-centered">
+                <p className="tg-mini-app__note">
+                  Телефон диспетчера появится после подтверждения заявки.
+                </p>
+              </div>
             )}
           </section>
         )}
-
         {activeSection !== 'catalog' &&
           activeSection !== 'my_tickets' &&
           activeSection !== 'useful_content' &&

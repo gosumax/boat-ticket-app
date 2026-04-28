@@ -41,6 +41,39 @@ describe('telegram mini app booking-submit orchestration service', () => {
     };
   }
 
+  function ensureSellerRoutingForUser({
+    telegramUserId,
+    updateId,
+    messageId,
+    firstName = 'Mini',
+    lastName = 'Guest',
+    username = `mini_guest_${telegramUserId}`,
+  }) {
+    context.services.inboundStartOrchestrationService.orchestrateInboundStartUpdate({
+      update_id: updateId,
+      message: {
+        message_id: messageId,
+        date: 1775815200,
+        text: '/start seller-qr-token-a',
+        from: {
+          id: Number(telegramUserId),
+          is_bot: false,
+          first_name: firstName,
+          last_name: lastName,
+          username,
+          language_code: 'ru',
+        },
+        chat: {
+          id: Number(telegramUserId),
+          type: 'private',
+          first_name: firstName,
+          last_name: lastName,
+          username,
+        },
+      },
+    });
+  }
+
   it('submits one booking request with an initial hold and replays idempotently', () => {
     const first =
       context.services.miniAppBookingSubmitOrchestrationService.submitMiniAppBookingRequest(
@@ -103,6 +136,112 @@ describe('telegram mini app booking-submit orchestration service', () => {
     expect(countRows(db, 'telegram_booking_requests')).toBe(1);
     expect(countRows(db, 'telegram_booking_holds')).toBe(1);
     expect(countRows(db, 'telegram_booking_request_events')).toBe(2);
+  });
+
+  it('applies live hold to slot availability, blocks overbooking, and restores seats on hold expiry', () => {
+    ensureSellerRoutingForUser({
+      telegramUserId: '888000222',
+      updateId: 5001,
+      messageId: 9001,
+      firstName: 'Second',
+      lastName: 'Guest',
+    });
+
+    const seatsBefore = db
+      .prepare('SELECT seats_left FROM generated_slots WHERE id = 41')
+      .get();
+    expect(seatsBefore?.seats_left).toBe(12);
+
+    const firstSubmit =
+      context.services.miniAppBookingSubmitOrchestrationService.submitMiniAppBookingRequest(
+        buildSubmitInput({
+          selected_trip_slot_reference: {
+            reference_type: 'telegram_requested_trip_slot_reference',
+            requested_trip_date: MINI_APP_FUTURE_DATE,
+            requested_time_slot: '10:00',
+            slot_uid: 'generated:41',
+          },
+          requested_seats: 9,
+          requested_ticket_mix: {
+            adult: 9,
+          },
+          idempotency_key: 'mini-submit-live-hold-first',
+        })
+      );
+    expect(firstSubmit.submit_status).toBe('submitted_with_hold');
+
+    const seatsAfterFirstSubmit = db
+      .prepare('SELECT seats_left FROM generated_slots WHERE id = 41')
+      .get();
+    expect(seatsAfterFirstSubmit?.seats_left).toBe(3);
+
+    const secondSubmitBlocked =
+      context.services.miniAppBookingSubmitOrchestrationService.submitMiniAppBookingRequest({
+        telegram_guest: {
+          telegram_user_id: '888000222',
+        },
+        selected_trip_slot_reference: {
+          reference_type: 'telegram_requested_trip_slot_reference',
+          requested_trip_date: MINI_APP_FUTURE_DATE,
+          requested_time_slot: '10:00',
+          slot_uid: 'generated:41',
+        },
+        requested_seats: 4,
+        requested_ticket_mix: {
+          adult: 4,
+        },
+        requested_prepayment_amount: 1000,
+        customer_name: 'Second Guest',
+        contact_phone: '+79992223344',
+        idempotency_key: 'mini-submit-live-hold-second-blocked',
+      });
+    expect(secondSubmitBlocked.submit_status).toBe('submit_blocked');
+    expect(secondSubmitBlocked.submit_reason_code).toBe('not_enough_seats');
+
+    const holdStartedEvent = context.repositories.bookingRequestEvents.findOneBy(
+      {
+        booking_request_id: 1,
+        event_type: 'HOLD_STARTED',
+      },
+      { orderBy: 'booking_request_event_id DESC' }
+    );
+    const expiryResult = context.services.bookingRequestHoldExpiryService.expireHold({
+      active_hold_state: holdStartedEvent?.event_payload?.hold_activation_result,
+    });
+    expect(expiryResult.hold_status).toBe('EXPIRED');
+    expect(expiryResult.live_seat_release_summary?.release_applied).toBe(true);
+
+    const seatsAfterExpiry = db
+      .prepare('SELECT seats_left FROM generated_slots WHERE id = 41')
+      .get();
+    expect(seatsAfterExpiry?.seats_left).toBe(12);
+
+    const secondSubmitAfterExpiry =
+      context.services.miniAppBookingSubmitOrchestrationService.submitMiniAppBookingRequest({
+        telegram_guest: {
+          telegram_user_id: '888000222',
+        },
+        selected_trip_slot_reference: {
+          reference_type: 'telegram_requested_trip_slot_reference',
+          requested_trip_date: MINI_APP_FUTURE_DATE,
+          requested_time_slot: '10:00',
+          slot_uid: 'generated:41',
+        },
+        requested_seats: 4,
+        requested_ticket_mix: {
+          adult: 4,
+        },
+        requested_prepayment_amount: 1000,
+        customer_name: 'Second Guest',
+        contact_phone: '+79992223344',
+        idempotency_key: 'mini-submit-live-hold-second-success',
+      });
+    expect(secondSubmitAfterExpiry.submit_status).toBe('submitted_with_hold');
+
+    const seatsAfterSecondSuccess = db
+      .prepare('SELECT seats_left FROM generated_slots WHERE id = 41')
+      .get();
+    expect(seatsAfterSecondSuccess?.seats_left).toBe(8);
   });
 
   it('prefers managed seller public profile over source metadata in submit result', () => {
@@ -244,6 +383,38 @@ describe('telegram mini app booking-submit orchestration service', () => {
     expect(overCapacitySubmit.submit_reason_code).toBe('not_enough_seats');
     expect(countRows(db, 'telegram_booking_requests')).toBe(1);
     expect(countRows(db, 'telegram_booking_holds')).toBe(1);
+  });
+
+  it('rejects direct booking submit for a same-day trip that already departed', () => {
+    context.services.miniAppTripCardQueryService.now = () =>
+      new Date('2036-04-11T12:03:00.000Z');
+    db.prepare(
+      `
+        INSERT INTO generated_slots (
+          id, schedule_template_id, trip_date, boat_id, time, capacity, seats_left,
+          duration_minutes, is_active, price_adult, price_child, price_teen
+        )
+        VALUES (45, 1, ?, 1, '15:00', 12, 12, 60, 1, 1500, 1000, 1200)
+      `
+    ).run(MINI_APP_FUTURE_DATE);
+
+    const result =
+      context.services.miniAppBookingSubmitOrchestrationService.submitMiniAppBookingRequest(
+        buildSubmitInput({
+          idempotency_key: 'mini-submit-past-trip',
+          selected_trip_slot_reference: {
+            reference_type: 'telegram_requested_trip_slot_reference',
+            requested_trip_date: MINI_APP_FUTURE_DATE,
+            requested_time_slot: '15:00',
+            slot_uid: 'generated:45',
+          },
+        })
+      );
+
+    expect(result.submit_status).toBe('submit_blocked');
+    expect(result.submit_reason_code).toBe('invalid_trip_slot_reference');
+    expect(countRows(db, 'telegram_booking_requests')).toBe(0);
+    expect(countRows(db, 'telegram_booking_holds')).toBe(0);
   });
 
   it('returns submit_blocked for no routing state, duplicate active request, and deterministic idempotency conflicts', () => {

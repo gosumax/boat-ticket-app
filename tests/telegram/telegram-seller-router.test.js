@@ -148,15 +148,17 @@ describe('telegram seller router', () => {
         'call_started',
         'not_reached',
         'prepayment_confirmed',
+        'cancel_request',
       ]),
     });
   });
 
-  it('wires call_started, hold_extend, prepayment_confirmed, and not_reached actions', async () => {
+  it('wires call_started, hold_extend, prepayment_confirmed, not_reached note, and cancel_request actions', async () => {
     const callStarted = seedSellerRequest(context, { suffix: '2001' });
     const holdExtend = seedSellerRequest(context, { suffix: '2002' });
     const prepayment = seedSellerRequest(context, { suffix: '2003' });
     const notReached = seedSellerRequest(context, { suffix: '2004' });
+    const cancelled = seedSellerRequest(context, { suffix: '2005' });
 
     const callStartedResponse = await request(app)
       .post(`/api/telegram/seller/work-queue/${callStarted.bookingRequestId}/actions`)
@@ -202,11 +204,15 @@ describe('telegram seller router', () => {
       .send({
         action_type: 'prepayment_confirmed',
         idempotency_key: 'seller-router-prepayment',
+        action_payload: {
+          accepted_prepayment_amount: 1700,
+        },
       });
     expect(prepaymentResponse.status).toBe(200);
     expect(prepaymentResponse.body.operation_result_summary.queue_item.booking_request.request_status).toBe(
       'PREPAYMENT_CONFIRMED'
     );
+    expect(prepaymentResponse.body.operation_result_summary.event.event_payload.accepted_prepayment_amount).toBe(1700);
 
     const notReachedResponse = await request(app)
       .post(`/api/telegram/seller/work-queue/${notReached.bookingRequestId}/actions`)
@@ -216,7 +222,21 @@ describe('telegram seller router', () => {
       });
     expect(notReachedResponse.status).toBe(200);
     expect(notReachedResponse.body.operation_result_summary.queue_item.booking_request.request_status).toBe(
-      'SELLER_NOT_REACHED'
+      'HOLD_ACTIVE'
+    );
+    expect(notReachedResponse.body.operation_result_summary.event.event_type).toBe(
+      'SELLER_NOT_REACHED_NOTE'
+    );
+
+    const cancelResponse = await request(app)
+      .post(`/api/telegram/seller/work-queue/${cancelled.bookingRequestId}/actions`)
+      .send({
+        action_type: 'cancel_request',
+        idempotency_key: 'seller-router-cancel',
+      });
+    expect(cancelResponse.status).toBe(200);
+    expect(cancelResponse.body.operation_result_summary.queue_item.booking_request.request_status).toBe(
+      'GUEST_CANCELLED'
     );
   });
 
@@ -226,7 +246,7 @@ describe('telegram seller router', () => {
     const closeRequest = await request(app)
       .post(`/api/telegram/seller/work-queue/${unavailable.bookingRequestId}/actions`)
       .send({
-        action_type: 'not_reached',
+        action_type: 'cancel_request',
         idempotency_key: 'seller-router-close',
       });
     expect(closeRequest.status).toBe(200);

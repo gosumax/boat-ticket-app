@@ -3,6 +3,7 @@ import request from 'supertest';
 import { resetTestDb, getTestDb } from '../_helpers/dbReset.js';
 import { seedBasicData } from '../_helpers/seedBasic.js';
 import { makeApp } from '../_helpers/makeApp.js';
+import { getIsoWeekIdForBusinessDay } from '../../server/utils/iso-week.mjs';
 
 let app;
 let db;
@@ -198,8 +199,12 @@ describe('SELLER SALES DASHBOARD READ MODEL', () => {
     expect(res.body.data?.sellers).toHaveLength(res.body.data?.total_sellers);
     expect(Number(res.body.data?.current_seller?.user_id || 0)).toBe(seedData.users.sellerA.id);
     expect(res.body.data?.current_seller?.is_current_seller).toBe(true);
+    const expectedSellerIds = [seedData.users.sellerA.id];
+    if (getIsoWeekIdForBusinessDay(seedData.slots.generated.tomorrow) === res.body.data?.week_id) {
+      expectedSellerIds.push(seedData.users.sellerB.id);
+    }
     expect(res.body.data.sellers.map((row) => Number(row.user_id))).toEqual(
-      expect.arrayContaining([seedData.users.sellerA.id, seedData.users.sellerB.id])
+      expect.arrayContaining(expectedSellerIds)
     );
     expect(
       res.body.data.sellers.some((row) => Number(row.user_id) === seedData.users.sellerA.id && row.is_current_seller === true)

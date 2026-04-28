@@ -1,6 +1,7 @@
 import { freezeTelegramHandoffValue } from '../../../shared/telegram/index.js';
 import { TELEGRAM_BOOKING_REQUEST_HOLD_ACTIVATION_RESULT_VERSION } from './booking-request-hold-activation-service.js';
 import { TELEGRAM_BOOKING_REQUEST_HOLD_EXTENSION_RESULT_VERSION } from './booking-request-hold-extension-service.js';
+import { releaseLiveSeatHold } from './live-seat-hold-service.js';
 
 export const TELEGRAM_BOOKING_REQUEST_HOLD_EXPIRY_RESULT_VERSION =
   'telegram_booking_request_hold_expiry_result.v1';
@@ -82,6 +83,15 @@ function normalizeTimestampSummaryInput(value, label) {
   }
 
   return normalizeTimestampSummary(new Date(iso).toISOString());
+}
+
+function normalizePersistedTimestampSummary(iso, label) {
+  const normalizedIso = normalizeString(iso);
+  if (!normalizedIso || Number.isNaN(Date.parse(normalizedIso))) {
+    rejectExpiry(`${label} must be a valid timestamp`);
+  }
+
+  return normalizeTimestampSummary(new Date(normalizedIso).toISOString());
 }
 
 function pickHoldState(input = {}) {
@@ -201,6 +211,35 @@ function normalizeTripSlotReference(value) {
   });
 }
 
+function normalizeOptionalLiveSeatHoldSummary(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!isPlainObject(value)) {
+    rejectExpiry('live seat hold summary must be an object');
+  }
+
+  return freezeSortedExpiryValue({
+    summary_type: normalizeString(value.summary_type),
+    seat_hold_applied: value.seat_hold_applied === true,
+    slot_uid: normalizeString(value.slot_uid),
+    held_seats:
+      value.held_seats === null || value.held_seats === undefined
+        ? null
+        : normalizePositiveInteger(value.held_seats, 'live_seat_hold_summary.held_seats'),
+    release_applied: value.release_applied === true,
+    seats_left_after:
+      value.seats_left_after === null || value.seats_left_after === undefined
+        ? null
+        : Number(value.seats_left_after),
+    seats_left_after_release:
+      value.seats_left_after_release === null ||
+      value.seats_left_after_release === undefined
+        ? null
+        : Number(value.seats_left_after_release),
+  });
+}
+
 function normalizeActiveHoldStateValue(activeHoldState) {
   if (!isPlainObject(activeHoldState)) {
     rejectExpiry('active hold state is required');
@@ -270,6 +309,9 @@ function normalizeActiveHoldStateValue(activeHoldState) {
         ? 'extended_hold_expires_at_summary'
         : 'hold_expires_at_summary'
     ),
+    live_seat_hold_summary: normalizeOptionalLiveSeatHoldSummary(
+      activeHoldState.live_seat_hold_summary
+    ),
     hold_active: true,
     extension_applied: isExtensionState,
     dedupe_key: dedupeKey,
@@ -309,11 +351,12 @@ function buildHoldReference(bookingHold) {
   });
 }
 
-function buildNoOpGuards() {
+function buildNoOpGuards({ seatHoldReleased = false } = {}) {
   return freezeSortedExpiryValue({
     booking_hold_created: false,
     hold_extension_created: false,
     hold_expiry_created: true,
+    seat_hold_released: seatHoldReleased,
     guest_cancelled: false,
     prepayment_confirmed: false,
     presale_created: false,
@@ -325,7 +368,12 @@ function buildNoOpGuards() {
   });
 }
 
-function buildExpiryResult({ bookingHold, normalizedInput }) {
+function buildExpiryResult({
+  bookingHold,
+  normalizedInput,
+  holdExpiredAtSummary,
+  liveSeatReleaseSummary,
+}) {
   const activeHoldState = normalizedInput.active_hold_state;
 
   return freezeSortedExpiryValue({
@@ -336,7 +384,9 @@ function buildExpiryResult({ bookingHold, normalizedInput }) {
     hold_reference: buildHoldReference(bookingHold),
     requested_trip_slot_reference: activeHoldState.requested_trip_slot_reference,
     requested_seats: activeHoldState.requested_seats,
-    hold_expired_at_summary: activeHoldState.hold_expires_at_summary,
+    hold_expired_at_summary:
+      holdExpiredAtSummary || activeHoldState.hold_expires_at_summary,
+    live_seat_release_summary: liveSeatReleaseSummary || null,
     hold_active: false,
     hold_expired: true,
     extension_applied: activeHoldState.extension_applied,
@@ -357,13 +407,17 @@ function buildEventPayload({ normalizedInput, result }) {
     requested_trip_slot_reference: result.requested_trip_slot_reference,
     requested_seats: result.requested_seats,
     hold_expired_at_summary: result.hold_expired_at_summary,
+    live_seat_release_summary: result.live_seat_release_summary || null,
     hold_active: result.hold_active,
     hold_expired: result.hold_expired,
     extension_applied: result.extension_applied,
     dedupe_key: result.dedupe_key,
     idempotency_key: result.idempotency_key,
     expiry_signature: normalizedInput.expiry_signature,
-    no_op_guards: buildNoOpGuards(),
+    no_op_guards: buildNoOpGuards({
+      seatHoldReleased:
+        result.live_seat_release_summary?.release_applied === true,
+    }),
     hold_expiry_result: result,
   });
 }
@@ -562,17 +616,20 @@ export class TelegramBookingRequestHoldExpiryService {
     if (bookingHold.hold_status !== activeHoldState.hold_status) {
       rejectExpiry('active hold state status does not match persisted hold');
     }
-    if (bookingHold.hold_expires_at !== activeHoldState.hold_expires_at_summary.iso) {
-      rejectExpiry('active hold state expiry does not match persisted hold');
-    }
+    const persistedHoldExpiresAtSummary = normalizePersistedTimestampSummary(
+      bookingHold.hold_expires_at,
+      'persisted hold_expiry timestamp'
+    );
     if (
-      new Date(bookingHold.hold_expires_at).getTime() >
+      Date.parse(persistedHoldExpiresAtSummary.iso) >
       new Date(nowIso).getTime()
     ) {
       rejectExpiry(
         `Active hold is not expired for booking request: ${normalizedInput.booking_request_id}`
       );
     }
+
+    return persistedHoldExpiresAtSummary;
   }
 
   expireHold(input = {}) {
@@ -595,11 +652,33 @@ export class TelegramBookingRequestHoldExpiryService {
         bookingRequest,
         normalizedInput
       );
-      this.assertBookingHoldMatchesActiveHoldState(
+      const persistedHoldExpiresAtSummary = this.assertBookingHoldMatchesActiveHoldState(
         bookingHold,
         normalizedInput,
         nowIso
       );
+      const activeHoldState = normalizedInput.active_hold_state;
+      const seatHoldSummary = activeHoldState.live_seat_hold_summary || null;
+      const liveSeatReleaseSummary =
+        seatHoldSummary?.seat_hold_applied === true
+          ? releaseLiveSeatHold({
+              db: this.db,
+              requestedTripSlotReference:
+                activeHoldState.requested_trip_slot_reference,
+              requestedSeats:
+                seatHoldSummary.held_seats || activeHoldState.requested_seats,
+              errorPrefix: ERROR_PREFIX,
+              releasedAt: nowIso,
+            })
+          : freezeSortedExpiryValue({
+              summary_type: seatHoldSummary?.summary_type || null,
+              seat_hold_applied: false,
+              slot_uid:
+                activeHoldState.requested_trip_slot_reference?.slot_uid || null,
+              held_seats: 0,
+              released_seats: 0,
+              release_applied: false,
+            });
 
       const updatedHold = this.bookingHolds.updateById(
         bookingHold.booking_hold_id,
@@ -614,6 +693,8 @@ export class TelegramBookingRequestHoldExpiryService {
       const result = buildExpiryResult({
         bookingHold: updatedHold,
         normalizedInput,
+        holdExpiredAtSummary: persistedHoldExpiresAtSummary,
+        liveSeatReleaseSummary,
       });
 
       this.bookingRequestEvents.create({

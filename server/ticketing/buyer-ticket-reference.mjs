@@ -76,6 +76,41 @@ export function buildBuyerTicketCodeFromCanonicalPresaleId(canonicalPresaleId) {
   );
 }
 
+export function parseBuyerTicketCodeToCanonicalPresaleId(buyerTicketCode) {
+  const normalizedCode = String(buyerTicketCode ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '')
+    .replace(/^№/, '')
+    .replace(/-/g, '');
+
+  const match = normalizedCode.match(/^([АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЭЮЯ]+)([1-9]\d{0,1})$/);
+  if (!match) {
+    rejectBuyerTicketReference('buyerTicketCode has an unsupported format');
+  }
+
+  const [, prefixPart, numericPartRaw] = match;
+  const alphabetSize = BUYER_TICKET_CODE_ALPHABET.length;
+  let ordinalValue = 0;
+
+  for (const char of Array.from(prefixPart)) {
+    const letterIndex = BUYER_TICKET_CODE_ALPHABET.indexOf(char);
+    if (letterIndex < 0) {
+      rejectBuyerTicketReference('buyerTicketCode contains unsupported prefix characters');
+    }
+    ordinalValue = ordinalValue * alphabetSize + (letterIndex + 1);
+  }
+
+  const prefixOrdinal = ordinalValue - 1;
+  const numericPart = normalizePositiveInteger(Number(numericPartRaw), 'buyerTicketCode.numericPart');
+  if (numericPart > BUYER_TICKET_NUMERIC_SPACE) {
+    rejectBuyerTicketReference('buyerTicketCode numeric part exceeds supported range');
+  }
+
+  const sequenceNumber = prefixOrdinal * BUYER_TICKET_NUMERIC_SPACE + numericPart;
+  return normalizePositiveInteger(sequenceNumber, 'buyerTicketCode.sequenceNumber');
+}
+
 export function buildBuyerTicketReferenceSummary({
   canonicalPresaleId = null,
   canonicalTicketIds = [],

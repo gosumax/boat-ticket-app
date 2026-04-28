@@ -396,9 +396,13 @@ test.describe('Telegram Mini App buyer booking flow', () => {
     );
     await expect(postRequestCopyFeedback).toHaveText('Номер скопирован');
     await expect(page.getByRole('link', { name: 'Позвонить продавцу' })).toHaveCount(0);
-    await expect(page.getByText('Бронь действует до', { exact: false })).toBeVisible();
+    await expect(page.getByText('Срок брони', { exact: false })).toHaveCount(0);
+    await expect(page.getByText('Бронь действует до', { exact: false })).toHaveCount(0);
     const postRequestTimer = page.getByTestId('telegram-mini-app-post-request-timer');
     await expect(postRequestTimer).toHaveCount(1);
+    await expect(postRequestTimer).toContainText(
+      /\u041E\u0441\u0442\u0430\u043B\u043E\u0441\u044C \u0432\u0440\u0435\u043C\u0435\u043D\u0438/
+    );
     await expect(postRequestTimer).toContainText(/\d{2}:\d{2}/);
     const postRequestLowerGrid = page.getByTestId('telegram-mini-app-post-request-lower-grid');
     const postRequestLowerGridBox = await postRequestLowerGrid.boundingBox();
@@ -469,18 +473,13 @@ test.describe('Telegram Mini App buyer booking flow', () => {
     const pendingDetailPanels = page.locator(
       '.tg-mini-app__ticket-view-stack--pending > .tg-mini-app__subpanel'
     );
-    await expect(pendingDetailPanels).toHaveCount(3);
+    await expect(pendingDetailPanels).toHaveCount(2);
     const firstPendingPanelBox = await pendingDetailPanels.nth(0).boundingBox();
     const secondPendingPanelBox = await pendingDetailPanels.nth(1).boundingBox();
-    const thirdPendingPanelBox = await pendingDetailPanels.nth(2).boundingBox();
     expect(firstPendingPanelBox).not.toBeNull();
     expect(secondPendingPanelBox).not.toBeNull();
-    expect(thirdPendingPanelBox).not.toBeNull();
     expect(secondPendingPanelBox.y).toBeGreaterThan(
       firstPendingPanelBox.y + firstPendingPanelBox.height + 4
-    );
-    expect(thirdPendingPanelBox.y).toBeGreaterThan(
-      secondPendingPanelBox.y + secondPendingPanelBox.height + 4
     );
     await expect(
       page.getByRole('heading', { name: 'Свяжитесь с продавцом и передайте предоплату' })
@@ -508,7 +507,11 @@ test.describe('Telegram Mini App buyer booking flow', () => {
       ticketViewSellerPhoneCard.getByTestId('telegram-mini-app-ticket-view-copy-feedback')
     ).toHaveText('Номер скопирован');
     await expect(page.getByRole('link', { name: 'Позвонить продавцу' })).toHaveCount(0);
-    await expect(page.getByText('Бронь действует до', { exact: false })).toBeVisible();
+    const ticketViewTimer = page.getByTestId('telegram-mini-app-ticket-view-timer');
+    await expect(ticketViewTimer).toHaveCount(1);
+    await expect(ticketViewTimer).toContainText(/\d{2}:\d{2}/);
+    await expect(page.getByText('Срок брони', { exact: false })).toHaveCount(0);
+    await expect(page.getByText('Бронь действует до', { exact: false })).toHaveCount(0);
     await expect(page.getByText(/Осталось \d{2}:\d{2}/)).toHaveCount(0);
     await expect(page.getByText('Код появится после оформления', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Открыть сохранённую копию' })).toHaveCount(0);

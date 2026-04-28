@@ -3,6 +3,8 @@ import { freezeTelegramHandoffValue } from '../../../shared/telegram/index.js';
 export const TELEGRAM_START_UPDATE_NORMALIZED_EVENT_TYPE = 'telegram.inbound_start_message.v1';
 
 const TELEGRAM_START_UPDATE_ERROR_PREFIX = '[TELEGRAM_START_UPDATE_NORMALIZATION]';
+const TELEGRAM_START_SOURCE_TOKEN_PATTERN = /^[A-Za-z0-9_-]+$/;
+const TELEGRAM_START_PRESALE_PAYLOAD_PATTERN = /^([A-Za-z0-9_-]+)__p([1-9]\d*)$/;
 
 function rejectStartUpdate(message) {
   throw new Error(`${TELEGRAM_START_UPDATE_ERROR_PREFIX} ${message}`);
@@ -25,6 +27,21 @@ function normalizeTelegramId(value, label, { allowNegative = false } = {}) {
 
 function normalizeOptionalString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function extractSourceTokenFromStartPayload(payloadText) {
+  const normalizedPayload = normalizeOptionalString(payloadText);
+  if (!normalizedPayload) {
+    return null;
+  }
+  if (TELEGRAM_START_SOURCE_TOKEN_PATTERN.test(normalizedPayload)) {
+    const handoffMatch = normalizedPayload.match(TELEGRAM_START_PRESALE_PAYLOAD_PATTERN);
+    if (handoffMatch?.[1]) {
+      return handoffMatch[1];
+    }
+    return normalizedPayload;
+  }
+  return null;
 }
 
 function normalizeTelegramUser(user) {
@@ -91,8 +108,7 @@ function parseStartCommand(text) {
   }
 
   const payloadText = normalizeOptionalString(match[2]);
-  const sourceToken =
-    payloadText && /^[A-Za-z0-9_-]+$/.test(payloadText) ? payloadText : null;
+  const sourceToken = extractSourceTokenFromStartPayload(payloadText);
 
   return {
     start_command_present: true,

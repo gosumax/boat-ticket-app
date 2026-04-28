@@ -37,11 +37,15 @@ function normalizeCandidateBaseUrl(rawValue) {
     return null;
   }
 
-  if (!/\.trycloudflare\.com$/i.test(parsed.hostname || '')) {
-    return null;
+  let normalizedPath = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+  const webhookPathSuffix = '/api/telegram/webhook';
+  if (normalizedPath.toLowerCase().endsWith(webhookPathSuffix)) {
+    normalizedPath = normalizedPath.slice(0, normalizedPath.length - webhookPathSuffix.length);
   }
-
-  return parsed.origin;
+  if (normalizedPath === '/') {
+    normalizedPath = '';
+  }
+  return `${parsed.origin}${normalizedPath}`;
 }
 
 function extractQuickTunnelUrl(logText) {
@@ -208,8 +212,8 @@ async function promptForManualBaseUrl() {
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       const answer = await ask(
         attempt === 1
-          ? '[FALLBACK] Paste the public HTTPS tunnel base URL to continue live testing now.\n[FALLBACK] Example: https://example.trycloudflare.com\n[FALLBACK] URL (leave blank to stop): '
-          : '[FALLBACK] URL must be a full https://...trycloudflare.com base URL. Paste it now or press Enter to stop: '
+          ? '[FALLBACK] Paste the public HTTPS base URL to continue live testing now.\n[FALLBACK] Example: https://miniapp.domain.com\n[FALLBACK] URL (leave blank to stop): '
+          : '[FALLBACK] URL must be a full https://... base URL. Paste it now or press Enter to stop: '
       );
       const normalized = normalizeCandidateBaseUrl(answer);
       if (!String(answer || '').trim()) {
@@ -388,11 +392,25 @@ async function main() {
     Number(readEnv('CLOUDFLARED_RETRY_DELAY_SECONDS', '5')) || 5;
   const inlineMode = readEnv('LAUNCHER_INLINE_MODE') === '1';
   const launchHelperPath = path.join(projectDir, 'scripts', 'telegram-launch-helper.mjs');
+  const tunnelModeRaw = readEnv('CLOUDFLARE_TUNNEL_MODE');
+  const tunnelName = readEnv('CLOUDFLARE_TUNNEL_NAME');
+  const tunnelConfigPathRaw = readEnv('CLOUDFLARE_TUNNEL_CONFIG');
+  const tunnelConfigPath = tunnelConfigPathRaw
+    ? path.resolve(projectDir, tunnelConfigPathRaw)
+    : '';
+  const explicitPublicBaseUrl = normalizeCandidateBaseUrl(readEnv('TELEGRAM_PUBLIC_BASE_URL'));
 
   const telegramBotToken = readEnv('TELEGRAM_BOT_TOKEN_VALUE');
   const telegramWebhookSecret = readEnv('TELEGRAM_WEBHOOK_SECRET_TOKEN_VALUE');
   const miniAppUserId = readEnv('MINI_APP_TEST_USER_ID', '777123456');
   const miniAppVersion = readEnv('MINI_APP_VERSION', 'live1');
+  const tunnelMode = (() => {
+    const normalized = String(tunnelModeRaw || '').trim().toLowerCase();
+    if (normalized === 'named' || normalized === 'quick') {
+      return normalized;
+    }
+    return tunnelName ? 'named' : 'quick';
+  })();
 
   if (!projectDir || !fs.existsSync(path.join(projectDir, 'package.json'))) {
     console.error(`[ERROR] Project directory not found: ${projectDir || '(empty)'}`);
@@ -418,6 +436,30 @@ async function main() {
     return;
   }
 
+  if (tunnelMode === 'named') {
+    if (!tunnelName) {
+      console.error(
+        '[ERROR] CLOUDFLARE_TUNNEL_NAME is required when CLOUDFLARE_TUNNEL_MODE=named.'
+      );
+      process.exit(1);
+      return;
+    }
+    if (!explicitPublicBaseUrl) {
+      console.error(
+        '[ERROR] TELEGRAM_PUBLIC_BASE_URL (https://...) is required for named Cloudflare Tunnel mode.'
+      );
+      process.exit(1);
+      return;
+    }
+    if (tunnelConfigPathRaw && !fs.existsSync(tunnelConfigPath)) {
+      console.error(
+        `[ERROR] CLOUDFLARE_TUNNEL_CONFIG file was not found: ${tunnelConfigPath}`
+      );
+      process.exit(1);
+      return;
+    }
+  }
+
   const tempDir = ensureTempDir();
   const serverWorkerPath = path.join(tempDir, 'start-telegram-miniapp-live-server.cmd');
   const tunnelLogPath = path.join(tempDir, 'start-telegram-miniapp-live-cloudflared.log');
@@ -426,23 +468,68 @@ async function main() {
 
   console.log('[LAUNCHER] Checking cloudflared path...');
   console.log(`[LAUNCHER] Tunnel log: ${tunnelLogPath}`);
-  console.log(
-    `[LAUNCHER] Waiting for the Cloudflare HTTPS URL with up to ${cloudflaredMaxDiscoveryAttempts} attempt(s) and ${cloudflaredWaitSeconds} second(s) per attempt...`
-  );
+  let discoveryResult = null;
+  if (tunnelMode === 'named') {
+    appendTunnelLogHeader(tunnelLogPath, `Named tunnel started ${new Date().toISOString()}`);
+    const namedTunnelArgs = tunnelConfigPathRaw
+      ? ['--config', tunnelConfigPath, 'tunnel', '--no-autoupdate', 'run', tunnelName]
+      : ['tunnel', '--no-autoupdate', 'run', tunnelName];
+    console.log('[LAUNCHER] Starting named Cloudflare Tunnel...');
+    console.log(`[LAUNCHER] Tunnel name: ${tunnelName}`);
+    console.log(
+      `[LAUNCHER] TELEGRAM_PUBLIC_BASE_URL (stable): ${explicitPublicBaseUrl}`
+    );
+    if (tunnelConfigPathRaw) {
+      console.log(`[LAUNCHER] Using Cloudflare config: ${tunnelConfigPath}`);
+    }
 
-  const discoveryResult = await discoverCloudflareBaseUrl({
-    cloudflaredExe,
-    projectDir,
-    logPath: tunnelLogPath,
-    waitSeconds: cloudflaredWaitSeconds,
-    maxAttempts: cloudflaredMaxDiscoveryAttempts,
-    retryDelaySeconds: cloudflaredRetryDelaySeconds,
-  });
+    const namedChild = spawnDetachedLoggedProcess(
+      cloudflaredExe,
+      namedTunnelArgs,
+      {
+        ...process.env,
+        PROJECT_DIR: projectDir,
+      },
+      tunnelLogPath
+    );
+
+    await sleep(1500);
+    if (namedChild && namedChild.exitCode !== null) {
+      discoveryResult = {
+        publicBaseUrl: null,
+        activeChild: null,
+        discoveryMode: null,
+        lastFailure: `cloudflared exited with code ${namedChild.exitCode}`,
+        lastIssueLine: null,
+      };
+    } else {
+      discoveryResult = {
+        publicBaseUrl: explicitPublicBaseUrl,
+        activeChild: namedChild,
+        discoveryMode: 'named_static',
+        lastFailure: null,
+        lastIssueLine: null,
+      };
+    }
+  } else {
+    console.log(
+      `[LAUNCHER] Waiting for the Cloudflare HTTPS URL with up to ${cloudflaredMaxDiscoveryAttempts} attempt(s) and ${cloudflaredWaitSeconds} second(s) per attempt...`
+    );
+    discoveryResult = await discoverCloudflareBaseUrl({
+      cloudflaredExe,
+      projectDir,
+      logPath: tunnelLogPath,
+      waitSeconds: cloudflaredWaitSeconds,
+      maxAttempts: cloudflaredMaxDiscoveryAttempts,
+      retryDelaySeconds: cloudflaredRetryDelaySeconds,
+    });
+  }
 
   let publicBaseUrl = discoveryResult.publicBaseUrl;
   let discoveryMode = discoveryResult.discoveryMode;
   if (!publicBaseUrl) {
-    console.error('[ERROR] Failed to discover a public HTTPS URL from Cloudflare Tunnel automatically.');
+    const modeLabel = tunnelMode === 'named' ? 'named tunnel mode' : 'automatic discovery mode';
+    console.error(`[ERROR] Failed to resolve TELEGRAM_PUBLIC_BASE_URL in ${modeLabel}.`);
     console.error(`[ERROR] Inspect the log file: ${tunnelLogPath}`);
     const logTail = readLogFileSafe(tunnelLogPath)
       .split(/\r?\n/)
@@ -459,13 +546,20 @@ async function main() {
     if (discoveryResult.lastIssueLine) {
       console.error(`[ERROR] Last Cloudflare issue line: ${discoveryResult.lastIssueLine}`);
     }
+    if (tunnelMode === 'named') {
+      console.error(
+        '[ERROR] Named tunnel requires stable TELEGRAM_PUBLIC_BASE_URL and healthy cloudflared tunnel run.'
+      );
+      process.exit(1);
+      return;
+    }
     console.error('[FALLBACK] Automatic discovery did not finish in time.');
     console.error('[FALLBACK] If needed, start or restart Cloudflare manually in another terminal:');
     console.error(
       `[FALLBACK] ${cloudflaredExe} tunnel --url http://127.0.0.1:3001 --edge-ip-version 4 --no-autoupdate`
     );
     console.error(
-      '[FALLBACK] When Cloudflare shows an https://...trycloudflare.com URL, paste that base URL below to continue live testing.'
+      '[FALLBACK] When Cloudflare shows a public https://... URL, paste that base URL below to continue live testing.'
     );
 
     publicBaseUrl = await promptForManualBaseUrl();
@@ -509,7 +603,13 @@ async function main() {
     `&mini_app_v=${encodeURIComponent(miniAppVersion)}`;
 
   console.log(
-    `[LAUNCHER] Public Cloudflare base URL ${discoveryMode === 'manual_fallback' ? 'accepted via fallback' : 'discovered'}:`
+    `[LAUNCHER] Public Cloudflare base URL ${
+      discoveryMode === 'manual_fallback'
+        ? 'accepted via fallback'
+        : discoveryMode === 'named_static'
+          ? 'configured for named tunnel'
+          : 'discovered'
+    }:`
   );
   console.log(`[LAUNCHER] ${publicBaseUrl}`);
   console.log('[LAUNCHER] Starting the app server window with TELEGRAM_PUBLIC_BASE_URL...');

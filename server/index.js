@@ -18,6 +18,7 @@ import {
   createTelegramBotApiNotificationDeliveryAdapter,
   createTelegramPersistenceContext,
 } from './telegram/index.js';
+import { createArkhipoOsipovkaWeatherSnapshotResolver } from './telegram/services/arkhipo-osipovka-weather-snapshot-resolver.mjs';
 import { createTelegramWebhookRouter } from './telegram/webhook-router.mjs';
 import { createTelegramMiniAppRouter } from './telegram/mini-app-router.mjs';
 import { createTelegramMiniAppFrontendRouter } from './telegram/mini-app-frontend-router.mjs';
@@ -60,8 +61,11 @@ const telegramNotificationDeliveryAdapter =
   createTelegramBotApiNotificationDeliveryAdapter({
     botToken: telegramRuntimeConfig.telegram_bot_token,
   });
+const telegramWeatherSnapshotResolver =
+  createArkhipoOsipovkaWeatherSnapshotResolver();
 const telegramContext = createTelegramPersistenceContext(db, {
   notificationDeliveryAdapter: telegramNotificationDeliveryAdapter,
+  telegramWeatherSnapshotResolver,
 });
 
 app.use(express.json());

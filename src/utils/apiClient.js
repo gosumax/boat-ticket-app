@@ -89,7 +89,13 @@ class ApiClient {
 
       if (!res.ok) {
         const message =
-          (parsed && (parsed.error || parsed.message)) ||
+          (parsed &&
+            (
+              parsed.error ||
+              parsed.message ||
+              parsed.rejection_reason ||
+              parsed.rejectionReason
+            )) ||
           rawText ||
           `HTTP ${res.status}`;
         const err = new Error(message);
@@ -243,6 +249,11 @@ class ApiClient {
     return this.request('/selling/dispatcher/slots');
   }
 
+  lookupDispatcherTicket(query) {
+    const normalizedQuery = String(query ?? '').trim();
+    return this.request(`/selling/dispatcher/ticket-lookup?query=${encodeURIComponent(normalizedQuery)}`);
+  }
+
   getAllDispatcherBoats() {
     return this.request('/selling/dispatcher/boats');
   }
@@ -300,10 +311,22 @@ class ApiClient {
 
   // UI helper: presales for конкретного рейса (manual/generated)
   async getPresalesForSlot(slotUidOrId) {
-    const all = await this.getPresales();
+    const raw = slotUidOrId == null ? '' : String(slotUidOrId);
+    const params = new URLSearchParams();
+    if (raw) {
+      params.set('slot_uid', raw);
+      if (raw.startsWith('manual:')) {
+        const manualId = Number(raw.split(':')[1]);
+        if (Number.isFinite(manualId)) params.set('boat_slot_id', String(manualId));
+      } else if (!raw.startsWith('generated:')) {
+        const numericId = Number(raw);
+        if (Number.isFinite(numericId)) params.set('boat_slot_id', String(numericId));
+      }
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const all = await this.request(`/selling/presales${query}`);
     const list = Array.isArray(all) ? all : (all?.presales || []);
 
-    const raw = slotUidOrId == null ? '' : String(slotUidOrId);
     const isManualUid = raw.startsWith('manual:');
     const isGeneratedUid = raw.startsWith('generated:');
 
@@ -384,7 +407,7 @@ class ApiClient {
   }
 
   getSlotTickets(slotId) {
-    return this.request(`/selling/slots/${slotId}/tickets`);
+    return this.request(`/selling/slots/${encodeURIComponent(slotId)}/tickets`);
   }
 
   // ---------------- TICKETS ----------------

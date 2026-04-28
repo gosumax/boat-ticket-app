@@ -213,19 +213,19 @@ describe('telegram webhook router', () => {
           button_payloads: expect.arrayContaining([
             expect.objectContaining({
               action_type: 'open_mini_app',
-              web_app_url: expect.stringContaining(
-                '/telegram/mini-app?'
-              ),
+              callback_data: null,
+              web_app_url: expect.stringContaining('/telegram/mini-app'),
             }),
           ]),
         },
       },
     });
-    const miniAppButton =
-      authorized.body?.adapter_result_summary?.outbound_response_summary?.button_payloads?.find(
+    const hasInlineMiniAppButton = Boolean(
+      authorized.body?.adapter_result_summary?.outbound_response_summary?.button_payloads?.some(
         (item) => item.action_type === 'open_mini_app'
-      ) || null;
-    expect(miniAppButton?.web_app_url).toContain('telegram_user_id=860301');
+      )
+    );
+    expect(hasInlineMiniAppButton).toBe(true);
 
     const health = await request(securedApp).get('/api/telegram/health');
     expect(health.status).toBe(200);

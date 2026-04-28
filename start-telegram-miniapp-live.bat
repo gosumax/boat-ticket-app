@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-setlocal
+setlocal EnableExtensions
 
 pushd "%~dp0" >nul 2>nul
 if errorlevel 1 (
@@ -20,6 +20,11 @@ rem set "CLOUDFLARED_EXE=C:\tools\cloudflared\cloudflared.exe"
 set "CLOUDFLARED_WAIT_SECONDS=60"
 set "CLOUDFLARED_MAX_DISCOVERY_ATTEMPTS=3"
 set "CLOUDFLARED_RETRY_DELAY_SECONDS=5"
+rem Optional stable mode (default is quick no-login tunnel):
+rem set "CLOUDFLARE_TUNNEL_MODE=named"
+rem set "CLOUDFLARE_TUNNEL_NAME=boat-ticket-miniapp"
+rem set "TELEGRAM_PUBLIC_BASE_URL=https://miniapp.domain.com"
+rem set "CLOUDFLARE_TUNNEL_CONFIG=%USERPROFILE%\.cloudflared\config.yml"
 set "TELEGRAM_BOT_TOKEN_VALUE=8662427941:AAHW5ws7URgZuJMH1BH0NO1mdc3w0PHmQco"
 set "TELEGRAM_WEBHOOK_SECRET_TOKEN_VALUE=telegram_webhook_secret_test_2026_abc123"
 set "MINI_APP_TEST_USER_ID=777123456"

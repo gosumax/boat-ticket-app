@@ -136,6 +136,333 @@ describe('telegram mini app router', () => {
     );
   }
 
+  function ensureMiniAppPresaleTicketColumns() {
+    const presaleColumns = [
+      'boat_slot_id INTEGER NULL',
+      'customer_name TEXT',
+      'customer_phone TEXT',
+      'number_of_seats INTEGER',
+      'total_price INTEGER',
+      'prepayment_amount INTEGER DEFAULT 0',
+      "status TEXT DEFAULT 'ACTIVE'",
+      'slot_uid TEXT NULL',
+      'business_day TEXT NULL',
+      'created_at TEXT DEFAULT CURRENT_TIMESTAMP',
+      'updated_at TEXT DEFAULT CURRENT_TIMESTAMP',
+    ];
+
+    for (const columnDefinition of presaleColumns) {
+      const columnName = columnDefinition.split(' ')[0];
+      try {
+        db.exec(`ALTER TABLE presales ADD COLUMN ${columnDefinition}`);
+      } catch (error) {
+        if (!String(error?.message || '').includes(`duplicate column name: ${columnName}`)) {
+          throw error;
+        }
+      }
+    }
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tickets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        presale_id INTEGER NOT NULL REFERENCES presales(id),
+        boat_slot_id INTEGER NULL,
+        status TEXT NOT NULL DEFAULT 'ACTIVE'
+      );
+    `);
+  }
+
+  function seedReadyCanonicalPresale({
+    slotUid = 'generated:42',
+    boatSlotId = 42,
+    businessDay = MINI_APP_FUTURE_DATE,
+    customerPhone = '+79990000000',
+    numberOfSeats = 2,
+    totalPrice = 6000,
+    prepaymentAmount = 1000,
+    createdAt = '2036-04-10T10:42:00.000Z',
+  } = {}) {
+    ensureMiniAppPresaleTicketColumns();
+    const insertResult = db
+      .prepare(
+        `
+          INSERT INTO presales (
+            boat_slot_id,
+            customer_name,
+            customer_phone,
+            number_of_seats,
+            total_price,
+            prepayment_amount,
+            status,
+            slot_uid,
+            business_day,
+            created_at,
+            updated_at
+          )
+          VALUES (?, 'Mini Guest', ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)
+        `
+      )
+      .run(
+        boatSlotId,
+        customerPhone,
+        numberOfSeats,
+        totalPrice,
+        prepaymentAmount,
+        slotUid,
+        businessDay,
+        createdAt,
+        createdAt
+      );
+    const canonicalPresaleId = Number(insertResult.lastInsertRowid);
+    db.prepare(
+      `
+        INSERT INTO tickets (presale_id, boat_slot_id, status)
+        VALUES (?, ?, 'ACTIVE')
+      `
+    ).run(canonicalPresaleId, boatSlotId);
+    return canonicalPresaleId;
+  }
+
+  async function bindCanonicalTicketToMiniAppGuest({
+    canonicalPresaleId,
+    telegramUserId = '777000111',
+    sourceToken,
+  }) {
+    const trustedSourceToken =
+      sourceToken || seedTrustedTicketSourceToken(`seller-direct-link-${canonicalPresaleId}`);
+    const response = await request(app)
+      .get('/api/telegram/mini-app/ticket-view')
+      .query({
+        telegram_user_id: telegramUserId,
+        canonical_presale_id: canonicalPresaleId,
+        source_token: trustedSourceToken,
+      });
+
+    expect(response.status).toBe(200);
+    return response;
+  }
+
+  function seedTrustedTicketSourceToken(sourceToken = 'seller-direct-link-42') {
+    const nowIso = '2036-04-10T10:30:00.000Z';
+    db.prepare(
+      `
+        INSERT INTO telegram_source_registry_items (
+          source_reference,
+          source_family,
+          source_type,
+          source_token,
+          seller_id,
+          is_enabled,
+          is_exportable,
+          source_payload,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `
+    ).run(
+      `source-ref-${sourceToken}`,
+      'seller',
+      'seller_deep_link',
+      sourceToken,
+      1,
+      1,
+      1,
+      '{}',
+      nowIso,
+      nowIso
+    );
+    return sourceToken;
+  }
+
+  function ensureCanonicalTicketTablesForRepair() {
+    const presaleColumns = [
+      "status TEXT DEFAULT 'ACTIVE'",
+      'slot_uid TEXT NULL',
+      'boat_slot_id INTEGER NULL',
+      'business_day TEXT NULL',
+      'number_of_seats INTEGER NULL',
+      'total_price INTEGER NULL',
+      'prepayment_amount INTEGER NULL',
+      'customer_phone TEXT NULL',
+      'created_at TEXT DEFAULT CURRENT_TIMESTAMP',
+      'updated_at TEXT DEFAULT CURRENT_TIMESTAMP',
+    ];
+
+    for (const columnDefinition of presaleColumns) {
+      const columnName = columnDefinition.split(' ')[0];
+      try {
+        db.exec(`ALTER TABLE presales ADD COLUMN ${columnDefinition}`);
+      } catch (error) {
+        if (!String(error?.message || '').includes(`duplicate column name: ${columnName}`)) {
+          throw error;
+        }
+      }
+    }
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tickets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        presale_id INTEGER NOT NULL REFERENCES presales(id),
+        boat_slot_id INTEGER NULL,
+        ticket_code TEXT NULL,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        price INTEGER NULL
+      );
+    `);
+  }
+
+  function confirmPrepaymentWithoutHandoff(bookingRequestId) {
+    return context.services.bookingRequestService.confirmPrepayment(bookingRequestId, {
+      actorType: 'seller',
+      actorId: '1',
+      eventMetadata: {
+        accepted_prepayment_amount: 1000,
+        payment_method: 'CASH',
+      },
+    });
+  }
+
+  function stubSuccessfulRepairBridge() {
+    ensureCanonicalTicketTablesForRepair();
+    context.services.realPresaleHandoffOrchestratorService.orchestrate = (
+      bookingRequestId
+    ) => {
+      const insertResult = db.prepare(
+        `
+          INSERT INTO presales (
+            status, slot_uid, boat_slot_id, business_day, number_of_seats,
+            total_price, prepayment_amount, customer_phone
+          )
+          VALUES ('ACTIVE', 'generated:41', 41, ?, 2, 3000, 1000, '+79990000000')
+        `
+      ).run(MINI_APP_FUTURE_DATE);
+      const presaleId = Number(insertResult.lastInsertRowid);
+      db.prepare(
+        `
+          INSERT INTO tickets (presale_id, boat_slot_id, ticket_code, status, price)
+          VALUES (?, 41, 'TKT-REPAIR-1', 'ACTIVE', 1500)
+        `
+      ).run(presaleId);
+      context.repositories.bookingRequests.updateById(bookingRequestId, {
+        confirmed_presale_id: presaleId,
+        request_status: 'CONFIRMED_TO_PRESALE',
+        last_status_at: '2036-04-10T10:41:30.000Z',
+      });
+
+      return {
+        orchestration_status: 'presale_created',
+        created_presale_reference: {
+          reference_type: 'canonical_presale',
+          presale_id: presaleId,
+        },
+      };
+    };
+  }
+
+  function stubFailedRepairBridge() {
+    context.services.realPresaleHandoffOrchestratorService.orchestrate = () => ({
+      orchestration_status: 'bridge_failed',
+      failure_reason: {
+        code: 'PRESALE_CREATE_FAILED',
+        message: 'test bridge failure',
+      },
+    });
+  }
+
+  it('repairs a confirmed prepayment request with no handoff into a linked ticket on next load', async () => {
+    const bookingRequestId = await submitGuestBookingRequest({
+      requestedTimeSlot: '10:00',
+      idempotencyKey: 'mini-app-http-stuck-prepayment-repair',
+    });
+    confirmPrepaymentWithoutHandoff(bookingRequestId);
+    stubSuccessfulRepairBridge();
+
+    expect(
+      context.repositories.bookingRequests.getById(bookingRequestId)
+    ).toMatchObject({
+      request_status: 'PREPAYMENT_CONFIRMED',
+      confirmed_presale_id: null,
+    });
+
+    const ticketList = await request(app)
+      .get('/api/telegram/mini-app/my-tickets')
+      .query({
+        telegram_user_id: '777000111',
+      });
+
+    expect(ticketList.status).toBe(200);
+    const repairedRequest =
+      context.repositories.bookingRequests.getById(bookingRequestId);
+    expect(repairedRequest.request_status).toBe('CONFIRMED_TO_PRESALE');
+    expect(Number(repairedRequest.confirmed_presale_id)).toBeGreaterThan(0);
+    expect(
+      db
+        .prepare('SELECT COUNT(*) AS count FROM tickets WHERE presale_id = ?')
+        .get(repairedRequest.confirmed_presale_id).count
+    ).toBe(1);
+    const repairedItem = ticketList.body.operation_result_summary.items.find(
+      (item) =>
+        item.booking_request_reference?.booking_request_id === bookingRequestId
+    );
+    expect(repairedItem).toMatchObject({
+      ticket_status_summary: {
+        deterministic_ticket_state: 'linked_ticket_ready',
+      },
+      ticket_availability_state: 'available',
+    });
+  });
+
+  it('closes an unrecoverable confirmed prepayment repair and stops blocking new bookings', async () => {
+    const bookingRequestId = await submitGuestBookingRequest({
+      requestedTimeSlot: '10:00',
+      idempotencyKey: 'mini-app-http-stuck-prepayment-failed-repair',
+    });
+    confirmPrepaymentWithoutHandoff(bookingRequestId);
+    stubFailedRepairBridge();
+
+    const ticketList = await request(app)
+      .get('/api/telegram/mini-app/my-tickets')
+      .query({
+        telegram_user_id: '777000111',
+      });
+
+    expect(ticketList.status).toBe(200);
+    const closedRequest =
+      context.repositories.bookingRequests.getById(bookingRequestId);
+    expect(closedRequest.request_status).toBe('CLOSED_UNCONVERTED');
+    expect(closedRequest.confirmed_presale_id).toBeNull();
+    const closedItem = ticketList.body.operation_result_summary.items.find(
+      (item) =>
+        item.booking_request_reference?.booking_request_id === bookingRequestId
+    );
+    expect(closedItem).toMatchObject({
+      ticket_status_summary: {
+        deterministic_ticket_state: 'linked_ticket_cancelled_or_unavailable',
+      },
+      ticket_availability_state: 'unavailable',
+    });
+
+    const newBooking = await request(app)
+      .post('/api/telegram/mini-app/booking-submit')
+      .send({
+        telegram_user_id: '777000111',
+        selected_trip_slot_reference: {
+          reference_type: 'telegram_requested_trip_slot_reference',
+          requested_trip_date: MINI_APP_FUTURE_DATE,
+          requested_time_slot: '12:00',
+          slot_uid: 'generated:42',
+        },
+        requested_seats: 2,
+        requested_prepayment_amount: 1000,
+        customer_name: 'Mini Guest',
+        contact_phone: '+79990000000',
+        idempotency_key: 'mini-app-http-after-failed-repair',
+      });
+
+    expect(newBooking.status).toBe(201);
+  });
+
   it('binds Mini App runtime init-data to the same guest created by QR /start', async () => {
     const telegramUserId = '777004444';
     const startUpdate = buildStartUpdate({
@@ -426,6 +753,214 @@ describe('telegram mini app router', () => {
     });
   });
 
+  it('builds ticket-view projection from canonical presale when booking request linkage is absent', async () => {
+    const sourceToken = seedTrustedTicketSourceToken('seller-direct-link-canonical-1');
+    const insertResult = db.prepare('INSERT INTO presales DEFAULT VALUES').run();
+    const canonicalPresaleId = Number(insertResult.lastInsertRowid);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tickets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        presale_id INTEGER NOT NULL,
+        status TEXT NOT NULL
+      )
+    `);
+    db.prepare(
+      `
+        INSERT INTO tickets (presale_id, status)
+        VALUES (?, ?)
+      `
+    ).run(canonicalPresaleId, 'ACTIVE');
+
+    const response = await request(app)
+      .get('/api/telegram/mini-app/ticket-view')
+      .query({
+        telegram_user_id: '777000111',
+        canonical_presale_id: canonicalPresaleId,
+        source_token: sourceToken,
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      route_status: 'processed',
+      route_operation_type: 'mini_app_ticket_view',
+      operation_result_summary: {
+        booking_request_reference: null,
+        linked_canonical_presale_reference: {
+          presale_id: canonicalPresaleId,
+        },
+        ticket_status_summary: {
+          deterministic_ticket_state: 'linked_ticket_ready',
+          canonical_linkage_status: 'canonical_presale_only',
+        },
+        ticket_availability_state: 'available',
+      },
+    });
+    expect(
+      response.body?.operation_result_summary?.buyer_ticket_reference_summary?.buyer_ticket_code
+    ).toBeTruthy();
+  });
+
+  it('keeps canonical seller-ticket visible in my-tickets after FAQ navigation and repeated re-entry', async () => {
+    const sourceToken = seedTrustedTicketSourceToken('seller-direct-link-canonical-2');
+    await submitGuestBookingRequest({
+      idempotencyKey: 'mini-app-http-my-tickets-old-seed',
+    });
+
+    const insertResult = db.prepare('INSERT INTO presales DEFAULT VALUES').run();
+    const canonicalPresaleId = Number(insertResult.lastInsertRowid);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tickets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        presale_id INTEGER NOT NULL,
+        status TEXT NOT NULL
+      )
+    `);
+    db.prepare(
+      `
+        INSERT INTO tickets (presale_id, status)
+        VALUES (?, ?)
+      `
+    ).run(canonicalPresaleId, 'ACTIVE');
+
+    const ticketView = await request(app)
+      .get('/api/telegram/mini-app/ticket-view')
+      .query({
+        telegram_user_id: '777000111',
+        canonical_presale_id: canonicalPresaleId,
+        source_token: sourceToken,
+      });
+
+    expect(ticketView.status).toBe(200);
+    expect(ticketView.body).toMatchObject({
+      route_status: 'processed',
+      route_operation_type: 'mini_app_ticket_view',
+      operation_result_summary: {
+        booking_request_reference: null,
+        linked_canonical_presale_reference: {
+          presale_id: canonicalPresaleId,
+        },
+        ticket_status_summary: {
+          canonical_linkage_status: 'canonical_presale_only',
+        },
+      },
+    });
+    expect(countRows(db, 'telegram_guest_canonical_ticket_links')).toBe(1);
+
+    const faq = await request(app)
+      .get('/api/telegram/mini-app/entrypoint/faq')
+      .query({
+        telegram_user_id: '777000111',
+      });
+    expect(faq.status).toBe(200);
+
+    const myTicketsAfterNavigation = await request(app)
+      .get('/api/telegram/mini-app/my-tickets')
+      .query({
+        telegram_user_id: '777000111',
+        limit: 20,
+      });
+
+    expect(myTicketsAfterNavigation.status).toBe(200);
+    expect(
+      myTicketsAfterNavigation.body.operation_result_summary.items.some(
+        (item) =>
+          Number(item?.linked_canonical_presale_reference?.presale_id) ===
+          canonicalPresaleId
+      )
+    ).toBe(true);
+
+    const myTicketsAfterReopen = await request(app)
+      .get('/api/telegram/mini-app/my-tickets')
+      .query({
+        telegram_user_id: '777000111',
+        limit: 20,
+      });
+
+    expect(myTicketsAfterReopen.status).toBe(200);
+    expect(
+      myTicketsAfterReopen.body.operation_result_summary.items.some(
+        (item) =>
+          Number(item?.linked_canonical_presale_reference?.presale_id) ===
+          canonicalPresaleId
+      )
+    ).toBe(true);
+  });
+
+  it('binds canonical ticket to first trusted guest and rejects other guests with neutral not-found message', async () => {
+    const sourceToken = seedTrustedTicketSourceToken('seller-direct-link-canonical-3');
+    const insertResult = db.prepare('INSERT INTO presales DEFAULT VALUES').run();
+    const canonicalPresaleId = Number(insertResult.lastInsertRowid);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tickets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        presale_id INTEGER NOT NULL,
+        status TEXT NOT NULL
+      )
+    `);
+    db.prepare(
+      `
+        INSERT INTO tickets (presale_id, status)
+        VALUES (?, ?)
+      `
+    ).run(canonicalPresaleId, 'ACTIVE');
+
+    const firstGuestView = await request(app)
+      .get('/api/telegram/mini-app/ticket-view')
+      .query({
+        telegram_user_id: '777000111',
+        canonical_presale_id: canonicalPresaleId,
+        source_token: sourceToken,
+      });
+    expect(firstGuestView.status).toBe(200);
+    expect(countRows(db, 'telegram_guest_canonical_ticket_links')).toBe(1);
+
+    const secondGuestView = await request(app)
+      .get('/api/telegram/mini-app/ticket-view')
+      .query({
+        telegram_user_id: '777000222',
+        canonical_presale_id: canonicalPresaleId,
+      });
+    expect(secondGuestView.status).toBe(404);
+    expect(secondGuestView.body).toMatchObject({
+      route_status: 'rejected_not_found',
+      route_operation_type: 'mini_app_ticket_view',
+      operation_result_summary: null,
+      rejection_reason:
+        'Билет не найден. Проверьте номер или откройте билет по ссылке из Telegram.',
+    });
+  });
+
+  it('rejects first canonical ticket open without trusted source token', async () => {
+    const insertResult = db.prepare('INSERT INTO presales DEFAULT VALUES').run();
+    const canonicalPresaleId = Number(insertResult.lastInsertRowid);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tickets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        presale_id INTEGER NOT NULL,
+        status TEXT NOT NULL
+      )
+    `);
+    db.prepare(
+      `
+        INSERT INTO tickets (presale_id, status)
+        VALUES (?, ?)
+      `
+    ).run(canonicalPresaleId, 'ACTIVE');
+
+    const response = await request(app)
+      .get('/api/telegram/mini-app/ticket-view')
+      .query({
+        telegram_user_id: '777000333',
+        canonical_presale_id: canonicalPresaleId,
+      });
+    expect(response.status).toBe(404);
+    expect(response.body?.operation_result_summary).toBe(null);
+    expect(response.body?.rejection_reason).toBe(
+      'Билет не найден. Проверьте номер или откройте билет по ссылке из Telegram.'
+    );
+    expect(countRows(db, 'telegram_guest_canonical_ticket_links')).toBe(0);
+  });
+
   it('supports health route and loads catalog/trip-card through the HTTP seam', async () => {
     const health = await request(app).get('/api/telegram/mini-app/health');
     expect(health.status).toBe(200);
@@ -583,6 +1118,87 @@ describe('telegram mini app router', () => {
         active_reservation_count: 1,
         completed_cancelled_expired_count: 1,
       },
+    });
+  });
+
+  it('normalizes stale hold expiry drift and keeps submit/my-requests operational', async () => {
+    const firstBookingRequestId = await submitGuestBookingRequest({
+      idempotencyKey: 'mini-app-http-stale-hold-expiry-drift-first',
+    });
+
+    db.prepare(
+      `
+        UPDATE telegram_booking_holds
+        SET hold_expires_at = '2036-04-10 10:40:30'
+        WHERE booking_request_id = ?
+      `
+    ).run(firstBookingRequestId);
+
+    clocks.creation.set('2036-04-10T10:47:00.000Z');
+    clocks.activation.set('2036-04-10T10:47:00.000Z');
+    mountMiniAppRouter('2036-04-10T10:47:00.000Z');
+
+    const myRequestsAfterExpiry = await request(app)
+      .get('/api/telegram/mini-app/my-requests')
+      .query({
+        telegram_user_id: '777000111',
+      });
+
+    expect(myRequestsAfterExpiry.status).toBe(200);
+    expect(myRequestsAfterExpiry.body).toMatchObject({
+      route_status: 'processed',
+      route_operation_type: 'mini_app_my_requests_list',
+      operation_result_summary: {
+        active_reservation_count: 0,
+        completed_cancelled_expired_count: 1,
+      },
+      rejection_reason: null,
+    });
+
+    const firstRequestAfterExpiry = db
+      .prepare(
+        `
+          SELECT
+            r.request_status AS request_status,
+            h.hold_status AS hold_status
+          FROM telegram_booking_requests r
+          LEFT JOIN telegram_booking_holds h
+            ON h.booking_request_id = r.booking_request_id
+          WHERE r.booking_request_id = ?
+        `
+      )
+      .get(firstBookingRequestId);
+
+    expect(firstRequestAfterExpiry).toMatchObject({
+      request_status: 'HOLD_EXPIRED',
+      hold_status: 'EXPIRED',
+    });
+
+    const secondSubmit = await request(app)
+      .post('/api/telegram/mini-app/booking-submit')
+      .send({
+        telegram_user_id: '777000111',
+        selected_trip_slot_reference: {
+          reference_type: 'telegram_requested_trip_slot_reference',
+          requested_trip_date: MINI_APP_FUTURE_DATE,
+          requested_time_slot: '10:00',
+          slot_uid: 'generated:41',
+        },
+        requested_seats: 2,
+        requested_prepayment_amount: 1000,
+        customer_name: 'Mini Guest',
+        contact_phone: '+79990000000',
+        idempotency_key: 'mini-app-http-stale-hold-expiry-drift-second',
+      });
+
+    expect(secondSubmit.status).toBe(201);
+    expect(secondSubmit.body).toMatchObject({
+      route_status: 'processed_created',
+      route_operation_type: 'mini_app_booking_submit',
+      operation_result_summary: {
+        submit_status: 'submitted_with_hold',
+      },
+      rejection_reason: null,
     });
   });
 
@@ -774,7 +1390,7 @@ describe('telegram mini app router', () => {
       operation_result_summary: {
         entrypoint_key: 'useful_content',
         placeholder: false,
-        title: 'Полезная информация',
+        title: 'Полезное в Архипо-Осиповке',
         body: expect.any(String),
         useful_content_read_model: {
           response_version: 'telegram_weather_useful_content_read_model.v1',
@@ -782,7 +1398,7 @@ describe('telegram mini app router', () => {
             weather_data_state: 'unavailable',
           },
           weather_caring_content_summary: {
-            useful_headline: 'Полезная информация',
+            useful_headline: 'Полезное в Архипо-Осиповке',
             useful_body: expect.any(String),
           },
           useful_content_feed_summary: {
@@ -1014,6 +1630,149 @@ describe('telegram mini app router', () => {
         },
       },
     });
+  });
+
+  it('reflects seller hold extension in buyer my-tickets and detail projections on refresh', async () => {
+    const bookingRequestId = await submitGuestBookingRequest({
+      idempotencyKey: 'mini-app-http-hold-extension-refresh',
+    });
+    const beforeExtension = await request(app)
+      .get('/api/telegram/mini-app/my-tickets')
+      .query({
+        telegram_user_id: '777000111',
+      });
+    const beforeItem = beforeExtension.body?.operation_result_summary?.items?.find(
+      (item) =>
+        Number(item?.booking_request_reference?.booking_request_id) === bookingRequestId
+    );
+    expect(beforeItem?.hold_status_summary?.hold_expires_at_summary?.iso).toBe(
+      '2036-04-10T10:46:00.000Z'
+    );
+
+    const holdStartedEvent = context.repositories.bookingRequestEvents.findOneBy(
+      {
+        booking_request_id: bookingRequestId,
+        event_type: 'HOLD_STARTED',
+      },
+      { orderBy: 'booking_request_event_id DESC' }
+    );
+    context.services.bookingRequestHoldExtensionService.extendHold({
+      active_hold_state: holdStartedEvent?.event_payload?.hold_activation_result,
+      idempotency_key: 'seller-extended-hold-refresh',
+    });
+
+    const afterExtension = await request(app)
+      .get('/api/telegram/mini-app/my-tickets')
+      .query({
+        telegram_user_id: '777000111',
+      });
+    const afterItem = afterExtension.body?.operation_result_summary?.items?.find(
+      (item) =>
+        Number(item?.booking_request_reference?.booking_request_id) === bookingRequestId
+    );
+    expect(afterItem?.hold_status_summary?.hold_expires_at_summary?.iso).toBe(
+      '2036-04-10T10:56:00.000Z'
+    );
+
+    const detailAfterExtension = await request(app)
+      .get(`/api/telegram/mini-app/my-tickets/${bookingRequestId}`)
+      .query({
+        telegram_user_id: '777000111',
+      });
+    expect(
+      detailAfterExtension.body?.operation_result_summary?.hold_status_summary
+        ?.hold_expires_at_summary?.iso
+    ).toBe('2036-04-10T10:56:00.000Z');
+  });
+
+  it('merges a stale request row with the matching ready canonical ticket in my-tickets', async () => {
+    const bookingRequestId = await submitGuestBookingRequest({
+      requestedTimeSlot: '12:00',
+      idempotencyKey: 'mini-app-http-dedupe-stale-request',
+    });
+    const canonicalPresaleId = seedReadyCanonicalPresale({
+      slotUid: 'generated:42',
+      boatSlotId: 42,
+      businessDay: MINI_APP_FUTURE_DATE,
+      customerPhone: '+79990000000',
+      numberOfSeats: 2,
+    });
+    await bindCanonicalTicketToMiniAppGuest({ canonicalPresaleId });
+
+    const ticketList = await request(app)
+      .get('/api/telegram/mini-app/my-tickets')
+      .query({
+        telegram_user_id: '777000111',
+        limit: 20,
+      });
+
+    expect(ticketList.status).toBe(200);
+    const items = ticketList.body.operation_result_summary.items;
+    const sameTripItems = items.filter(
+      (item) =>
+        item?.date_time_summary?.requested_trip_date === MINI_APP_FUTURE_DATE &&
+        item?.date_time_summary?.requested_time_slot === '12:00'
+    );
+    expect(sameTripItems).toHaveLength(1);
+    expect(sameTripItems[0]).toMatchObject({
+      linked_canonical_presale_reference: {
+        presale_id: canonicalPresaleId,
+      },
+      ticket_status_summary: {
+        deterministic_ticket_state: 'linked_ticket_ready',
+      },
+      ticket_availability_state: 'available',
+    });
+    expect(
+      items.some(
+        (item) =>
+          item?.booking_request_reference?.booking_request_id === bookingRequestId &&
+          item?.ticket_status_summary?.deterministic_ticket_state === 'no_ticket_yet'
+      )
+    ).toBe(false);
+  });
+
+  it('keeps two separate same-day ready canonical purchases visible', async () => {
+    const firstPresaleId = seedReadyCanonicalPresale({
+      slotUid: 'generated:41',
+      boatSlotId: 41,
+      businessDay: MINI_APP_FUTURE_DATE,
+      customerPhone: '+79990000000',
+      numberOfSeats: 1,
+      createdAt: '2036-04-10T10:42:00.000Z',
+    });
+    const secondPresaleId = seedReadyCanonicalPresale({
+      slotUid: 'generated:42',
+      boatSlotId: 42,
+      businessDay: MINI_APP_FUTURE_DATE,
+      customerPhone: '+79990000000',
+      numberOfSeats: 2,
+      createdAt: '2036-04-10T10:43:00.000Z',
+    });
+    await bindCanonicalTicketToMiniAppGuest({
+      canonicalPresaleId: firstPresaleId,
+      sourceToken: seedTrustedTicketSourceToken('seller-direct-link-same-day-1'),
+    });
+    await bindCanonicalTicketToMiniAppGuest({
+      canonicalPresaleId: secondPresaleId,
+      sourceToken: seedTrustedTicketSourceToken('seller-direct-link-same-day-2'),
+    });
+
+    const ticketList = await request(app)
+      .get('/api/telegram/mini-app/my-tickets')
+      .query({
+        telegram_user_id: '777000111',
+        limit: 20,
+      });
+
+    expect(ticketList.status).toBe(200);
+    const visiblePresaleIds = ticketList.body.operation_result_summary.items
+      .map((item) => Number(item?.linked_canonical_presale_reference?.presale_id))
+      .filter((presaleId) => Number.isInteger(presaleId) && presaleId > 0);
+
+    expect(visiblePresaleIds).toEqual(
+      expect.arrayContaining([firstPresaleId, secondPresaleId])
+    );
   });
 
   it('loads my-requests buckets and embeds request read model into my-tickets list', async () => {

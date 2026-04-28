@@ -24,6 +24,8 @@ export const TELEGRAM_START_SOURCE_RESOLUTION_STATUSES = Object.freeze([
 
 const ERROR_PREFIX = '[TELEGRAM_START_SOURCE_TOKEN_RESOLUTION]';
 const SERVICE_NAME = 'start-source-token-resolution-service';
+const SOURCE_TOKEN_PATTERN = /^[A-Za-z0-9_-]+$/;
+const SOURCE_TOKEN_PRESALE_PAYLOAD_PATTERN = /^([A-Za-z0-9_-]+)__p([1-9]\d*)$/;
 const OWNER_SOURCE_FAMILIES = Object.freeze(['owner_source']);
 const GENERIC_SOURCE_FAMILIES = Object.freeze(
   TELEGRAM_SOURCE_FAMILIES.filter(
@@ -55,7 +57,7 @@ function normalizeSourceToken(value) {
     return null;
   }
 
-  if (!/^[A-Za-z0-9_-]+$/.test(normalized)) {
+  if (!SOURCE_TOKEN_PATTERN.test(normalized)) {
     rejectSourceTokenResolution('source token must contain only letters, numbers, underscores, or hyphens');
   }
 
@@ -68,11 +70,12 @@ export function normalizeTelegramStartSourceTokenForRegistry(value) {
 
 function normalizePayloadSourceToken(value) {
   const normalized = normalizeOptionalString(value);
-  if (!normalized || !/^[A-Za-z0-9_-]+$/.test(normalized)) {
+  if (!normalized || !SOURCE_TOKEN_PATTERN.test(normalized)) {
     return null;
   }
 
-  return normalized.toLowerCase();
+  const handoffMatch = normalized.match(SOURCE_TOKEN_PRESALE_PAYLOAD_PATTERN);
+  return String(handoffMatch?.[1] || normalized).toLowerCase();
 }
 
 function normalizeTokenForFamily(value) {

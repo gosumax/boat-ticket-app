@@ -9,6 +9,7 @@ import {
   normalizeTimestampSummary,
   TELEGRAM_BOOKING_REQUEST_GUEST_CANCEL_BEFORE_PREPAYMENT_EVENT_TYPE,
 } from './booking-request-lifecycle-shared.js';
+import { releaseLiveSeatHold } from './live-seat-hold-service.js';
 
 export const TELEGRAM_BOOKING_REQUEST_GUEST_CANCEL_BEFORE_PREPAYMENT_RESULT_VERSION =
   'telegram_booking_request_guest_cancel_before_prepayment_result.v1';
@@ -17,6 +18,10 @@ const ERROR_PREFIX = '[TELEGRAM_BOOKING_REQUEST_GUEST_CANCEL_BEFORE_PREPAYMENT]'
 const SERVICE_NAME =
   'telegram_booking_request_guest_cancel_before_prepayment_service';
 const FALLBACK_EVENT_SCAN_LIMIT = 10000;
+const ACTIVE_HOLD_EVENT_RESULT_PAYLOAD_KEYS = Object.freeze({
+  HOLD_STARTED: 'hold_activation_result',
+  HOLD_EXTENDED: 'hold_extension_result',
+});
 
 function rejectGuestCancel(message) {
   throw new Error(`${ERROR_PREFIX} ${message}`);
@@ -84,11 +89,12 @@ function normalizeCancelInput(input = {}) {
   });
 }
 
-function buildNoOpGuards() {
+function buildNoOpGuards({ seatHoldReleased = false } = {}) {
   return freezeSortedLifecycleValue({
     booking_hold_created: false,
     hold_extension_created: false,
     hold_expiry_created: false,
+    seat_hold_released: seatHoldReleased,
     guest_cancelled_before_prepayment: true,
     prepayment_confirmed: false,
     presale_created: false,
@@ -106,6 +112,7 @@ function buildCancelResult({
   projectionItem,
   normalizedInput,
   cancelledAt,
+  liveSeatReleaseSummary,
 }) {
   return freezeSortedLifecycleValue({
     response_version:
@@ -117,6 +124,7 @@ function buildCancelResult({
     requested_trip_slot_reference: projectionItem.requested_trip_slot_reference,
     requested_seats: projectionItem.requested_seats,
     cancel_timestamp_summary: normalizeTimestampSummary(cancelledAt),
+    live_seat_release_summary: liveSeatReleaseSummary || null,
     hold_active: false,
     request_active: false,
     dedupe_key: normalizedInput.dedupe_key,
@@ -139,12 +147,16 @@ function buildEventPayload({ normalizedInput, projectionItem, result }) {
     requested_trip_slot_reference: result.requested_trip_slot_reference,
     requested_seats: result.requested_seats,
     cancel_timestamp_summary: result.cancel_timestamp_summary,
+    live_seat_release_summary: result.live_seat_release_summary || null,
     hold_active: result.hold_active,
     request_active: result.request_active,
     dedupe_key: result.dedupe_key,
     idempotency_key: result.idempotency_key,
     cancel_signature: normalizedInput.cancel_signature,
-    no_op_guards: buildNoOpGuards(),
+    no_op_guards: buildNoOpGuards({
+      seatHoldReleased:
+        result.live_seat_release_summary?.release_applied === true,
+    }),
     guest_cancel_before_prepayment_result: result,
   });
 }
@@ -267,6 +279,48 @@ export class TelegramBookingRequestGuestCancelBeforePrepaymentService {
     return this.bookingHolds.findOneBy({ booking_request_id: bookingRequestId });
   }
 
+  listRequestEvents(bookingRequestId) {
+    return this.bookingRequestEvents.listBy(
+      { booking_request_id: bookingRequestId },
+      { orderBy: 'booking_request_event_id ASC', limit: 500 }
+    );
+  }
+
+  resolveLiveSeatHoldSummaryFromRequestEvents(bookingRequestId) {
+    const events = this.listRequestEvents(bookingRequestId);
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      const resultPayloadKey =
+        ACTIVE_HOLD_EVENT_RESULT_PAYLOAD_KEYS[event?.event_type] || null;
+      if (!resultPayloadKey) {
+        continue;
+      }
+      const payload = event?.event_payload?.[resultPayloadKey] || null;
+      if (!payload || typeof payload !== 'object') {
+        continue;
+      }
+      const liveSeatHoldSummary = payload.live_seat_hold_summary;
+      if (
+        liveSeatHoldSummary &&
+        typeof liveSeatHoldSummary === 'object' &&
+        liveSeatHoldSummary.seat_hold_applied === true
+      ) {
+        return freezeSortedLifecycleValue({
+          summary_type: normalizeString(liveSeatHoldSummary.summary_type),
+          seat_hold_applied: true,
+          slot_uid: normalizeString(liveSeatHoldSummary.slot_uid),
+          held_seats:
+            Number.isInteger(Number(liveSeatHoldSummary.held_seats)) &&
+            Number(liveSeatHoldSummary.held_seats) > 0
+              ? Number(liveSeatHoldSummary.held_seats)
+              : null,
+        });
+      }
+    }
+
+    return null;
+  }
+
   assertGuestOwnsRequest(projectionItem, normalizedInput) {
     if (
       projectionItem.telegram_user_summary.telegram_user_id !==
@@ -319,6 +373,9 @@ export class TelegramBookingRequestGuestCancelBeforePrepaymentService {
       this.assertCancellableLifecycleState(projectionItem);
 
       const cancelledAt = this.nowIso();
+      const liveSeatHoldSummary = this.resolveLiveSeatHoldSummaryFromRequestEvents(
+        projectionItem.booking_request_reference.booking_request_id
+      );
       const bookingRequest = this.bookingRequests.updateById(
         normalizedInput.booking_request_reference.booking_request_id,
         {
@@ -333,12 +390,35 @@ export class TelegramBookingRequestGuestCancelBeforePrepaymentService {
               hold_status: 'CANCELLED',
             })
           : existingHold;
+      const liveSeatReleaseSummary =
+        bookingHold &&
+        ['CANCELLED'].includes(bookingHold.hold_status) &&
+        liveSeatHoldSummary?.seat_hold_applied === true
+          ? releaseLiveSeatHold({
+              db: this.db,
+              requestedTripSlotReference:
+                projectionItem.requested_trip_slot_reference,
+              requestedSeats:
+                liveSeatHoldSummary.held_seats || projectionItem.requested_seats,
+              errorPrefix: ERROR_PREFIX,
+              releasedAt: cancelledAt,
+            })
+          : freezeSortedLifecycleValue({
+              summary_type: liveSeatHoldSummary?.summary_type || null,
+              seat_hold_applied: false,
+              slot_uid:
+                projectionItem.requested_trip_slot_reference?.slot_uid || null,
+              held_seats: 0,
+              released_seats: 0,
+              release_applied: false,
+            });
       const result = buildCancelResult({
         bookingRequest,
         bookingHold,
         projectionItem,
         normalizedInput,
         cancelledAt,
+        liveSeatReleaseSummary,
       });
 
       this.bookingRequestEvents.create({

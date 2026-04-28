@@ -8,6 +8,10 @@ import {
   buildTelegramMiniAppLaunchReadinessSummary,
   resolveTelegramRuntimeConfig,
 } from './runtime-config.mjs';
+import {
+  buildBuyerTicketReferenceSummary,
+  buildDispatcherBoardingQrSummary,
+} from '../ticketing/buyer-ticket-reference.mjs';
 
 export const TELEGRAM_MINI_APP_HTTP_ROUTE_RESULT_VERSION =
   'telegram_mini_app_http_route_result.v1';
@@ -16,6 +20,8 @@ export const TELEGRAM_MINI_APP_TICKET_LIST_RESULT_VERSION =
   'telegram_mini_app_guest_ticket_list.v1';
 export const TELEGRAM_MINI_APP_MY_REQUESTS_RESULT_VERSION =
   'telegram_mini_app_guest_my_requests.v1';
+export const TELEGRAM_MINI_APP_NEUTRAL_TICKET_NOT_FOUND_MESSAGE =
+  'Билет не найден. Проверьте номер или откройте билет по ссылке из Telegram.';
 
 function normalizeString(value) {
   const normalized = String(value ?? '').trim();
@@ -220,6 +226,379 @@ function parseBooleanInput(value) {
   throw new Error('only_active_bookable must be boolean');
 }
 
+const FALLBACK_TICKET_READY_STATUSES = new Set([
+  'ACTIVE',
+  'READY',
+  'TICKET_READY',
+  'BOARDING_READY',
+  'REMINDER_SENT',
+  'PAID',
+  'UNPAID',
+  'RESERVED',
+  'PARTIALLY_PAID',
+  'CONFIRMED',
+]);
+const FALLBACK_TICKET_COMPLETED_STATUSES = new Set(['USED', 'COMPLETED', 'BOARDED']);
+const FALLBACK_TICKET_UNAVAILABLE_STATUSES = new Set([
+  'CANCELLED',
+  'VOID',
+  'REFUNDED',
+  'DELETED',
+  'EXPIRED',
+]);
+const FALLBACK_CANCELLED_PRESALE_STATUSES = new Set([
+  'CANCELLED',
+  'EXPIRED',
+  'VOID',
+  'DELETED',
+]);
+
+function resolveCanonicalPresaleFallbackTicketState({
+  canonicalPresaleStatus = null,
+  ticketStatuses = [],
+} = {}) {
+  const normalizedPresaleStatus = normalizeString(canonicalPresaleStatus)?.toUpperCase();
+  if (
+    normalizedPresaleStatus &&
+    FALLBACK_CANCELLED_PRESALE_STATUSES.has(normalizedPresaleStatus)
+  ) {
+    return 'linked_ticket_cancelled_or_unavailable';
+  }
+
+  const normalizedTicketStatuses = Array.isArray(ticketStatuses)
+    ? ticketStatuses
+        .map((status) => normalizeString(status)?.toUpperCase())
+        .filter(Boolean)
+    : [];
+  if (normalizedTicketStatuses.some((status) => FALLBACK_TICKET_READY_STATUSES.has(status))) {
+    return 'linked_ticket_ready';
+  }
+  if (normalizedTicketStatuses.some((status) => FALLBACK_TICKET_COMPLETED_STATUSES.has(status))) {
+    return 'linked_ticket_completed';
+  }
+  if (
+    normalizedTicketStatuses.length > 0 &&
+    normalizedTicketStatuses.every((status) => FALLBACK_TICKET_UNAVAILABLE_STATUSES.has(status))
+  ) {
+    return 'linked_ticket_cancelled_or_unavailable';
+  }
+
+  return 'no_ticket_yet';
+}
+
+function resolveCanonicalPresaleFallbackAvailabilityState(ticketState) {
+  if (ticketState === 'linked_ticket_ready') {
+    return 'available';
+  }
+  if (ticketState === 'linked_ticket_completed') {
+    return 'completed';
+  }
+  if (ticketState === 'linked_ticket_cancelled_or_unavailable') {
+    return 'unavailable';
+  }
+  return 'not_available_yet';
+}
+
+function safeReadCanonicalPresaleRow(db, canonicalPresaleId) {
+  if (!db?.prepare) {
+    return null;
+  }
+  try {
+    return db
+      .prepare('SELECT * FROM presales WHERE id = ?')
+      .get(canonicalPresaleId);
+  } catch {
+    return null;
+  }
+}
+
+function safeResolveCanonicalTripDateTimeSummary(db, canonicalPresaleSummary = null) {
+  const presale = canonicalPresaleSummary?.presale || null;
+  const fallbackDate = normalizeString(presale?.business_day);
+  const fallbackTime = null;
+  if (!db?.prepare || !presale) {
+    return freezeSortedResultValue({
+      requested_trip_date: fallbackDate,
+      requested_time_slot: fallbackTime,
+      canonical_business_day: fallbackDate,
+      trip_starts_at_summary: buildTelegramLatestTimestampSummary(null),
+    });
+  }
+
+  let tripDate = null;
+  let tripTime = null;
+  const slotUid = normalizeString(presale.slot_uid);
+  if (slotUid?.startsWith('generated:')) {
+    const generatedSlotId = Number(slotUid.slice('generated:'.length));
+    if (Number.isInteger(generatedSlotId) && generatedSlotId > 0) {
+      try {
+        const generatedRow = db
+          .prepare('SELECT trip_date, time FROM generated_slots WHERE id = ?')
+          .get(generatedSlotId);
+        tripDate = normalizeString(generatedRow?.trip_date);
+        tripTime = normalizeString(generatedRow?.time);
+      } catch {
+        // ignore generated slot lookup failures
+      }
+    }
+  }
+
+  if (!tripDate || !tripTime) {
+    const boatSlotId = Number(presale.boat_slot_id);
+    if (Number.isInteger(boatSlotId) && boatSlotId > 0) {
+      try {
+        const slotRow = db
+          .prepare('SELECT trip_date, time FROM boat_slots WHERE id = ?')
+          .get(boatSlotId);
+        tripDate = tripDate || normalizeString(slotRow?.trip_date);
+        tripTime = tripTime || normalizeString(slotRow?.time);
+      } catch {
+        // ignore legacy slot lookup failures
+      }
+    }
+  }
+
+  const requestedTripDate = tripDate || fallbackDate;
+  const requestedTimeSlot = tripTime || fallbackTime;
+  let tripStartsAtIso = null;
+  if (requestedTripDate && requestedTimeSlot) {
+    const parsed = Date.parse(`${requestedTripDate}T${requestedTimeSlot}:00.000Z`);
+    tripStartsAtIso = Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+  }
+
+  return freezeSortedResultValue({
+    requested_trip_date: requestedTripDate,
+    requested_time_slot: requestedTimeSlot,
+    canonical_business_day: fallbackDate,
+    trip_starts_at_summary: buildTelegramLatestTimestampSummary(tripStartsAtIso),
+  });
+}
+
+function safeResolveCanonicalSellerContactSummary(db, canonicalPresaleRow = null) {
+  if (!db?.prepare || !canonicalPresaleRow || typeof canonicalPresaleRow !== 'object') {
+    return null;
+  }
+
+  const sellerIdCandidates = [
+    canonicalPresaleRow.sold_by_user_id,
+    canonicalPresaleRow.seller_id,
+    canonicalPresaleRow.created_by_user_id,
+    canonicalPresaleRow.user_id,
+  ];
+  const sellerId = sellerIdCandidates
+    .map((value) => Number(value))
+    .find((value) => Number.isInteger(value) && value > 0);
+  if (!sellerId) {
+    return null;
+  }
+
+  try {
+    const sellerRow = db
+      .prepare('SELECT * FROM users WHERE id = ?')
+      .get(sellerId);
+    if (!sellerRow) {
+      return null;
+    }
+    const sellerDisplayName =
+      normalizeString(sellerRow.public_display_name) ||
+      normalizeString(sellerRow.display_name) ||
+      normalizeString(sellerRow.username) ||
+      `Продавец #${sellerId}`;
+    const sellerPhone =
+      normalizeString(sellerRow.public_phone_e164) ||
+      normalizeString(sellerRow.phone_e164) ||
+      normalizeString(sellerRow.phone) ||
+      null;
+
+    return freezeSortedResultValue({
+      seller_user_id: sellerId,
+      seller_display_name: sellerDisplayName,
+      seller_phone_e164: sellerPhone,
+      seller_contact_available: Boolean(sellerPhone),
+    });
+  } catch {
+    return null;
+  }
+}
+
+function buildCanonicalPresaleOnlyTicketViewProjection({
+  repositories,
+  services,
+  telegramUserId,
+  canonicalPresaleId,
+  nowIso,
+}) {
+  const ticketProjectionService = services?.guestTicketViewProjectionService;
+  if (!ticketProjectionService) {
+    throw new Error('[TELEGRAM_MINI_APP_ROUTE] guestTicketViewProjectionService is required');
+  }
+
+  const canonicalPresaleSummary = ticketProjectionService.readCanonicalPresaleSummary(
+    canonicalPresaleId
+  );
+  if (!canonicalPresaleSummary?.presale) {
+    throw new Error(`Canonical presale not found: ${canonicalPresaleId}`);
+  }
+  const canonicalTicketSummary = ticketProjectionService.readCanonicalTicketSummary(
+    canonicalPresaleId
+  );
+  const ticketIds = Array.isArray(canonicalTicketSummary?.tickets)
+    ? canonicalTicketSummary.tickets
+        .map((ticket) => Number(ticket?.id))
+        .filter((ticketId) => Number.isInteger(ticketId) && ticketId > 0)
+    : [];
+  const ticketStatuses = Array.isArray(canonicalTicketSummary?.tickets)
+    ? canonicalTicketSummary.tickets.map((ticket) => ticket?.status)
+    : [];
+  const ticketState = resolveCanonicalPresaleFallbackTicketState({
+    canonicalPresaleStatus: canonicalPresaleSummary?.presale?.status,
+    ticketStatuses,
+  });
+  const ticketAvailabilityState = resolveCanonicalPresaleFallbackAvailabilityState(ticketState);
+  const buyerTicketReferenceSummary = buildBuyerTicketReferenceSummary({
+    canonicalPresaleId,
+    canonicalTicketIds: ticketIds,
+  });
+  const boardingQrPayloadSummary =
+    ticketState === 'linked_ticket_ready'
+      ? buildDispatcherBoardingQrSummary({
+          canonicalPresaleId,
+          canonicalTicketIds: ticketIds,
+          buyerTicketCode: buyerTicketReferenceSummary?.buyer_ticket_code || null,
+        })
+      : null;
+
+  const db =
+    repositories?.bookingRequests?.db ||
+    repositories?.guestProfiles?.db ||
+    services?.guestTicketViewProjectionService?.db ||
+    null;
+  const canonicalPresaleRow = safeReadCanonicalPresaleRow(db, canonicalPresaleId);
+  const dateTimeSummary = safeResolveCanonicalTripDateTimeSummary(
+    db,
+    canonicalPresaleSummary
+  );
+  const sellerContactSummary = safeResolveCanonicalSellerContactSummary(
+    db,
+    canonicalPresaleRow
+  );
+  const preferredContactPhone = normalizeString(
+    canonicalPresaleSummary?.presale?.customer_phone
+  );
+  const statusCountsMap = new Map();
+  for (const status of ticketStatuses) {
+    const normalized = normalizeString(status)?.toUpperCase();
+    if (!normalized) {
+      continue;
+    }
+    statusCountsMap.set(normalized, (statusCountsMap.get(normalized) || 0) + 1);
+  }
+  const statusCounts = Array.from(statusCountsMap.entries()).map(([status, count]) =>
+    freezeSortedResultValue({ status, count })
+  );
+
+  return freezeSortedResultValue({
+    response_version: 'telegram_guest_ticket_view_projection.v1',
+    projection_item_type: 'telegram_guest_ticket_view_projection_item',
+    read_only: true,
+    projection_only: true,
+    projected_by: TELEGRAM_MINI_APP_HTTP_ROUTE_NAME,
+    telegram_user_summary: {
+      reference_type: 'telegram_user',
+      telegram_user_id: normalizeString(telegramUserId),
+    },
+    booking_request_reference: null,
+    linked_canonical_presale_reference: {
+      reference_type: 'canonical_presale',
+      presale_id: canonicalPresaleId,
+    },
+    ticket_status_summary: {
+      deterministic_ticket_state: ticketState,
+      booking_request_status: null,
+      latest_timeline_ticket_status: null,
+      canonical_linkage_status: 'canonical_presale_only',
+      canonical_presale_status: normalizeString(canonicalPresaleSummary?.presale?.status),
+      canonical_ticket_read_status: normalizeString(canonicalTicketSummary?.read_status),
+      canonical_ticket_status_summary: {
+        read_status: normalizeString(canonicalTicketSummary?.read_status) || 'readable',
+        total_count: ticketIds.length,
+        status_counts: statusCounts,
+      },
+    },
+    trip_slot_summary: {
+      requested_trip_slot_reference: {
+        reference_type: 'telegram_requested_trip_slot_reference',
+        requested_trip_date: dateTimeSummary?.requested_trip_date || null,
+        requested_time_slot: dateTimeSummary?.requested_time_slot || null,
+        slot_uid: normalizeString(canonicalPresaleSummary?.presale?.slot_uid),
+        boat_slot_id: Number(canonicalPresaleSummary?.presale?.boat_slot_id) || null,
+      },
+      canonical_trip_linkage_summary: null,
+    },
+    date_time_summary: dateTimeSummary,
+    seats_count_summary: {
+      requested_seats: Number(canonicalPresaleSummary?.presale?.number_of_seats) || null,
+      canonical_presale_seats: Number(canonicalPresaleSummary?.presale?.number_of_seats) || null,
+      linked_ticket_count: ticketIds.length,
+    },
+    payment_summary: {
+      read_status: 'readable',
+      currency: 'RUB',
+      total_price: Number(canonicalPresaleSummary?.presale?.total_price) || 0,
+      prepayment_amount: Number(canonicalPresaleSummary?.presale?.prepayment_amount) || 0,
+      remaining_payment_amount: Math.max(
+        Math.max(Number(canonicalPresaleSummary?.presale?.total_price) || 0, 0) -
+          Math.max(Number(canonicalPresaleSummary?.presale?.prepayment_amount) || 0, 0),
+        0
+      ),
+    },
+    hold_status_summary: null,
+    contact_summary: preferredContactPhone
+      ? {
+          booking_contact_phone_e164: null,
+          guest_profile_phone_e164: null,
+          canonical_customer_phone_e164: preferredContactPhone,
+          preferred_contact_phone_e164: preferredContactPhone,
+        }
+      : null,
+    seller_contact_summary: sellerContactSummary,
+    buyer_ticket_reference_summary: buyerTicketReferenceSummary,
+    boarding_qr_payload_summary: boardingQrPayloadSummary,
+    ticket_availability_state: ticketAvailabilityState,
+    latest_timestamp_summary: buildTelegramLatestTimestampSummary(
+      nowIso,
+      canonicalPresaleSummary?.presale?.updated_at,
+      canonicalPresaleSummary?.presale?.created_at
+    ),
+  });
+}
+
+function readTicketViewByCanonicalPresaleReferenceOrFallback({
+  repositories,
+  services,
+  telegramUserId,
+  canonicalPresaleId,
+  nowIso,
+}) {
+  try {
+    return services.guestTicketViewProjectionService.readGuestTicketViewByCanonicalPresaleReference(
+      canonicalPresaleId
+    );
+  } catch (error) {
+    const message = normalizeString(error?.message) || '';
+    if (!message.includes('not linked to Telegram booking request')) {
+      throw error;
+    }
+    return buildCanonicalPresaleOnlyTicketViewProjection({
+      repositories,
+      services,
+      telegramUserId,
+      canonicalPresaleId,
+      nowIso,
+    });
+  }
+}
+
 function sortResultValue(value) {
   if (Array.isArray(value)) {
     return value.map((item) => sortResultValue(item));
@@ -268,20 +647,371 @@ function resolveTelegramUserIdOrThrow(input = {}, options = {}) {
   return telegramUserId;
 }
 
-function resolveGuestProfileByTelegramUserIdOrThrow({ repositories, telegramUserId }) {
+function resolveGuestProfileByTelegramUserId({ repositories, telegramUserId }) {
   const guestProfiles = repositories?.guestProfiles;
   if (!guestProfiles?.findOneBy) {
+    return null;
+  }
+  return (
+    guestProfiles.findOneBy(
+      { telegram_user_id: telegramUserId },
+      { orderBy: 'guest_profile_id ASC' }
+    ) || null
+  );
+}
+
+function resolveGuestProfileByTelegramUserIdOrThrow({ repositories, telegramUserId }) {
+  const guestProfile = resolveGuestProfileByTelegramUserId({
+    repositories,
+    telegramUserId,
+  });
+  if (!repositories?.guestProfiles?.findOneBy) {
     throw new Error('[TELEGRAM_MINI_APP_ROUTE] guestProfiles repository is required');
   }
-
-  const guestProfile = guestProfiles.findOneBy(
-    { telegram_user_id: telegramUserId },
-    { orderBy: 'guest_profile_id ASC' }
-  );
   if (!guestProfile) {
     throw new Error(`No valid Telegram guest identity for telegram_user_id: ${telegramUserId}`);
   }
   return guestProfile;
+}
+
+function resolveMiniAppPersistenceDb(repositories) {
+  return repositories?.bookingRequests?.db || repositories?.guestProfiles?.db || null;
+}
+
+function hasMiniAppGuestCanonicalTicketLinksTable(db) {
+  if (!db?.prepare) {
+    return false;
+  }
+  try {
+    const row = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'telegram_guest_canonical_ticket_links'"
+      )
+      .get();
+    return Boolean(row?.name);
+  } catch {
+    return false;
+  }
+}
+
+function trackMiniAppGuestCanonicalTicketLink({
+  repositories,
+  guestProfileId,
+  canonicalPresaleId,
+  viewedAtIso,
+}) {
+  const normalizedGuestProfileId = Number(guestProfileId);
+  const normalizedCanonicalPresaleId = Number(canonicalPresaleId);
+  if (
+    !Number.isInteger(normalizedGuestProfileId) ||
+    normalizedGuestProfileId <= 0 ||
+    !Number.isInteger(normalizedCanonicalPresaleId) ||
+    normalizedCanonicalPresaleId <= 0
+  ) {
+    return false;
+  }
+
+  const db = resolveMiniAppPersistenceDb(repositories);
+  if (!hasMiniAppGuestCanonicalTicketLinksTable(db)) {
+    return false;
+  }
+  const normalizedViewedAtIso = normalizeString(viewedAtIso);
+  const persistedViewedAtIso =
+    normalizedViewedAtIso && !Number.isNaN(Date.parse(normalizedViewedAtIso))
+      ? normalizedViewedAtIso
+      : new Date().toISOString();
+
+  try {
+    db.prepare(
+      `
+        INSERT INTO telegram_guest_canonical_ticket_links (
+          guest_profile_id,
+          canonical_presale_id,
+          first_viewed_at,
+          last_viewed_at
+        )
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(guest_profile_id, canonical_presale_id)
+        DO UPDATE SET
+          last_viewed_at = excluded.last_viewed_at
+      `
+    ).run(
+      normalizedGuestProfileId,
+      normalizedCanonicalPresaleId,
+      persistedViewedAtIso,
+      persistedViewedAtIso
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readMiniAppCanonicalTicketOwnerLink({
+  repositories,
+  canonicalPresaleId,
+}) {
+  const normalizedCanonicalPresaleId = Number(canonicalPresaleId);
+  if (!Number.isInteger(normalizedCanonicalPresaleId) || normalizedCanonicalPresaleId <= 0) {
+    return null;
+  }
+
+  const db = resolveMiniAppPersistenceDb(repositories);
+  if (!hasMiniAppGuestCanonicalTicketLinksTable(db)) {
+    return null;
+  }
+
+  try {
+    const row = db
+      .prepare(
+        `
+          SELECT
+            guest_profile_id,
+            canonical_presale_id,
+            first_viewed_at,
+            last_viewed_at
+          FROM telegram_guest_canonical_ticket_links
+          WHERE canonical_presale_id = ?
+          ORDER BY COALESCE(first_viewed_at, last_viewed_at) ASC,
+                   guest_canonical_ticket_link_id ASC
+          LIMIT 1
+        `
+      )
+      .get(normalizedCanonicalPresaleId);
+    if (!row) {
+      return null;
+    }
+
+    const ownerGuestProfileId = Number(row.guest_profile_id);
+    if (!Number.isInteger(ownerGuestProfileId) || ownerGuestProfileId <= 0) {
+      return null;
+    }
+
+    return freezeSortedResultValue({
+      guest_profile_id: ownerGuestProfileId,
+      canonical_presale_id: normalizedCanonicalPresaleId,
+      first_viewed_at: normalizeString(row.first_viewed_at),
+      last_viewed_at: normalizeString(row.last_viewed_at),
+    });
+  } catch {
+    return null;
+  }
+}
+
+function listMiniAppGuestCanonicalTicketLinks({
+  repositories,
+  guestProfileId,
+  limit = 20,
+}) {
+  const normalizedGuestProfileId = Number(guestProfileId);
+  if (!Number.isInteger(normalizedGuestProfileId) || normalizedGuestProfileId <= 0) {
+    return [];
+  }
+  const normalizedLimit = Number(limit);
+  const resolvedLimit =
+    Number.isInteger(normalizedLimit) && normalizedLimit > 0
+      ? Math.min(normalizedLimit, 200)
+      : 20;
+
+  const db = resolveMiniAppPersistenceDb(repositories);
+  if (!hasMiniAppGuestCanonicalTicketLinksTable(db)) {
+    return [];
+  }
+
+  try {
+    return db
+      .prepare(
+        `
+          SELECT
+            canonical_presale_id,
+            first_viewed_at,
+            last_viewed_at
+          FROM telegram_guest_canonical_ticket_links
+          WHERE guest_profile_id = ?
+          ORDER BY COALESCE(last_viewed_at, first_viewed_at) DESC,
+                   guest_canonical_ticket_link_id DESC
+          LIMIT ?
+        `
+      )
+      .all(normalizedGuestProfileId, resolvedLimit)
+      .map((row) =>
+        freezeSortedResultValue({
+          canonical_presale_id:
+            Number.isInteger(Number(row?.canonical_presale_id)) &&
+            Number(row.canonical_presale_id) > 0
+              ? Number(row.canonical_presale_id)
+              : null,
+          first_viewed_at: normalizeString(row?.first_viewed_at),
+          last_viewed_at: normalizeString(row?.last_viewed_at),
+        })
+      )
+      .filter((row) => Number.isInteger(row.canonical_presale_id) && row.canonical_presale_id > 0);
+  } catch {
+    return [];
+  }
+}
+
+function resolveMiniAppTicketSourceToken(query = {}) {
+  return normalizeString(query.source_token ?? query.sourceToken);
+}
+
+function isMiniAppSourceRegistryTokenTrusted({ repositories, sourceToken }) {
+  const normalizedSourceToken = normalizeString(sourceToken);
+  if (!normalizedSourceToken) {
+    return false;
+  }
+
+  const sourceRegistryItems = repositories?.sourceRegistryItems;
+  if (!sourceRegistryItems?.findOneBy) {
+    return false;
+  }
+
+  const sourceRegistryItem = sourceRegistryItems.findOneBy(
+    { source_token: normalizedSourceToken },
+    { orderBy: 'source_registry_item_id ASC' }
+  );
+  if (!sourceRegistryItem) {
+    return false;
+  }
+
+  if (sourceRegistryItem.is_enabled === null || sourceRegistryItem.is_enabled === undefined) {
+    return true;
+  }
+  return Number(sourceRegistryItem.is_enabled) === 1;
+}
+
+function isMiniAppSourceQrTokenTrusted({ repositories, sourceToken }) {
+  const normalizedSourceToken = normalizeString(sourceToken);
+  if (!normalizedSourceToken) {
+    return false;
+  }
+
+  const sourceQRCodes = repositories?.sourceQRCodes;
+  if (!sourceQRCodes?.findOneBy) {
+    return false;
+  }
+
+  const sourceQrCode = sourceQRCodes.findOneBy(
+    { qr_token: normalizedSourceToken },
+    { orderBy: 'source_qr_code_id ASC' }
+  );
+  if (!sourceQrCode) {
+    return false;
+  }
+
+  if (sourceQrCode.is_active === null || sourceQrCode.is_active === undefined) {
+    return true;
+  }
+  return Number(sourceQrCode.is_active) === 1;
+}
+
+function isMiniAppSourceTokenTrusted({ repositories, sourceToken }) {
+  return (
+    isMiniAppSourceRegistryTokenTrusted({ repositories, sourceToken }) ||
+    isMiniAppSourceQrTokenTrusted({ repositories, sourceToken })
+  );
+}
+
+function rejectMiniAppTicketNotFound() {
+  throw new Error(TELEGRAM_MINI_APP_NEUTRAL_TICKET_NOT_FOUND_MESSAGE);
+}
+
+function assertMiniAppGuestOwnsCanonicalTicketOrBindWithTrustedSourceOrThrow({
+  repositories,
+  guestProfileId,
+  canonicalPresaleId,
+  sourceToken = null,
+  nowIso,
+}) {
+  const normalizedGuestProfileId = Number(guestProfileId);
+  const normalizedCanonicalPresaleId = Number(canonicalPresaleId);
+  if (
+    !Number.isInteger(normalizedGuestProfileId) ||
+    normalizedGuestProfileId <= 0 ||
+    !Number.isInteger(normalizedCanonicalPresaleId) ||
+    normalizedCanonicalPresaleId <= 0
+  ) {
+    rejectMiniAppTicketNotFound();
+  }
+
+  const ownerLink = readMiniAppCanonicalTicketOwnerLink({
+    repositories,
+    canonicalPresaleId: normalizedCanonicalPresaleId,
+  });
+  if (ownerLink?.guest_profile_id) {
+    if (Number(ownerLink.guest_profile_id) !== normalizedGuestProfileId) {
+      rejectMiniAppTicketNotFound();
+    }
+    trackMiniAppGuestCanonicalTicketLink({
+      repositories,
+      guestProfileId: normalizedGuestProfileId,
+      canonicalPresaleId: normalizedCanonicalPresaleId,
+      viewedAtIso: nowIso,
+    });
+    return;
+  }
+
+  if (!isMiniAppSourceTokenTrusted({ repositories, sourceToken })) {
+    rejectMiniAppTicketNotFound();
+  }
+
+  const tracked = trackMiniAppGuestCanonicalTicketLink({
+    repositories,
+    guestProfileId: normalizedGuestProfileId,
+    canonicalPresaleId: normalizedCanonicalPresaleId,
+    viewedAtIso: nowIso,
+  });
+  if (!tracked) {
+    rejectMiniAppTicketNotFound();
+  }
+
+  const ownerLinkAfterBind = readMiniAppCanonicalTicketOwnerLink({
+    repositories,
+    canonicalPresaleId: normalizedCanonicalPresaleId,
+  });
+  if (Number(ownerLinkAfterBind?.guest_profile_id) !== normalizedGuestProfileId) {
+    rejectMiniAppTicketNotFound();
+  }
+}
+
+function compareMiniAppTicketItemsByRecency(left, right) {
+  const leftLatestIso = normalizeString(left?.latest_timestamp_summary?.iso);
+  const rightLatestIso = normalizeString(right?.latest_timestamp_summary?.iso);
+  const leftTime = leftLatestIso && !Number.isNaN(Date.parse(leftLatestIso))
+    ? Date.parse(leftLatestIso)
+    : 0;
+  const rightTime = rightLatestIso && !Number.isNaN(Date.parse(rightLatestIso))
+    ? Date.parse(rightLatestIso)
+    : 0;
+  if (leftTime !== rightTime) {
+    return rightTime - leftTime;
+  }
+
+  const leftBookingRequestId = Number(left?.booking_request_reference?.booking_request_id);
+  const rightBookingRequestId = Number(right?.booking_request_reference?.booking_request_id);
+  if (
+    Number.isInteger(leftBookingRequestId) &&
+    leftBookingRequestId > 0 &&
+    Number.isInteger(rightBookingRequestId) &&
+    rightBookingRequestId > 0 &&
+    leftBookingRequestId !== rightBookingRequestId
+  ) {
+    return rightBookingRequestId - leftBookingRequestId;
+  }
+
+  const leftCanonicalPresaleId = Number(left?.linked_canonical_presale_reference?.presale_id);
+  const rightCanonicalPresaleId = Number(right?.linked_canonical_presale_reference?.presale_id);
+  if (
+    Number.isInteger(leftCanonicalPresaleId) &&
+    leftCanonicalPresaleId > 0 &&
+    Number.isInteger(rightCanonicalPresaleId) &&
+    rightCanonicalPresaleId > 0 &&
+    leftCanonicalPresaleId !== rightCanonicalPresaleId
+  ) {
+    return rightCanonicalPresaleId - leftCanonicalPresaleId;
+  }
+
+  return 0;
 }
 
 const MINI_APP_ACTIVE_HOLD_EVENT_TYPES = Object.freeze({
@@ -388,6 +1118,60 @@ function expireMiniAppStaleActiveRequestsForGuest({
   return freezeSortedResultValue({
     normalized_count: expiredBookingRequestIds.length,
     expired_booking_request_ids: expiredBookingRequestIds,
+  });
+}
+
+function repairMiniAppConfirmedPrepaymentRequestsForGuest({
+  repositories,
+  services,
+  telegramUserId,
+  nowIso,
+}) {
+  const repairService = services?.confirmedPrepaymentTicketRepairService;
+  if (!repairService?.repairConfirmedPrepaymentRequestsForGuestProfile) {
+    throw new Error(
+      '[TELEGRAM_MINI_APP_ROUTE] confirmed prepayment repair service is required'
+    );
+  }
+
+  const guestProfile = resolveGuestProfileByTelegramUserIdOrThrow({
+    repositories,
+    telegramUserId,
+  });
+
+  return repairService.repairConfirmedPrepaymentRequestsForGuestProfile(
+    guestProfile.guest_profile_id,
+    {
+      actorType: 'system',
+      actorId: TELEGRAM_MINI_APP_HTTP_ROUTE_NAME,
+      nowIso,
+    }
+  );
+}
+
+function normalizeMiniAppGuestRequestsForGuest({
+  repositories,
+  services,
+  telegramUserId,
+  nowIso,
+}) {
+  const staleHoldNormalization = expireMiniAppStaleActiveRequestsForGuest({
+    repositories,
+    services,
+    telegramUserId,
+    nowIso,
+  });
+  const confirmedPrepaymentRepair =
+    repairMiniAppConfirmedPrepaymentRequestsForGuest({
+      repositories,
+      services,
+      telegramUserId,
+      nowIso,
+    });
+
+  return freezeSortedResultValue({
+    stale_hold_normalization: staleHoldNormalization,
+    confirmed_prepayment_repair: confirmedPrepaymentRepair,
   });
 }
 
@@ -530,6 +1314,14 @@ function buildRouteResult({
 function buildErrorRouteResponse(error, { routeOperationType, nowIso }) {
   const message = normalizeString(error?.message) || 'internal_error';
 
+  if (message === TELEGRAM_MINI_APP_NEUTRAL_TICKET_NOT_FOUND_MESSAGE) {
+    return {
+      httpStatus: 404,
+      routeStatus: 'rejected_not_found',
+      routeOperationType,
+      rejectionReason: message,
+    };
+  }
   if (message.includes('requires a SQLite persistence context')) {
     return {
       httpStatus: 500,
@@ -549,7 +1341,9 @@ function buildErrorRouteResponse(error, { routeOperationType, nowIso }) {
   if (
     message.includes('Invalid booking request reference') ||
     message.includes('Telegram guest has no booking requests') ||
-    message.includes('Guest profile not found')
+    message.includes('Guest profile not found') ||
+    message.includes('Canonical presale not found') ||
+    message.includes('canonical_presale_missing')
   ) {
     return {
       httpStatus: 404,
@@ -734,11 +1528,132 @@ function extractBookingRequestId(item) {
   return bookingRequestId;
 }
 
+function extractCanonicalPresaleId(item) {
+  const presaleId = Number(item?.linked_canonical_presale_reference?.presale_id);
+  return Number.isInteger(presaleId) && presaleId > 0 ? presaleId : null;
+}
+
+function normalizeSignaturePart(value) {
+  const normalized = normalizeString(value);
+  return normalized || '';
+}
+
+function extractTicketItemPurchaseSignature(item) {
+  const requestedTripDate = normalizeSignaturePart(
+    item?.date_time_summary?.requested_trip_date ||
+      item?.trip_slot_summary?.requested_trip_slot_reference?.requested_trip_date
+  );
+  const requestedTimeSlot = normalizeSignaturePart(
+    item?.date_time_summary?.requested_time_slot ||
+      item?.trip_slot_summary?.requested_trip_slot_reference?.requested_time_slot
+  );
+  const requestedSeats = Number(
+    item?.seats_count_summary?.requested_seats ??
+      item?.seats_count_summary?.canonical_presale_seats
+  );
+  const contactPhone = normalizeSignaturePart(
+    item?.contact_summary?.preferred_contact_phone_e164 ||
+      item?.contact_summary?.canonical_customer_phone_e164 ||
+      item?.contact_summary?.booking_contact_phone_e164
+  );
+
+  if (!requestedTripDate || !requestedTimeSlot || !Number.isInteger(requestedSeats)) {
+    return null;
+  }
+
+  return [
+    requestedTripDate,
+    requestedTimeSlot,
+    requestedSeats,
+    contactPhone,
+  ].join('|');
+}
+
+function isReadyMiniAppTicketItem(item) {
+  const deterministicState = normalizeString(
+    item?.ticket_status_summary?.deterministic_ticket_state
+  );
+  const availabilityState = normalizeString(item?.ticket_availability_state);
+  return (
+    deterministicState === 'linked_ticket_ready' ||
+    deterministicState === 'linked_ticket_completed' ||
+    availabilityState === 'available' ||
+    availabilityState === 'completed'
+  );
+}
+
+function isStaleMiniAppRequestTicketItem(item) {
+  if (extractCanonicalPresaleId(item)) {
+    return false;
+  }
+  const deterministicState = normalizeString(
+    item?.ticket_status_summary?.deterministic_ticket_state
+  );
+  const bookingRequestStatus = normalizeString(
+    item?.ticket_status_summary?.booking_request_status
+  );
+
+  return (
+    deterministicState === 'no_ticket_yet' ||
+    deterministicState === 'request_created' ||
+    bookingRequestStatus === 'NEW' ||
+    bookingRequestStatus === 'ATTRIBUTED' ||
+    bookingRequestStatus === 'CONTACT_IN_PROGRESS' ||
+    bookingRequestStatus === 'HOLD_ACTIVE' ||
+    bookingRequestStatus === 'WAITING_PREPAYMENT' ||
+    bookingRequestStatus === 'PREPAYMENT_CONFIRMED'
+  );
+}
+
+function groupItemsByPurchaseSignature(items, predicate) {
+  const groups = new Map();
+  items.forEach((item, index) => {
+    if (!predicate(item)) {
+      return;
+    }
+    const signature = extractTicketItemPurchaseSignature(item);
+    if (!signature) {
+      return;
+    }
+    const existing = groups.get(signature) || [];
+    existing.push({ item, index });
+    groups.set(signature, existing);
+  });
+  return groups;
+}
+
+function mergeMiniAppFulfilledTicketItems(items = []) {
+  const safeItems = Array.isArray(items) ? items : [];
+  const readyBySignature = groupItemsByPurchaseSignature(
+    safeItems,
+    isReadyMiniAppTicketItem
+  );
+  const staleBySignature = groupItemsByPurchaseSignature(
+    safeItems,
+    isStaleMiniAppRequestTicketItem
+  );
+  const staleIndexesToSuppress = new Set();
+
+  for (const [signature, staleMatches] of staleBySignature.entries()) {
+    const readyMatches = readyBySignature.get(signature) || [];
+    if (readyMatches.length === 1 && staleMatches.length === 1) {
+      staleIndexesToSuppress.add(staleMatches[0].index);
+    }
+  }
+
+  if (staleIndexesToSuppress.size === 0) {
+    return safeItems;
+  }
+
+  return safeItems.filter((_, index) => !staleIndexesToSuppress.has(index));
+}
+
 function buildMiniAppMyRequestsReadModel({
   services,
   telegramUserId,
   limit = 20,
   nowIso,
+  profileView = null,
 }) {
   const lifecycleList =
     services.bookingRequestLifecycleProjectionService.listBookingRequestsForGuest({
@@ -750,11 +1665,13 @@ function buildMiniAppMyRequestsReadModel({
       limit,
     });
   const lifecycleItems = Array.isArray(lifecycleList.items) ? lifecycleList.items : [];
-  const profileView = services.guestProfileService.readGuestProfileView({
-    telegram_user_id: telegramUserId,
-  });
+  const resolvedProfileView =
+    profileView ||
+    services.guestProfileService.readGuestProfileView({
+      telegram_user_id: telegramUserId,
+    });
   const stateBuckets = normalizeMiniAppStateBuckets(
-    profileView?.timeline_projection?.state_buckets || {}
+    resolvedProfileView?.timeline_projection?.state_buckets || {}
   );
 
   const completedBucketIds = new Set(
@@ -776,14 +1693,14 @@ function buildMiniAppMyRequestsReadModel({
     );
   });
   const tripTimelineItems = Array.isArray(
-    profileView?.timeline_projection?.trip_timeline_status_history
+    resolvedProfileView?.timeline_projection?.trip_timeline_status_history
   )
-    ? profileView.timeline_projection.trip_timeline_status_history
+    ? resolvedProfileView.timeline_projection.trip_timeline_status_history
     : [];
   const guestTimelineItems = Array.isArray(
-    profileView?.timeline_projection?.guest_ticket_timeline
+    resolvedProfileView?.timeline_projection?.guest_ticket_timeline
   )
-    ? profileView.timeline_projection.guest_ticket_timeline
+    ? resolvedProfileView.timeline_projection.guest_ticket_timeline
     : [];
 
   return freezeSortedResultValue({
@@ -814,7 +1731,7 @@ function buildMiniAppMyRequestsReadModel({
     latest_timestamp_summary: buildTelegramLatestTimestampSummary(
       nowIso,
       lifecycleList.latest_timestamp_summary?.iso,
-      profileView?.guest_identity?.last_seen_at
+      resolvedProfileView?.guest_identity?.last_seen_at
     ),
   });
 }
@@ -966,7 +1883,7 @@ export function createTelegramMiniAppRouter({
       const telegramUserId = resolveTelegramUserIdOrThrow(requestPayload, {
         headers: req.headers,
       });
-      expireMiniAppStaleActiveRequestsForGuest({
+      normalizeMiniAppGuestRequestsForGuest({
         repositories,
         services,
         telegramUserId,
@@ -1020,7 +1937,7 @@ export function createTelegramMiniAppRouter({
       const telegramUserId = resolveTelegramUserIdOrThrow(req.query, {
         headers: req.headers,
       });
-      expireMiniAppStaleActiveRequestsForGuest({
+      normalizeMiniAppGuestRequestsForGuest({
         repositories,
         services,
         telegramUserId,
@@ -1085,7 +2002,7 @@ export function createTelegramMiniAppRouter({
       const telegramUserId = resolveTelegramUserIdOrThrow(req.query, {
         headers: req.headers,
       });
-      expireMiniAppStaleActiveRequestsForGuest({
+      normalizeMiniAppGuestRequestsForGuest({
         repositories,
         services,
         telegramUserId,
@@ -1094,6 +2011,9 @@ export function createTelegramMiniAppRouter({
       const guestProfile = resolveGuestProfileByTelegramUserIdOrThrow({
         repositories,
         telegramUserId,
+      });
+      const sharedProfileView = services.guestProfileService.readGuestProfileView({
+        telegram_user_id: telegramUserId,
       });
       const scanLimit = parseLimitInput(req.query.limit);
       const rows = repositories.bookingRequests.listBy(
@@ -1108,7 +2028,10 @@ export function createTelegramMiniAppRouter({
         try {
           const ticketView =
             services.guestTicketViewProjectionService.readGuestTicketViewByBookingRequestReference(
-              row.booking_request_id
+              {
+                booking_request_id: row.booking_request_id,
+                profile_view: sharedProfileView,
+              }
             );
           return freezeSortedResultValue({
             ...ticketView,
@@ -1153,6 +2076,44 @@ export function createTelegramMiniAppRouter({
           });
         }
       });
+      const linkedCanonicalTicketRows = listMiniAppGuestCanonicalTicketLinks({
+        repositories,
+        guestProfileId: guestProfile.guest_profile_id,
+        limit: scanLimit,
+      });
+      const knownCanonicalPresaleIds = new Set(
+        items
+          .map((item) => Number(item?.linked_canonical_presale_reference?.presale_id))
+          .filter((presaleId) => Number.isInteger(presaleId) && presaleId > 0)
+      );
+      const canonicalFallbackItems = linkedCanonicalTicketRows
+        .map((row) => {
+          const canonicalPresaleId = Number(row.canonical_presale_id);
+          if (!Number.isInteger(canonicalPresaleId) || canonicalPresaleId <= 0) {
+            return null;
+          }
+          if (knownCanonicalPresaleIds.has(canonicalPresaleId)) {
+            return null;
+          }
+          try {
+            return buildCanonicalPresaleOnlyTicketViewProjection({
+              repositories,
+              services,
+              telegramUserId,
+              canonicalPresaleId,
+              nowIso: row.last_viewed_at || row.first_viewed_at || nowIso,
+            });
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+      const mergedItems = mergeMiniAppFulfilledTicketItems([
+        ...items,
+        ...canonicalFallbackItems,
+      ])
+        .sort(compareMiniAppTicketItemsByRecency)
+        .slice(0, scanLimit);
 
       const operationResultSummary = freezeSortedResultValue({
         response_version: TELEGRAM_MINI_APP_TICKET_LIST_RESULT_VERSION,
@@ -1166,17 +2127,18 @@ export function createTelegramMiniAppRouter({
           username: normalizeString(guestProfile.username),
           language_code: normalizeString(guestProfile.language_code),
         },
-        item_count: items.length,
-        items,
+        item_count: mergedItems.length,
+        items: mergedItems,
         my_requests_read_model: buildMiniAppMyRequestsReadModel({
           services,
           telegramUserId,
           limit: scanLimit,
           nowIso,
+          profileView: sharedProfileView,
         }),
         latest_timestamp_summary: buildTelegramLatestTimestampSummary(
           nowIso,
-          ...items.map((item) => item.latest_timestamp_summary?.iso)
+          ...mergedItems.map((item) => item.latest_timestamp_summary?.iso)
         ),
       });
 
@@ -1218,6 +2180,12 @@ export function createTelegramMiniAppRouter({
         req.params.bookingRequestId,
         'bookingRequestId'
       );
+      normalizeMiniAppGuestRequestsForGuest({
+        repositories,
+        services,
+        telegramUserId,
+        nowIso,
+      });
       assertGuestOwnsBookingRequestOrThrow({
         repositories,
         telegramUserId,
@@ -1257,6 +2225,80 @@ export function createTelegramMiniAppRouter({
     }
   });
 
+  router.get('/mini-app/ticket-view', (req, res) => {
+    const nowIso = resolveNowIso(now);
+    try {
+      const telegramUserId = resolveTelegramUserIdOrThrow(req.query, {
+        headers: req.headers,
+      });
+      const guestProfile = resolveGuestProfileByTelegramUserIdOrThrow({
+        repositories,
+        telegramUserId,
+      });
+      const canonicalPresaleId = parsePositiveInteger(
+        req.query.canonical_presale_id ?? req.query.canonicalPresaleId,
+        'canonical_presale_id'
+      );
+      const sourceToken = resolveMiniAppTicketSourceToken(req.query);
+      const operationResultSummary =
+        readTicketViewByCanonicalPresaleReferenceOrFallback({
+          repositories,
+          services,
+          telegramUserId,
+          canonicalPresaleId,
+          nowIso,
+        });
+      const linkedBookingRequestId = Number(
+        operationResultSummary?.booking_request_reference?.booking_request_id
+      );
+      if (Number.isInteger(linkedBookingRequestId) && linkedBookingRequestId > 0) {
+        assertGuestOwnsBookingRequestOrThrow({
+          repositories,
+          telegramUserId,
+          bookingRequestId: linkedBookingRequestId,
+        });
+      } else {
+        assertMiniAppGuestOwnsCanonicalTicketOrBindWithTrustedSourceOrThrow({
+          repositories,
+          guestProfileId: guestProfile.guest_profile_id,
+          canonicalPresaleId,
+          sourceToken,
+          nowIso,
+        });
+      }
+
+      return res.status(200).json(
+        buildRouteResult({
+          routeStatus: 'processed',
+          routeOperationType: 'mini_app_ticket_view',
+          operationResultSummary,
+          rejectionReason: null,
+          nowIso,
+          httpStatus: 200,
+        })
+      );
+    } catch (error) {
+      const routeError = buildErrorRouteResponse(error, {
+        routeOperationType: 'mini_app_ticket_view',
+        nowIso,
+      });
+      const rejectionReason =
+        routeError.httpStatus === 404
+          ? TELEGRAM_MINI_APP_NEUTRAL_TICKET_NOT_FOUND_MESSAGE
+          : routeError.rejectionReason;
+      return res.status(routeError.httpStatus).json(
+        buildRouteResult({
+          routeStatus: routeError.routeStatus,
+          routeOperationType: routeError.routeOperationType,
+          operationResultSummary: null,
+          rejectionReason,
+          nowIso,
+          httpStatus: routeError.httpStatus,
+        })
+      );
+    }
+  });
+
   router.get('/mini-app/my-tickets/:bookingRequestId/offline-snapshot', (req, res) => {
     const nowIso = resolveNowIso(now);
     try {
@@ -1267,6 +2309,12 @@ export function createTelegramMiniAppRouter({
         req.params.bookingRequestId,
         'bookingRequestId'
       );
+      normalizeMiniAppGuestRequestsForGuest({
+        repositories,
+        services,
+        telegramUserId,
+        nowIso,
+      });
       assertGuestOwnsBookingRequestOrThrow({
         repositories,
         telegramUserId,
@@ -1364,9 +2412,7 @@ export function createTelegramMiniAppRouter({
         const operationResultSummary = freezeSortedResultValue({
           ...entrypointContent,
           placeholder: false,
-          body: fallbackContentUsed
-            ? entrypointContent.body
-            : `Questions available: ${faqReadModel.item_count}.`,
+          body: entrypointContent.body,
           fallback_content_used: fallbackContentUsed,
           faq_read_model: faqReadModel,
         });

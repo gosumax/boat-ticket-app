@@ -158,6 +158,25 @@ describe('telegram start-update normalization service', () => {
     expect(normalized.source_token).toBeNull();
   });
 
+  it('extracts seller source token from composite handoff payload', () => {
+    const service = new TelegramStartUpdateNormalizationService();
+
+    const normalized = service.normalizeStartUpdate(
+      createStartUpdate({
+        message: {
+          text: '/start seller-direct-link-42__p123',
+        },
+      })
+    );
+
+    expect(normalized.normalized_start_payload).toEqual({
+      raw_payload: 'seller-direct-link-42__p123',
+      normalized_payload: 'seller-direct-link-42__p123',
+      has_payload: true,
+    });
+    expect(normalized.source_token).toBe('seller-direct-link-42');
+  });
+
   it('rejects unsupported update shapes deterministically', () => {
     const service = new TelegramStartUpdateNormalizationService();
 

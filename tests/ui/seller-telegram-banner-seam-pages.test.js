@@ -4,6 +4,12 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => () => {},
+  useSearchParams: () => [
+    {
+      get: () => null,
+    },
+    () => {},
+  ],
 }));
 
 vi.mock('../../src/contexts/AuthContext', () => ({
@@ -20,6 +26,7 @@ vi.mock('../../src/contexts/OwnerDataContext', () => ({
 
 vi.mock('../../src/components/seller/telegram/SellerTelegramGlobalAlertBanner.jsx', () => ({
   default: () => 'SELLER_TELEGRAM_ALERT_SLOT',
+  SELLER_TELEGRAM_REQUESTS_ROUTE: '/seller/telegram-requests',
 }));
 
 describe('seller pages banner seam', () => {
@@ -74,6 +81,8 @@ describe('seller pages banner seam', () => {
     const requestsHtml = renderToStaticMarkup(React.createElement(SellerTelegramRequests));
 
     expect(homeHtml).toContain('SELLER_TELEGRAM_ALERT_SLOT');
+    expect(homeHtml).toContain('seller-home-requests-btn');
+    expect(homeHtml).toContain('Мои заявки');
     expect(flowHtml).toContain('SELLER_TELEGRAM_ALERT_SLOT');
     expect(earningsHtml).toContain('SELLER_TELEGRAM_ALERT_SLOT');
     expect(mediaHtml).toContain('SELLER_TELEGRAM_ALERT_SLOT');

@@ -197,6 +197,35 @@ function normalizeTripSlotReference(value) {
   });
 }
 
+function normalizeOptionalLiveSeatHoldSummary(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!isPlainObject(value)) {
+    rejectExtension('live seat hold summary must be an object');
+  }
+
+  return freezeSortedExtensionValue({
+    summary_type: normalizeString(value.summary_type),
+    seat_hold_applied: value.seat_hold_applied === true,
+    slot_uid: normalizeString(value.slot_uid),
+    held_seats:
+      value.held_seats === null || value.held_seats === undefined
+        ? null
+        : normalizePositiveInteger(value.held_seats, 'live_seat_hold_summary.held_seats'),
+    seats_left_after:
+      value.seats_left_after === null || value.seats_left_after === undefined
+        ? null
+        : Number(value.seats_left_after),
+    seats_left_after_release:
+      value.seats_left_after_release === null ||
+      value.seats_left_after_release === undefined
+        ? null
+        : Number(value.seats_left_after_release),
+    release_applied: value.release_applied === true,
+  });
+}
+
 function normalizeActiveHoldStateValue(activeHoldState) {
   if (!isPlainObject(activeHoldState)) {
     rejectExtension('active hold state is required');
@@ -255,6 +284,9 @@ function normalizeActiveHoldStateValue(activeHoldState) {
     hold_expires_at_summary: normalizeTimestampSummaryInput(
       activeHoldState.hold_expires_at_summary,
       'hold_expires_at_summary'
+    ),
+    live_seat_hold_summary: normalizeOptionalLiveSeatHoldSummary(
+      activeHoldState.live_seat_hold_summary
     ),
     hold_active: true,
     dedupe_key: dedupeKey,
@@ -329,6 +361,7 @@ function buildExtensionResult({
     requested_seats: activeHoldState.requested_seats,
     original_hold_expires_at_summary: normalizeTimestampSummary(originalHoldExpiresAt),
     extended_hold_expires_at_summary: normalizeTimestampSummary(extendedHoldExpiresAt),
+    live_seat_hold_summary: activeHoldState.live_seat_hold_summary || null,
     hold_active: ACTIVE_HOLD_STATUSES.has(bookingHold.hold_status),
     extension_applied: true,
     dedupe_key: normalizedInput.dedupe_key,
@@ -349,6 +382,7 @@ function buildEventPayload({ normalizedInput, result }) {
     requested_seats: result.requested_seats,
     original_hold_expires_at_summary: result.original_hold_expires_at_summary,
     extended_hold_expires_at_summary: result.extended_hold_expires_at_summary,
+    live_seat_hold_summary: result.live_seat_hold_summary || null,
     hold_active: result.hold_active,
     extension_applied: result.extension_applied,
     dedupe_key: result.dedupe_key,
